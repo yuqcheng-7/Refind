@@ -35,13 +35,14 @@ export default function Home() {
   useEffect(() => {
     const supabase = getSupabase();
     if (!supabase) return;
+    const client = supabase;
 
     let cancelled = false;
     async function run() {
       setLoading(true);
       setError(null);
       try {
-        const { data } = await supabase.auth.getSession();
+        const { data } = await client.auth.getSession();
         if (!data.session) {
           setItems([]);
           return;
