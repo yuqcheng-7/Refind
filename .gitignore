@@ -11,3 +11,6 @@ out/
 firebase-debug.log
 ui-debug.log
 
+# Cursor workspace artifacts (not needed for deploy)
+.cursor/
+

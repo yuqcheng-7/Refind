@@ -6,6 +6,62 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 type Body = { bookmark_id: string };
 
+function detectPlatform(url: URL): string | null {
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  if (host === "zhihu.com" || host.endsWith(".zhihu.com")) return "zhihu";
+  if (host === "bilibili.com" || host.endsWith(".bilibili.com")) return "bilibili";
+  if (host === "douyin.com" || host.endsWith(".douyin.com")) return "douyin";
+  if (host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com")) return "xiaohongshu";
+  return host || null;
+}
+
+function extractTitle(html: string): string | null {
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (!m?.[1]) return null;
+  return m[1].replace(/\s+/g, " ").trim().slice(0, 200) || null;
+}
+
+function extractOgTitle(html: string): string | null {
+  const m =
+    html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+  if (!m?.[1]) return null;
+  return m[1].replace(/\s+/g, " ").trim().slice(0, 200) || null;
+}
+
+function fetchHeadersForUrl(url: URL): Record<string, string> {
+  const ua =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  const h: Record<string, string> = {
+    "User-Agent": ua,
+    Accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+  };
+  if (host.endsWith("bilibili.com")) {
+    h.Referer = "https://www.bilibili.com/";
+    h["Sec-Fetch-Dest"] = "document";
+    h["Sec-Fetch-Mode"] = "navigate";
+    h["Sec-Fetch-Site"] = "none";
+  } else if (host.endsWith("zhihu.com")) {
+    h.Referer = "https://www.zhihu.com/";
+  }
+  return h;
+}
+
+function plainTextFromHtml(html: string): string {
+  return (
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1200) || ""
+  );
+}
+
 function extractFirstJsonObject(text: string): Record<string, unknown> | null {
   const start = text.indexOf("{");
   if (start < 0) return null;
@@ -63,7 +119,17 @@ function extractTagsFallback(text: string): string[] {
   return normalizeTags(candidates);
 }
 
-function buildAiPrompt(args: { url: string; title?: string | null; excerpt?: string | null }): string {
+function buildAiPrompt(args: {
+  url: string;
+  title?: string | null;
+  excerpt?: string | null;
+  weakContent?: boolean;
+}): string {
+  const weak =
+    args.weakContent ||
+    !args.excerpt ||
+    args.excerpt.trim().length < 40;
+
   return [
     "你是一个信息提炼助手。",
     "请严格输出 JSON（不要 Markdown，不要解释），格式如下：",
@@ -72,6 +138,15 @@ function buildAiPrompt(args: { url: string; title?: string | null; excerpt?: str
     "规则：",
     "- summary：中文 1 段，不超过 120 字",
     "- tags：默认 3 个，最多 6 个；每个标签 2~12 个字；去重；不要带 #",
+    "",
+    weak
+      ? [
+          "",
+          "内容说明：未能抓取到足够正文（常见于反爬、需登录或前端渲染页面）。",
+          "此时请根据 url、域名与路径合理推断主题：summary 写一句中性概述；tags 给 3 个合理标签。",
+          "禁止输出「无法获取网页内容」「请提供文本」等推脱句式。",
+        ].join("\n")
+      : "",
     "",
     "如果你无法严格输出 JSON，请退而求其次输出两行纯文本：",
     "摘要：<一段中文摘要>",
@@ -171,7 +246,75 @@ Deno.serve(async (req) => {
     }));
   }
 
-  const prompt = buildAiPrompt({ url: bookmark.url, title: bookmark.title, excerpt: bookmark.excerpt });
+  let parsed: URL;
+  try {
+    parsed = new URL(bookmark.url);
+  } catch {
+    return withCors(req, new Response(JSON.stringify({ error: "Invalid bookmark url" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    }));
+  }
+
+  const source_platform = detectPlatform(parsed);
+  let html = "";
+  let fetchOk = false;
+  try {
+    const r = await fetch(parsed.toString(), {
+      headers: fetchHeadersForUrl(parsed),
+      redirect: "follow",
+    });
+    html = await r.text();
+    fetchOk = r.ok;
+    if (fetchOk && source_platform === "bilibili" && html.length < 2000) {
+      const r2 = await fetch(parsed.toString(), {
+        headers: {
+          ...fetchHeadersForUrl(parsed),
+          "User-Agent":
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        },
+        redirect: "follow",
+      });
+      if (r2.ok) {
+        const h2 = await r2.text();
+        if (h2.length > html.length) html = h2;
+      }
+    }
+  } catch {
+    // keep stored metadata
+  }
+
+  const tOg = extractOgTitle(html);
+  const tPage = extractTitle(html);
+  let fetchedTitle = tOg || tPage;
+  const plain = plainTextFromHtml(html);
+  let excerpt: string | null = fetchOk && plain.length >= 40 ? plain : null;
+  if (!fetchOk) {
+    fetchedTitle = null;
+    excerpt = null;
+  }
+
+  const title = fetchedTitle || bookmark.title;
+  if (!excerpt && typeof bookmark.excerpt === "string" && bookmark.excerpt.trim().length >= 40) {
+    excerpt = bookmark.excerpt.trim();
+  }
+
+  const weakContent = !fetchOk || !excerpt || excerpt.length < 40;
+
+  await supabase
+    .from("bookmarks")
+    .update({
+      title,
+      excerpt: excerpt ?? bookmark.excerpt,
+    })
+    .eq("id", bookmark.id);
+
+  const prompt = buildAiPrompt({
+    url: bookmark.url,
+    title,
+    excerpt,
+    weakContent,
+  });
 
   const resp = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: "POST",

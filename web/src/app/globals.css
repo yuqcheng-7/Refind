@@ -1,26 +1,349 @@
 @import "tailwindcss";
 
+/*
+ * Refind design system — 极简扁平 · Notion 气质
+ * 主导色：暖石墨正文 / 冷白与浅灰表面
+ * 点缀色：Notion 蓝（链接、焦点、选中指示）
+ * 字体：IBM Plex Sans（界面） + IBM Plex Serif（标题，阅读节奏）
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Surfaces */
+  --background: #fbfbfa;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --foreground: #37352f;
+  --foreground-muted: #787774;
+  --foreground-faint: #b4b4b4;
+  --border: rgba(55, 53, 47, 0.09);
+  --border-strong: rgba(55, 53, 47, 0.14);
+  /* Accent (Notion blue) */
+  --accent: #2383e2;
+  --accent-hover: #1a74cc;
+  --accent-muted: rgba(35, 131, 226, 0.1);
+  --accent-ring: rgba(35, 131, 226, 0.22);
+  --accent-foreground: #ffffff;
+  /* Dominant actions (charcoal, flat) */
+  --dominant: #1c1c1e;
+  --dominant-hover: #2d2d30;
+  /* Motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 140ms;
+  --duration-normal: 220ms;
+  --shadow-flat: 0 1px 0 rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-accent: var(--accent);
+  --color-surface: var(--surface);
+  --font-sans:
+    var(--font-plex-sans), ui-sans-serif, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-display:
+    var(--font-plex-serif), ui-serif, "Noto Serif SC", "Songti SC", "Source Han Serif SC", serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+html {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
   }
+}
+
+@layer components {
+  .font-display {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+
+  .canvas-bg {
+    position: relative;
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+
+  /* 认证页：极轻氛围，避免花哨渐变 */
+  .auth-mesh-bg {
+    background-color: var(--background);
+    background-image:
+      radial-gradient(120% 80% at 0% 0%, var(--accent-muted), transparent 55%),
+      radial-gradient(90% 60% at 100% 100%, rgba(55, 53, 47, 0.03), transparent 50%);
+  }
+
+  .canvas-bg > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .auth-card {
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    box-shadow: var(--shadow-card);
+  }
+
+  .shell-frame {
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface-elevated);
+    box-shadow: var(--shadow-flat);
+  }
+
+  .input-refind {
+    margin-top: 0.5rem;
+    width: 100%;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    padding: 0.65rem 0.75rem;
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    color: var(--foreground);
+    outline: none;
+    transition:
+      border-color var(--duration-fast) var(--ease-out),
+      box-shadow var(--duration-fast) var(--ease-out);
+  }
+
+  .input-refind::placeholder {
+    color: var(--foreground-faint);
+  }
+
+  .input-refind:hover:not(:disabled):not(:focus) {
+    border-color: rgba(55, 53, 47, 0.12);
+  }
+
+  .input-refind:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+
+  .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: var(--dominant);
+    padding: 0.65rem 1.125rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    color: var(--accent-foreground);
+    border: none;
+    cursor: pointer;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      transform var(--duration-fast) var(--ease-out),
+      opacity var(--duration-fast) var(--ease-out);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: var(--dominant-hover);
+  }
+
+  .btn-primary:active:not(:disabled) {
+    transform: scale(0.98);
+  }
+
+  .btn-primary:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+  }
+
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    padding: 0.6rem 1.125rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    font-family: var(--font-sans);
+    color: var(--foreground);
+    cursor: pointer;
+    transition:
+      background var(--duration-fast) var(--ease-out),
+      border-color var(--duration-fast) var(--ease-out);
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: rgba(55, 53, 47, 0.03);
+    border-color: rgba(55, 53, 47, 0.12);
+  }
+
+  .btn-secondary:active:not(:disabled) {
+    transform: scale(0.99);
+  }
+
+  /* 页面入场（尊重系统「减少动画」） */
+  .page-enter {
+    animation: refind-rise var(--duration-normal) var(--ease-out) both;
+  }
+
+  @keyframes refind-rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* 列表项轻微层次入场 */
+  .list-stagger > li {
+    animation: refind-rise var(--duration-normal) var(--ease-out) both;
+  }
+  .list-stagger > li:nth-child(1) {
+    animation-delay: 0.02s;
+  }
+  .list-stagger > li:nth-child(2) {
+    animation-delay: 0.05s;
+  }
+  .list-stagger > li:nth-child(3) {
+    animation-delay: 0.08s;
+  }
+  .list-stagger > li:nth-child(4) {
+    animation-delay: 0.11s;
+  }
+  .list-stagger > li:nth-child(5) {
+    animation-delay: 0.14s;
+  }
+
+  .toast-item {
+    animation: toast-in var(--duration-normal) var(--ease-out) both;
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes refind-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .modal-backdrop {
+    animation: refind-fade-in var(--duration-normal) var(--ease-out) both;
+  }
+
+  .alert {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem 1rem;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: rgba(55, 53, 47, 0.03);
+    padding: 0.75rem 1rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: var(--foreground);
+  }
+
+  .alert--danger {
+    border-color: rgba(220, 38, 38, 0.18);
+    background: rgba(220, 38, 38, 0.06);
+    color: rgb(153, 27, 27);
+  }
+
+  .alert--success {
+    border-color: rgba(16, 185, 129, 0.20);
+    background: rgba(16, 185, 129, 0.08);
+    color: rgb(6, 95, 70);
+  }
+
+  .alert--info {
+    border-color: rgba(35, 131, 226, 0.18);
+    background: rgba(35, 131, 226, 0.07);
+    color: color-mix(in oklab, var(--foreground) 88%, var(--accent));
+  }
+
+  .link-accent {
+    color: var(--accent);
+    text-underline-offset: 3px;
+    transition: color var(--duration-fast) var(--ease-out);
+  }
+  .link-accent:hover {
+    color: var(--accent-hover);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .list-stagger > li,
+  .toast-item,
+  .modal-backdrop {
+    animation: none !important;
+    animation-delay: 0s !important;
+  }
+
+  .btn-primary:active:not(:disabled),
+  .btn-secondary:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+.home-platform-menu-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 118, 111, 0.35) transparent;
+}
+
+.home-platform-menu-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+
+.home-platform-menu-scroll::-webkit-scrollbar-track {
+  margin: 6px 0;
+  background: transparent;
+}
+
+.home-platform-menu-scroll::-webkit-scrollbar-thumb {
+  background: rgba(120, 118, 111, 0.35);
+  border-radius: 9999px;
+}
+
+.home-platform-menu-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(120, 118, 111, 0.5);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  line-height: 1.6;
+}
+
+/* 焦点可见性：键盘导航 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) {
+  outline: none;
 }

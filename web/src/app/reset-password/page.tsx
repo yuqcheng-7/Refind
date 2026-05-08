@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { AuthShell } from "@/components/auth-shell";
 import { getSupabase } from "@/lib/supabase/client";
 import { formatSupabaseAuthError } from "@/lib/supabase/errors";
 
@@ -10,10 +12,7 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
-  useEffect(() => {
-    // Supabase sets a recovery session when arriving via the email link.
-    // We don't need to parse the token manually in most setups.
-  }, []);
+  useEffect(() => {}, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -34,40 +33,46 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-dvh bg-zinc-50 text-zinc-950 dark:bg-black dark:text-zinc-50">
-      <main className="mx-auto w-full max-w-md px-6 py-12">
-        <div className="text-lg font-semibold">重置密码</div>
-        <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          设置一个新密码
+    <AuthShell>
+      <div className="auth-card p-8 sm:p-9">
+        <div>
+          <h1 className="font-display text-xl text-foreground">设置新密码</h1>
+          <p className="mt-1.5 text-sm text-[var(--foreground-muted)]">为你的 Refind 账户设定新密码</p>
         </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-        >
-          <label className="block text-sm font-medium">新密码</label>
-          <input
-            className="mt-2 h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-600"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            autoComplete="new-password"
-          />
+        <form onSubmit={onSubmit} className="mt-8 space-y-5">
+          <div>
+            <label className="text-xs font-medium text-[var(--foreground-muted)]">新密码</label>
+            <input
+              className="input-refind"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              placeholder="至少 8 位字符"
+              autoComplete="new-password"
+            />
+          </div>
 
-          {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
           {done ? (
-            <div className="mt-3 text-sm text-emerald-600">已更新密码，你可以返回登录。</div>
+            <p className="alert alert--success">
+              密码已更新，可以登录了。
+            </p>
           ) : null}
 
-          <button
-            disabled={loading}
-            className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl bg-zinc-900 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-          >
-            {loading ? "更新中…" : "更新密码"}
+          <button disabled={loading} type="submit" className="btn-primary mt-6 w-full py-3">
+            {loading ? "更新中…" : "确认更新"}
           </button>
+
+          {done ? (
+            <p className="border-t border-[var(--border)] pt-6 text-center text-sm text-[var(--foreground-muted)]">
+              <Link href="/login" className="font-semibold text-foreground hover:text-accent">
+                去登录 Refind
+              </Link>
+            </p>
+          ) : null}
         </form>
-      </main>
-    </div>
+      </div>
+    </AuthShell>
   );
 }
-

@@ -1,149 +1,387 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import {
+  FaArrowRight,
+  FaCheck,
+  FaRegImage,
+  FaWandMagicSparkles,
+} from "react-icons/fa6";
+import { LoggedInShell } from "@/components/logged-in-shell";
+import { TagInput } from "@/components/tag-input";
+import { useToast } from "@/components/toast";
+import {
+  createBookmarkFromDraft,
+  prepareBookmark,
+} from "@/lib/bookmarks/api";
+import type { PrepareBookmarkResult } from "@/lib/bookmarks/api";
+import { PLATFORM_FILTER_OPTIONS } from "@/lib/bookmarks/platforms";
 import { getSupabase } from "@/lib/supabase/client";
 import { formatSupabaseAuthError } from "@/lib/supabase/errors";
+import { normalizeUrl, validateBookmarkUrl } from "@/lib/validation";
 
-type BookmarkRow = {
-  id: string;
-  url: string;
-  title: string | null;
-  source_platform: string | null;
-  summary: string | null;
-  ai_status: string;
-  ai_error: string | null;
-  created_at: string;
-};
+const SOURCE_OPTIONS = PLATFORM_FILTER_OPTIONS.filter((o) => o.value !== "all");
+
+function clampSummary(s: string, max = 150): string {
+  const t = s.trim().replace(/\s+/g, " ");
+  if (t.length <= max) return t;
+  return t.slice(0, max).replace(/[，。、；：！？\s]+$/g, "").trim();
+}
 
 export default function AddBookmarkPage() {
-  const [url, setUrl] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<BookmarkRow | null>(null);
+  const router = useRouter();
+  const { toast } = useToast();
+
+  const [step, setStep] = useState<1 | 2>(1);
+  const [urlInput, setUrlInput] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
+  const [prepareLoading, setPrepareLoading] = useState(false);
+  const [draft, setDraft] = useState<PrepareBookmarkResult | null>(null);
+
+  const [title, setTitle] = useState("");
+  const [sourcePlatform, setSourcePlatform] = useState<string>("other");
+  const [summary, setSummary] = useState("");
   const [tags, setTags] = useState<string[]>([]);
-  const [debug, setDebug] = useState<{ tagWriteError?: string | null; outputPreview?: string } | null>(null);
+  const [saveLoading, setSaveLoading] = useState(false);
 
   useEffect(() => {
     const supabase = getSupabase();
     if (!supabase) return;
     supabase.auth.getSession().then(({ data }) => {
-      if (!data.session) {
-        window.location.href = "/login";
-      }
+      if (!data.session) router.replace("/login");
     });
-  }, []);
+  }, [router]);
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setResult(null);
-    setTags([]);
-    setDebug(null);
-    setLoading(true);
+  useEffect(() => {
+    const err = validateBookmarkUrl(urlInput);
+    setUrlError(urlInput.trim() ? err : null);
+  }, [urlInput]);
+
+  async function goPrepare() {
+    const err = validateBookmarkUrl(urlInput);
+    if (err) {
+      setUrlError(err);
+      return;
+    }
+    setPrepareLoading(true);
     try {
-      const supabase = getSupabase();
-      if (!supabase) throw new Error("请先配置 Supabase 环境变量");
-
-      const { data, error } = await supabase.functions.invoke("bookmark_ingest", {
-        body: { url: url.trim() },
-      });
-      if (error) throw error;
-
-      const bookmark = (data as { bookmark?: BookmarkRow })?.bookmark ?? null;
-      if (!bookmark) throw new Error("未返回 bookmark");
-      setResult(bookmark);
-      setTags(((data as { tags?: string[] })?.tags ?? []).filter((t) => typeof t === "string"));
-      setDebug((data as { debug?: { tagWriteError?: string | null; outputPreview?: string } })?.debug ?? null);
+      const res = await prepareBookmark(normalizeUrl(urlInput));
+      setDraft(res);
+      setTitle(res.title?.trim() || "");
+      setSourcePlatform(res.source_platform && res.source_platform !== "other" ? res.source_platform : "other");
+      setSummary(clampSummary(res.summary));
+      setTags(res.tags ?? []);
+      setStep(2);
+      if (!res.parse_ok) {
+        toast("暂无法识别该链接，仍可保存后手动编辑", "error");
+      }
     } catch (e) {
-      setError(e instanceof Error ? formatSupabaseAuthError(e.message) : "添加失败");
+      toast(e instanceof Error ? formatSupabaseAuthError(e.message) : "预览失败，请重试", "error");
     } finally {
-      setLoading(false);
+      setPrepareLoading(false);
     }
   }
 
-  return (
-    <div className="min-h-dvh bg-zinc-50 text-zinc-950 dark:bg-black dark:text-zinc-50">
-      <main className="mx-auto w-full max-w-2xl px-6 py-12">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-lg font-semibold">添加收藏（测试）</div>
-            <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              调用 Supabase Edge Function：`bookmark_ingest`
+  async function refreshPreview() {
+    if (!draft) return;
+    setPrepareLoading(true);
+    try {
+      const res = await prepareBookmark(draft.url);
+      setDraft(res);
+      setTitle(res.title?.trim() || "");
+      setSourcePlatform(
+        res.source_platform && res.source_platform !== "other" ? res.source_platform : "other"
+      );
+      setSummary(clampSummary(res.summary));
+      setTags(res.tags ?? []);
+    } catch (e) {
+      toast(e instanceof Error ? formatSupabaseAuthError(e.message) : "预览加载失败，请重试", "error");
+    } finally {
+      setPrepareLoading(false);
+    }
+  }
+
+  async function onRegenerate() {
+    if (!draft) return;
+    setPrepareLoading(true);
+    try {
+      const res = await prepareBookmark(draft.url);
+      setDraft(res);
+      setSummary(clampSummary(res.summary));
+      setTags(res.tags ?? []);
+      toast("已重新生成摘要与标签", "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "重新生成失败", "error");
+    } finally {
+      setPrepareLoading(false);
+    }
+  }
+
+  async function onSave() {
+    if (!draft) return;
+    const t = title.trim();
+    if (!t) {
+      toast("标题不能为空", "error");
+      return;
+    }
+    setSaveLoading(true);
+    try {
+      await createBookmarkFromDraft({
+        url: draft.url,
+        title: t,
+        source_platform: sourcePlatform || "other",
+        excerpt: draft.excerpt,
+        summary: summary.trim() || null,
+        preview_image_url: draft.preview_image_url,
+        author: null,
+        collection_id: null,
+        tags,
+      });
+      toast("保存收藏成功", "success");
+      router.push("/");
+    } catch (e) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((e as any)?.code === "DUPLICATE_URL" || (e as Error)?.message === "DUPLICATE_URL") {
+        toast("收藏已存在", "error");
+      } else {
+        toast(e instanceof Error ? formatSupabaseAuthError(e.message) : "保存收藏失败", "error");
+      }
+    } finally {
+      setSaveLoading(false);
+    }
+  }
+
+  const urlValid = !validateBookmarkUrl(urlInput);
+
+  const inner = (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-col gap-3 border-b border-[var(--border)] bg-surface px-6 py-5 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h2 className="font-display text-xl text-foreground">添加收藏</h2>
+          <p className="mt-1 text-sm text-[var(--foreground-muted)]">
+            {step === 1 ? "粘贴链接，自动识别内容" : "确认信息后保存"}
+          </p>
+        </div>
+        <Link
+          href="/"
+          className="text-sm font-semibold text-[var(--foreground-muted)] underline-offset-4 hover:text-foreground hover:underline"
+        >
+          取消
+        </Link>
+      </div>
+
+      <div className="flex-1 overflow-auto px-6 py-6 lg:px-8 lg:py-8">
+        {step === 1 ? (
+          <div className="shell-frame shadow-sm">
+            <div className="border-b border-[var(--border)] px-6 py-5 lg:px-8">
+              <h3 className="text-sm font-bold text-foreground">链接</h3>
+              <div className="mt-4">
+                <input
+                  type="url"
+                  className={`input-refind ${urlError ? "border-red-400" : ""}`}
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="粘贴完整网址，例如 https://…"
+                  autoComplete="off"
+                  aria-label="链接"
+                />
+                {urlError ? <p className="mt-2 text-sm text-red-600">{urlError}</p> : null}
+              </div>
+            </div>
+            <div className="flex flex-col-reverse gap-3 px-6 py-8 sm:flex-row sm:items-center sm:justify-center lg:px-8">
+              <Link
+                href="/"
+                className="btn-secondary h-11 px-6 text-sm font-medium"
+              >
+                取消
+              </Link>
+              <button
+                type="button"
+                disabled={!urlValid || prepareLoading}
+                onClick={() => void goPrepare()}
+                className="btn-primary h-11 px-6 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {prepareLoading ? "解析中…" : "下一步"}
+              </button>
             </div>
           </div>
-          <Link className="text-sm underline" href="/">
-            返回首页
-          </Link>
-        </div>
+        ) : draft ? (
+          <div className="shell-frame shadow-sm">
+            <div className="border-b border-[var(--border)] px-6 py-5 lg:px-8">
+              <h3 className="text-sm font-bold text-foreground">链接</h3>
+              <div className="mt-5 grid gap-8 lg:grid-cols-12 lg:gap-6">
+                <div className="lg:col-span-4">
+                  <div className="text-xs font-semibold text-[var(--foreground-muted)]">页面预览</div>
+                  <div className="relative mx-auto mt-3 flex aspect-[4/5] w-full max-w-[200px] items-center justify-center overflow-hidden rounded-xl bg-[rgba(55,53,47,0.06)] text-[var(--foreground-faint)] lg:mx-0 lg:max-w-none">
+                    {draft.preview_image_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={draft.preview_image_url}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <FaRegImage className="text-3xl" aria-hidden />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void refreshPreview()}
+                      disabled={prepareLoading}
+                      className="absolute bottom-2 right-2 rounded-lg bg-[rgba(28,28,30,0.72)] px-2 py-1 text-xs font-semibold text-white backdrop-blur-sm"
+                    >
+                      刷新预览
+                    </button>
+                  </div>
+                </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-        >
-          <label className="block text-sm font-medium">链接</label>
-          <input
-            className="mt-2 h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-600"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://www.zhihu.com/..."
-            autoComplete="url"
-          />
+                <div className="space-y-4 lg:col-span-8">
+                  {!draft.parse_ok ? (
+                    <p className="text-sm font-medium text-red-600">暂无法识别该链接</p>
+                  ) : null}
 
-          {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
+                  <div>
+                    <label className="text-xs font-semibold text-[var(--foreground-muted)]">链接</label>
+                    <input
+                      readOnly
+                      className="mt-2 w-full cursor-not-allowed rounded-lg border border-[var(--border)] bg-[rgba(55,53,47,0.03)] px-3 py-2.5 text-sm text-[var(--foreground-muted)] outline-none"
+                      value={draft.url}
+                    />
+                    <p className="mt-1 text-[11px] text-[var(--foreground-muted)]">识别有误时可返回上一步修改链接</p>
+                  </div>
 
-          <button
-            disabled={loading}
-            className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl bg-zinc-900 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-          >
-            {loading ? "处理中…" : "添加并生成摘要/标签"}
-          </button>
-        </form>
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[rgba(55,53,47,0.03)] px-3 py-2 text-[11px] text-[var(--foreground-muted)]">
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ring-1 ${
+                          draft.parse_ok
+                            ? "bg-emerald-50 text-emerald-800 ring-emerald-100"
+                            : "bg-[rgba(55,53,47,0.06)] text-[var(--foreground-muted)] ring-[var(--border)]"
+                        }`}
+                      >
+                        <FaCheck className="text-[10px]" aria-hidden />
+                        {draft.parse_ok ? "已解析" : "待确认"}
+                      </span>
+                      <span>{draft.parse_ok ? "已自动识别标题和来源" : "仍可手动填写后保存"}</span>
+                    </div>
 
-        {result ? (
-          <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5 text-sm shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="font-medium">结果</div>
-            <div className="mt-3 grid gap-2">
-              <div>
-                <span className="text-zinc-500">平台：</span>
-                {result.source_platform ?? "-"}
-              </div>
-              <div>
-                <span className="text-zinc-500">标题：</span>
-                {result.title ?? "-"}
-              </div>
-              <div>
-                <span className="text-zinc-500">AI 状态：</span>
-                {result.ai_status}
-                {result.ai_error ? `（${result.ai_error}）` : ""}
-              </div>
-              <div className="whitespace-pre-wrap rounded-xl bg-zinc-50 p-3 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-100">
-                {result.summary ?? "（无摘要）"}
-              </div>
-              <div>
-                <span className="text-zinc-500">标签：</span>
-                {tags.length ? tags.join(" / ") : "-"}
+                    <div>
+                      <label className="text-xs font-semibold text-[var(--foreground-muted)]">标题</label>
+                      <input
+                        className="input-refind"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-[var(--foreground-muted)]">来源平台</label>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {SOURCE_OPTIONS.map((o) => {
+                          const on = sourcePlatform === o.value;
+                          return (
+                            <button
+                              key={o.value}
+                              type="button"
+                              onClick={() => setSourcePlatform(o.value)}
+                              className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                                on
+                                  ? "bg-[var(--dominant)] font-semibold text-white shadow-[var(--shadow-flat)]"
+                                  : "border border-[var(--border)] bg-surface text-[var(--foreground-muted)] hover:bg-[rgba(55,53,47,0.03)] hover:text-foreground"
+                              }`}
+                            >
+                              {o.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {debug ? (
-              <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-3 text-xs text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-                <div className="font-medium">调试信息（仅用于定位）</div>
-                <div className="mt-2">
-                  <span className="text-zinc-500">tagWriteError：</span>
-                  {debug.tagWriteError ?? "-"}
-                </div>
-                <div className="mt-2 whitespace-pre-wrap">
-                  <span className="text-zinc-500">AI 输出片段：</span>
-                  {"\n"}
-                  {debug.outputPreview ?? "-"}
+            <div className="relative my-10 px-6 lg:px-8">
+              <div className="border-t border-[var(--border)]" />
+              <div className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--border)] bg-surface text-[var(--foreground-muted)] shadow-[var(--shadow-flat)]">
+                <FaArrowRight className="text-xs" aria-hidden />
+              </div>
+            </div>
+
+            <div className="px-6 pb-8 lg:px-8">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h3 className="text-sm font-bold text-foreground">摘要与标签</h3>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!draft.ai_error ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-100">
+                      <FaCheck className="text-[10px]" aria-hidden />
+                      已生成
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={prepareLoading}
+                    onClick={() => void onRegenerate()}
+                    className="rounded-lg border border-[var(--border)] bg-surface px-3 py-1.5 text-[11px] font-semibold text-foreground transition-colors duration-[var(--duration-fast)] hover:bg-[rgba(55,53,47,0.03)]"
+                  >
+                    重新生成
+                  </button>
                 </div>
               </div>
-            ) : null}
+              <p className="mt-2 text-[11px] text-[var(--foreground-muted)]">可根据需要修改摘要和标签</p>
+
+              <div className="mt-4 rounded-xl border border-[var(--border)] bg-[rgba(55,53,47,0.03)] p-4">
+                <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+                  <FaWandMagicSparkles className="text-[var(--foreground-muted)]" aria-hidden />
+                  摘要
+                </div>
+                <textarea
+                  rows={6}
+                  className="input-refind mt-3 w-full resize-y leading-relaxed"
+                  value={summary}
+                  onChange={(e) => setSummary(clampSummary(e.target.value, 2000))}
+                  placeholder={draft.ai_error ? "生成失败，请重试或手动填写" : ""}
+                />
+                {draft.ai_error ? (
+                  <p className="mt-2 text-xs text-red-600">生成失败，请重试或手动编辑后保存</p>
+                ) : null}
+              </div>
+
+              <div className="mt-5">
+                <div className="text-xs font-semibold text-[var(--foreground-muted)]">标签</div>
+                <p className="mt-1 text-[11px] text-[var(--foreground-muted)]">编辑标签便于日后检索</p>
+                <div className="mt-3">
+                  <TagInput tags={tags} onChange={setTags} disabled={saveLoading} />
+                </div>
+              </div>
+
+              <div className="mt-10 flex flex-col-reverse gap-3 sm:flex-row sm:justify-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep(1);
+                    setDraft(null);
+                  }}
+                  className="btn-secondary h-11 px-6 text-sm font-medium"
+                >
+                  上一步
+                </button>
+                <button
+                  type="button"
+                  disabled={saveLoading}
+                  onClick={() => void onSave()}
+                  className="btn-primary h-11 px-6 text-sm font-medium disabled:opacity-60"
+                >
+                  {saveLoading ? "保存中…" : "保存收藏"}
+                </button>
+              </div>
+            </div>
           </div>
         ) : null}
-      </main>
+      </div>
     </div>
   );
-}
 
+  return <LoggedInShell>{inner}</LoggedInShell>;
+}

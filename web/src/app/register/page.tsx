@@ -2,92 +2,121 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { AuthShell } from "@/components/auth-shell";
+import { useToast } from "@/components/toast";
 import { getSupabase } from "@/lib/supabase/client";
 import { formatSupabaseAuthError } from "@/lib/supabase/errors";
+import { validateEmail, validatePasswordRegister } from "@/lib/validation";
 
 export default function RegisterPage() {
+  const { toast } = useToast();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [emailErr, setEmailErr] = useState<string | null>(null);
+  const [pwdErr, setPwdErr] = useState<string | null>(null);
   const [done, setDone] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setError(null);
+    setEmailErr(null);
+    setPwdErr(null);
+    const ve = validateEmail(email);
+    if (ve) {
+      setEmailErr(ve);
+      return;
+    }
+    const vp = validatePasswordRegister(password);
+    if (vp) {
+      setPwdErr(vp === "密码不正确" ? "密码：至少 8 位，建议包含字母和数字" : vp);
+      return;
+    }
     setLoading(true);
     try {
       const supabase = getSupabase();
       if (!supabase) throw new Error("请先配置 Supabase 环境变量");
       const { error } = await supabase.auth.signUp({
         email: email.trim(),
-        password
+        password,
       });
       if (error) throw error;
       setDone(true);
+      toast("账号创建成功", "success");
     } catch (e) {
-      setError(e instanceof Error ? formatSupabaseAuthError(e.message) : "注册失败");
+      const msg = e instanceof Error ? formatSupabaseAuthError(e.message) : "注册失败";
+      const low = msg.toLowerCase();
+      if (low.includes("network") || low.includes("fetch")) {
+        toast("网络异常，请稍后再试", "error");
+        return;
+      }
+      if (msg.includes("已存在")) {
+        setEmailErr(msg);
+      } else if (msg.includes("密码")) {
+        setPwdErr(msg);
+      } else {
+        toast(msg, "error");
+      }
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="min-h-dvh bg-zinc-50 text-zinc-950 dark:bg-black dark:text-zinc-50">
-      <main className="mx-auto w-full max-w-md px-6 py-12">
-        <div className="text-lg font-semibold">注册</div>
-        <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-          使用邮箱 + 密码创建账号
+    <AuthShell>
+      <div className="auth-card p-8 sm:p-9">
+        <div>
+          <h1 className="font-display text-xl text-foreground">创建 Refind 账户</h1>
+          <p className="mt-1.5 text-sm text-[var(--foreground-muted)]">用你的邮箱开始搭建跨平台收藏库</p>
         </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-        >
-          <label className="block text-sm font-medium">邮箱</label>
-          <input
-            className="mt-2 h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-600"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="name@example.com"
-            autoComplete="email"
-          />
+        <form onSubmit={onSubmit} className="mt-8 space-y-5">
+          <div>
+            <label className="text-xs font-medium text-[var(--foreground-muted)]">邮箱</label>
+            <input
+              className={`input-refind ${emailErr ? "border-red-400 focus:border-red-400 focus:ring-red-200/50" : ""}`}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+              autoComplete="email"
+            />
+            {emailErr ? <p className="mt-1 text-sm text-red-600">{emailErr}</p> : null}
+          </div>
 
-          <label className="mt-4 block text-sm font-medium">密码</label>
-          <input
-            className="mt-2 h-11 w-full rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-600"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            autoComplete="new-password"
-          />
-
-          {error ? (
-            <div className="mt-3 text-sm text-red-600">{error}</div>
-          ) : null}
+          <div>
+            <label className="text-xs font-medium text-[var(--foreground-muted)]">密码</label>
+            <input
+              className={`input-refind ${pwdErr ? "border-red-400 focus:border-red-400 focus:ring-red-200/50" : ""}`}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              type="password"
+              placeholder="至少 8 位字符"
+              autoComplete="new-password"
+            />
+            {pwdErr ? <p className="mt-1 text-sm text-red-600">{pwdErr}</p> : null}
+          </div>
 
           {done ? (
-            <div className="mt-3 text-sm text-emerald-600">
-              注册成功。若你开启了邮箱验证，请先去邮箱完成验证，然后再登录。
+            <div className="alert alert--success">
+              注册成功，请查收邮件完成验证后再登录。
             </div>
           ) : null}
 
           <button
-            disabled={loading}
-            className="mt-4 inline-flex h-11 w-full items-center justify-center rounded-xl bg-zinc-900 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+            disabled={loading || done}
+            type="submit"
+            className="btn-primary mt-6 w-full py-3 disabled:opacity-60"
           >
-            {loading ? "创建中…" : "创建账号"}
+            {loading ? "创建中…" : done ? "已完成" : "创建账户"}
           </button>
 
-          <div className="mt-4 text-sm text-zinc-600 dark:text-zinc-400">
-            已有账号？{" "}
-            <Link className="text-zinc-950 underline dark:text-zinc-50" href="/login">
-              去登录
+          <p className="border-t border-[var(--border)] pt-6 text-center text-sm text-[var(--foreground-muted)]">
+            已有账户？{" "}
+            <Link href="/login" className="font-semibold text-foreground hover:text-accent">
+              登录
             </Link>
-          </div>
+          </p>
         </form>
-      </main>
-    </div>
+      </div>
+    </AuthShell>
   );
 }
-
