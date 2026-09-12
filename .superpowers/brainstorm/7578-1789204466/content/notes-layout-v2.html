@@ -1,0 +1,26 @@
+<style>
+  .page { max-width:1120px; margin:0 auto; } .board{display:grid;grid-template-columns:1fr 1.65fr;gap:20px;margin-top:22px;height:570px}.panel{background:#fffdf9;border:1px solid #e2dcd4;border-radius:18px;overflow:hidden}.panel-head{height:61px;padding:0 18px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #eee8e1}.panel-head h3{margin:0;font-size:16px}.quiet{font-size:12px;color:#71695f}.solid{border:0;background:#392a20;color:#fffaf5;border-radius:8px;padding:8px 11px;font-weight:700}.tabs{display:flex;gap:18px;padding:0 18px;border-bottom:1px solid #eee8e1}.tabs button{background:transparent;border:0;padding:13px 0 10px;color:#82786e;font-weight:600;cursor:pointer}.tabs .active{color:#372a21;border-bottom:2px solid #70523e}.note-list{padding:7px 10px}.note-row{padding:12px 9px;border-radius:10px;margin:3px 0}.note-row.active{background:#f5ede4}.note-row strong{display:block;font-size:14px}.note-row small{display:block;margin-top:5px;color:#9a9085}.source-box{padding:13px 15px;border-bottom:1px solid #eee8e1;background:#fcf8f2}.source-box b{font-size:13px}.source-box p{margin:5px 0 0;color:#7f756b;font-size:12px}.compose{padding:15px;display:flex;flex-direction:column;gap:10px}.insight-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:stretch}.quote{border:1px solid #e4d5c4;border-radius:9px;padding:10px;background:#fff9f0;font-size:12px;line-height:1.45;color:#58483a}.quote small{display:block;margin-top:7px;color:#8e7c6b}.thought{border:1px solid #ddd6ce;border-radius:9px;padding:10px;background:#fffdfa;font-size:12px;line-height:1.45;color:#7b7167}.thought b{display:block;color:#50443a;font-size:11px;margin-bottom:5px}.write-note{border:1px dashed #bdad9b;border-radius:8px;padding:9px;font-size:12px;color:#88796c;background:#fffcf8}.generate{display:flex;justify-content:space-between;align-items:center;margin-top:1px}.generate span{font-size:12px;color:#7d746b}.blank-pane{padding:45px 30px;color:#655e57}.blank-pane h1{font-size:27px;margin:0 0 15px;color:#28221e}.blank-pane p{font-size:14px;line-height:1.7;max-width:360px}.blank-line{height:8px;border-radius:7px;background:#eee8e2;margin:13px 0}.blank-line.short{width:55%}.explain{margin-top:18px;padding:16px 20px;border-radius:12px;background:#f4ede5;color:#504236;line-height:1.55;font-size:14px}.explain b{color:#2c231d}.selector{cursor:pointer;transition:.2s}.selector:hover,.selector.selected{outline:2px solid #a47957;outline-offset:2px}
+</style>
+<main class="page">
+  <h2>笔记是一种容器，不是一种生成方式</h2>
+  <p class="subtitle">左边把“自由写作”和“洞见整理”并列成两种新建方式。右边展示后者真正该发生的第一步：先写你的判断，再让 AI 生成。</p>
+  <div class="board">
+    <section class="panel selector" data-choice="blank-note" onclick="toggleSelect(this)">
+      <div class="panel-head"><h3>笔记</h3><button class="solid">+ 新建</button></div>
+      <div class="tabs"><button class="active">全部 12</button><button>洞见笔记 4</button></div>
+      <div class="note-list"><div class="note-row active"><strong>会员活动设计框架</strong><small>今天 · 3 条依据</small></div><div class="note-row"><strong>内容增长的三个信号</strong><small>昨天 · 1 条依据</small></div><div class="note-row"><strong>产品灵感收集</strong><small>9 月 8 日 · 自由笔记</small></div></div>
+      <div class="blank-pane"><span class="quiet">新建时默认</span><h1>空白笔记</h1><p>从一个念头开始，自由输入。它不需要卡片，也不必调用 AI。</p><div class="blank-line"></div><div class="blank-line short"></div></div>
+    </section>
+    <section class="panel selector" data-choice="insight-compose" onclick="toggleSelect(this)">
+      <div class="panel-head"><div><h3>从洞见整理</h3><span class="quiet">已选 3 条，来自 2 个知识库</span></div><button class="quiet">取消</button></div>
+      <div class="source-box"><b>先写下你认为它意味着什么</b><p>AI 会把卡片原文和你的判断一起作为笔记初稿的依据。</p></div>
+      <div class="compose">
+        <div class="insight-row"><article class="quote">新用户的关键不是更高奖励，而是降低首次行动的不确定性。<small>会员活动设计 · 增长与运营案例</small></article><article class="thought"><b>我的想法</b>可以用 3 分钟完成的目标和即时反馈，替代复杂的新手任务。</article></div>
+        <div class="insight-row"><article class="quote">把即时内容反馈设计成行为后的确认，而不是单向推送。<small>内容增长策略 · 产品与设计资料</small></article><article class="thought"><b>我的想法</b>反馈应该被看成“用户已完成”的确认感，和奖励不是一回事。</article></div>
+        <div class="insight-row"><article class="quote">高价值用户更在意身份感和优先权。<small>品牌会员研究 · 行业研究报告</small></article><article class="write-note">+ 在这条洞见旁写下你的想法</article></div>
+        <div class="generate"><span>笔记会保留每一条洞见与个人判断</span><button class="solid">生成可编辑初稿 →</button></div>
+      </div>
+      <div class="explain"><b>生成之后</b>，进入熟悉的全屏笔记编辑器。AI 负责结构和初稿，你可以继续自由改写；每个段落均可展开看到“使用的洞见 + 你的原始判断”。</div>
+    </section>
+  </div>
+</main>
