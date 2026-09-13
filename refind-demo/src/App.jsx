@@ -1,25 +1,55 @@
-import { useMemo, useState } from 'react';
-import { ArrowUp, BookOpen, Check, ChevronDown, Clock3, FileText, Folder, Hash, Home, Link2, ListFilter, LogOut, Pencil, Plus, Search, Settings, Sparkles, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowUp, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Hash, Link2, LogOut, Menu, MessageSquare, NotebookText, Plus, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import refindLogo from '/Users/zoecheng/Downloads/ChatGPT Image Sep 12, 2026, 10_56_22 AM.png';
 import './styles.css';
+import { NotesWorkspace } from './features/notes/NotesWorkspace.jsx';
+import { demoInspirationCards, demoNotes, demoNotebooks } from './features/notes/demoData.js';
+import { HomeComposer, defaultHomeScope } from './features/home/HomeComposer.jsx';
+import { HomeConversation, HomeShareBar } from './features/home/HomeConversation.jsx';
+import { KbConversation } from './features/knowledge/KbConversation.jsx';
+import { HomeHistoryCard } from './features/home/HomeHistoryCard.jsx';
+import { MaterialIngest } from './features/knowledge/MaterialIngest.jsx';
+import { getMaterialPreviewUrl, materialDemo } from './features/knowledge/materialDemo.js';
+import { useDismissable } from './hooks/useDismissable.js';
 
 const initialBases = ['默认知识库', '增长与运营案例', '产品与设计资料', '行业研究报告'];
 const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎', 'B 站', '其他'];
 const sortOptions = ['从新到旧', '从旧到新', 'A-Z', 'Z-A'];
-const materials = [
-  { id: 'm1', title: '小红书增长策略拆解：内容社区的用户增长实践', source: '小红书', tag: '增长策略', time: '今天' },
-  { id: 'm2', title: 'SaaS 产品 0-1 增长复盘：从 PMF 到规模化', source: 'B 站', tag: '产品灵感', time: '昨天' },
-  { id: 'm3', title: '教育行业用户运营案例：从留存到转化的全链路实践', source: '微信', tag: '用户研究', time: '9 月 8 日' },
-  { id: 'm4', title: '2022 年 UI 设计师必看的 11 个网站', source: '知乎', tag: '产品灵感', time: '9 月 6 日' },
-];
-const starterNotes = [
-  { id: 1, title: '会员活动设计框架', body: '把用户分层、激励机制和转化节点放进一条可复用的活动链路。\n\n• 新用户：降低首次行动门槛\n• 活跃用户：以内容反馈增强持续参与\n• 高价值用户：提供可被看见的专属权益', meta: '今天 · 3 条引用' },
-  { id: 2, title: '内容增长的三个信号', body: '内容是否值得继续投入，先看收藏率、二次传播率与后续搜索回流。', meta: '昨天 · 1 条引用' },
-  { id: 3, title: '产品灵感收集', body: '记录界面细节、产品叙事和可迁移的交互模式。', meta: '9 月 8 日 · 4 条引用' },
-];
+const initialHomeScope = defaultHomeScope;
+function IconHome({ size = 18, strokeWidth = 1.5, ...props }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path d="M4.5 10.2 12 4.2l7.5 6V19a1.3 1.3 0 0 1-1.3 1.3H5.8A1.3 1.3 0 0 1 4.5 19v-8.8Z" stroke="currentColor" strokeWidth={strokeWidth} strokeLinejoin="round" />
+      <path d="M9.5 20.3V13.8h5v6.5" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconFolder({ size = 18, strokeWidth = 1.5, ...props }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
+      <path d="M3.75 7.5A1.75 1.75 0 0 1 5.5 5.75h3.1c.4 0 .78.14 1.08.4l1.24 1.05c.3.26.68.4 1.08.4H18.5A1.75 1.75 0 0 1 20.25 8.6v8.65A1.75 1.75 0 0 1 18.5 19H5.5A1.75 1.75 0 0 1 3.75 17.25V7.5Z" stroke="currentColor" strokeWidth={strokeWidth} strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconKbItem({ size = 15, ...props }) {
+  return (
+    <svg className="kb-item-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <rect x="2.25" y="2.5" width="4.1" height="11" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M8.1 3.4c1.55-.55 3.1-.55 4.65 0v9.2c-1.55-.55-3.1-.55-4.65 0V3.4Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function IconMaterial({ size = 15, ...props }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M3.2 3.1h6.8a1.2 1.2 0 0 1 1.2 1.2v8.2a.9.9 0 0 1-1.35.78L8 12.3l-1.85.98A.9.9 0 0 1 4.8 12.5V4.3A1.2 1.2 0 0 1 6 3.1" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
+      <path d="M6.2 6h4.2M6.2 8.3h3.2" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function NavItem({ icon: Icon, label, active, onClick, trailing }) {
-  return <button className={`nav-item ${active ? 'is-active' : ''}`} onClick={onClick} type="button"><Icon size={17} strokeWidth={active ? 2.35 : 1.9} /><span>{label}</span>{trailing}</button>;
+  return <button className={`nav-item ${active ? 'is-active' : ''}`} aria-label={label} title={label} onClick={onClick} type="button"><Icon size={18} strokeWidth={active ? 1.7 : 1.45} /><span>{label}</span>{trailing}</button>;
 }
 function Toast({ text, onClose }) {
   return <div className="home-notice" role="status"><Check size={15} />{text}<button aria-label="关闭提示" type="button" onClick={onClose}><X size={15} /></button></div>;
@@ -33,95 +63,519 @@ function KnowledgeAnswerMark() {
 function Composer({ base, bases, onBase, onSubmit, compact = false }) {
   const [prompt, setPrompt] = useState('');
   const [menu, setMenu] = useState(false);
-  const [tag, setTag] = useState('标签');
+  const [thinkingMode, setThinkingMode] = useState('fast');
+  const [modelMenu, setModelMenu] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
-  const tags = ['标签', '增长策略', '用户研究', '产品灵感'];
-  const send = (event) => { event.preventDefault(); if (!prompt.trim()) return; onSubmit(prompt, base); setPrompt(''); setMenu(false); setTagMenu(false); };
+  const [tagQuery, setTagQuery] = useState('');
+  const baseMenuRef = useRef(null);
+  const modelMenuRef = useRef(null);
+  const tagMenuRef = useRef(null);
+  const tags = ['增长策略', '用户研究', '产品灵感'];
+  const filteredTags = tags.filter((item) => !tagQuery || item.includes(tagQuery));
+  const selectedModel = thinkingMode === 'deep' ? 'DS深度' : 'DS快速';
+  const syncHashMenu = (value) => {
+    if (!compact) return;
+    const match = /(^|\s)#([^\s#]*)$/.exec(value);
+    if (match) {
+      setTagMenu(true);
+      setTagQuery(match[2] || '');
+      return;
+    }
+    setTagMenu(false);
+    setTagQuery('');
+  };
+  const insertTag = (tag) => {
+    setPrompt((value) => value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `));
+    setTagMenu(false);
+    setTagQuery('');
+  };
+  useDismissable({ open: menu, onClose: () => setMenu(false), rootRef: baseMenuRef });
+  useDismissable({ open: modelMenu, onClose: () => setModelMenu(false), rootRef: modelMenuRef });
+  useDismissable({ open: tagMenu, onClose: () => setTagMenu(false), rootRef: tagMenuRef });
+  const send = (event) => {
+    event.preventDefault();
+    if (!prompt.trim()) return;
+    onSubmit(prompt, base);
+    setPrompt('');
+    setMenu(false);
+    setModelMenu(false);
+    setTagMenu(false);
+    setTagQuery('');
+  };
+  const onPromptKeyDown = (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    send(event);
+  };
   return <form className={`question-composer ${compact ? 'is-compact' : ''} ${prompt.trim() ? 'has-content' : ''}`} onSubmit={send}>
     {compact && <span className="beam-main" aria-hidden="true" />}
-    <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={compact ? '基于当前知识库进行提问' : '请输入内容进行提问'} />
+    <div className="composer-input-wrap" ref={tagMenuRef}>
+      <textarea
+        value={prompt}
+        onChange={(event) => {
+          const value = event.target.value;
+          setPrompt(value);
+          syncHashMenu(value);
+        }}
+        onKeyDown={onPromptKeyDown}
+        placeholder={compact ? '基于当前知识库提问，输入 # 可选择标签' : '请输入内容进行提问'}
+      />
+      {compact && tagMenu && (
+        <div className="composer-menu composer-tag-suggest" role="listbox" aria-label="选择标签">
+          {(filteredTags.length ? filteredTags : tags).map((item) => (
+            <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
+              <span>#{item}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
     <div className="composer-footer">
       <div className="composer-actions">
         {!compact && <button type="button" className="composer-chip" onClick={() => setPrompt((value) => value || 'https://')}><Link2 size={16} />链接</button>}
-        {compact ? <div className="menu-anchor compact-tag-anchor"><button type="button" className="composer-chip" onClick={() => setTagMenu(!tagMenu)}><Hash size={16} />{tag}<ChevronDown size={14} /></button>{tagMenu && <div className="composer-menu">{tags.map((item) => <button key={item} type="button" onClick={() => { setTag(item); setTagMenu(false); }}><span>{item}</span>{tag === item && <Check size={15} />}</button>)}</div>}</div> : <div className="menu-anchor"><button type="button" className="composer-chip" onClick={() => setMenu(!menu)}><BookOpen size={16} />{base}<ChevronDown size={14} /></button>{menu && <div className="composer-menu">{bases.map((item) => <button key={item} type="button" onClick={() => { onBase(item); setMenu(false); }}><span>{item}</span>{base === item && <Check size={15} />}</button>)}</div>}</div>}
+        {!compact && <div className="menu-anchor" ref={baseMenuRef}><button type="button" className="composer-chip" onClick={() => setMenu(!menu)}><BookOpen size={16} />{base}<ChevronDown size={14} /></button>{menu && <div className="composer-menu">{bases.map((item) => <button key={item} type="button" onClick={() => { onBase(item); setMenu(false); }}><span>{item}</span>{base === item && <Check size={15} />}</button>)}</div>}</div>}
         {!compact && <button type="button" className="composer-chip"><Hash size={16} />标签<ChevronDown size={14} /></button>}
+        {compact && (
+          <div className="menu-anchor compact-model-anchor" ref={modelMenuRef}>
+            <button type="button" className="composer-chip composer-model" aria-label="选择模型" aria-expanded={modelMenu} onClick={() => { setModelMenu((open) => !open); setTagMenu(false); }}>
+              <span>{selectedModel}</span><ChevronDown size={13} strokeWidth={1.8} />
+            </button>
+            {modelMenu && (
+              <div className="composer-menu composer-model-menu" role="dialog" aria-label="DeepSeek 模型设置">
+                <div className="composer-model-menu__row">
+                  <div>
+                    <strong>DeepSeek</strong>
+                    <small>思考模式</small>
+                  </div>
+                  <div className="composer-think-toggle" role="group" aria-label="思考模式">
+                    <button type="button" aria-pressed={thinkingMode === 'fast'} className={thinkingMode === 'fast' ? 'is-active' : ''} onClick={() => setThinkingMode('fast')}>快速</button>
+                    <button type="button" aria-pressed={thinkingMode === 'deep'} className={thinkingMode === 'deep' ? 'is-active' : ''} onClick={() => setThinkingMode('deep')}>深度</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      <button className="send-button" type="submit" aria-label="发送提问"><ArrowUp size={20} /></button>
+      <button className="send-button" type="submit" aria-label="发送提问"><ArrowUp size={18} strokeWidth={2.1} /></button>
     </div>
   </form>;
 }
 
 export function App() {
   const [activeNav, setActiveNav] = useState('首页');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [kbRailOpen, setKbRailOpen] = useState(false);
   const [bases, setBases] = useState(initialBases);
   const [base, setBase] = useState('默认知识库');
   const [notice, setNotice] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [newBase, setNewBase] = useState('');
-  const [notes, setNotes] = useState(starterNotes);
-  const [noteId, setNoteId] = useState(1);
+  const [notes, setNotes] = useState(demoNotes);
+  const [cards, setCards] = useState(demoInspirationCards);
   const [query, setQuery] = useState('');
   const [materialSearchFocused, setMaterialSearchFocused] = useState(false);
   const [source, setSource] = useState('全部来源');
   const [sort, setSort] = useState('从新到旧');
   const [filterOpen, setFilterOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [homeHistoryOpen, setHomeHistoryOpen] = useState(true);
   const [accountOpen, setAccountOpen] = useState(false);
-  const [messages, setMessages] = useState([]);
-  const currentNote = notes.find((note) => note.id === noteId) || notes[0];
+  const filterRef = useRef(null);
+  const historyRef = useRef(null);
+  const accountRef = useRef(null);
+  const kbRailRef = useRef(null);
+  const [homeMessages, setHomeMessages] = useState([]);
+  const [homeSurface, setHomeSurface] = useState('hero');
+  const [homeChatOpened, setHomeChatOpened] = useState(false);
+  const [homeShareMode, setHomeShareMode] = useState(false);
+  const [homeShareSelected, setHomeShareSelected] = useState([]);
+  const [kbShareMode, setKbShareMode] = useState(false);
+  const [kbShareSelected, setKbShareSelected] = useState([]);
+  const [kbMessages, setKbMessages] = useState([]);
+  const [homeScope, setHomeScope] = useState(initialHomeScope);
+  const [conversationScope, setConversationScope] = useState(null);
+  useEffect(() => {
+    if (!homeScope.selectedBases.length && !homeScope.selectedTags.length) {
+      setConversationScope(null);
+    }
+  }, [homeScope.selectedBases, homeScope.selectedTags]);
+  const [knowledgeMaterials, setKnowledgeMaterials] = useState(materialDemo);
+  const [hoveredMaterialId, setHoveredMaterialId] = useState(null);
   const isMaterialSearching = materialSearchFocused || Boolean(query);
+  useDismissable({ open: filterOpen, onClose: () => setFilterOpen(false), rootRef: filterRef });
+  useDismissable({ open: historyOpen, onClose: () => setHistoryOpen(false), rootRef: historyRef });
+  useDismissable({ open: accountOpen, onClose: () => setAccountOpen(false), rootRef: accountRef });
+  useDismissable({ open: kbRailOpen, onClose: () => setKbRailOpen(false), rootRef: kbRailRef });
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined;
+    const tablet = window.matchMedia('(max-width: 1199px) and (min-width: 768px)');
+    const mobile = window.matchMedia('(max-width: 767px)');
+    const sync = () => {
+      if (tablet.matches) setSidebarCollapsed(true);
+      if (mobile.matches) {
+        setSidebarCollapsed(false);
+        setMobileNavOpen(false);
+      }
+    };
+    sync();
+    tablet.addEventListener('change', sync);
+    mobile.addEventListener('change', sync);
+    return () => {
+      tablet.removeEventListener('change', sync);
+      mobile.removeEventListener('change', sync);
+    };
+  }, []);
   const visibleMaterials = useMemo(() => {
     const rank = { m1: 4, m2: 3, m3: 2, m4: 1 };
-    return materials.filter((item) => (source === '全部来源' || item.source === source) && item.title.includes(query)).sort((a, b) => {
+    return knowledgeMaterials.filter((item) => item.base === base && (source === '全部来源' || item.source === source) && item.title.includes(query)).sort((a, b) => {
       if (sort === '从旧到新') return rank[a.id] - rank[b.id];
       if (sort === 'A-Z') return a.title.localeCompare(b.title, 'zh-Hans-CN');
       if (sort === 'Z-A') return b.title.localeCompare(a.title, 'zh-Hans-CN');
       return rank[b.id] - rank[a.id];
     });
-  }, [source, query, sort]);
+  }, [base, knowledgeMaterials, source, query, sort]);
   const say = (text) => setNotice(text);
-  const switchNav = (view) => { setActiveNav(view); if (view === '知识库') setBase('默认知识库'); setNotice(''); };
+  const exitHomeShare = () => {
+    setHomeShareMode(false);
+    setHomeShareSelected([]);
+  };
+  const startHomeShare = (answerId) => {
+    setHomeShareMode(true);
+    setHomeShareSelected([answerId]);
+  };
+  const toggleHomeShareBubble = (bubbleId) => {
+    setHomeShareSelected((current) => (
+      current.includes(bubbleId)
+        ? current.filter((id) => id !== bubbleId)
+        : [...current, bubbleId]
+    ));
+  };
+  const copyHomeShareLink = async () => {
+    const link = `https://refind.app/share/home?bubbles=${encodeURIComponent(homeShareSelected.join(',')) || 'all'}`;
+    try { await navigator.clipboard?.writeText(link); } catch { /* optional */ }
+    say('对话链接已复制。');
+    exitHomeShare();
+  };
+  const exitKbShare = () => {
+    setKbShareMode(false);
+    setKbShareSelected([]);
+  };
+  const startKbShare = (answerId) => {
+    setKbShareMode(true);
+    setKbShareSelected([answerId]);
+  };
+  const toggleKbShareBubble = (bubbleId) => {
+    setKbShareSelected((current) => (
+      current.includes(bubbleId)
+        ? current.filter((id) => id !== bubbleId)
+        : [...current, bubbleId]
+    ));
+  };
+  const copyKbShareLink = async () => {
+    const link = `https://refind.app/share/kb?base=${encodeURIComponent(base)}&bubbles=${encodeURIComponent(kbShareSelected.join(',')) || 'all'}`;
+    try { await navigator.clipboard?.writeText(link); } catch { /* optional */ }
+    say('对话链接已复制。');
+    exitKbShare();
+  };
+  const showHomeChat = homeSurface === 'chat';
+  const switchNav = (view) => {
+    if (view !== '首页') exitHomeShare();
+    if (view !== '知识库') exitKbShare();
+    setActiveNav(view);
+    setMobileNavOpen(false);
+    setAiPanelOpen(false);
+    setKbRailOpen(false);
+    if (view === '知识库') setBase('默认知识库');
+    setNotice('');
+  };
+  const goHomeHero = () => {
+    exitHomeShare();
+    switchNav('首页');
+    setHomeSurface('hero');
+    setHomeHistoryOpen(true);
+  };
+  const goHomeNav = () => {
+    switchNav('首页');
+    setHomeSurface(homeChatOpened || homeMessages.length > 0 ? 'chat' : 'hero');
+    setHomeHistoryOpen(true);
+  };
   const createBase = (event) => { event.preventDefault(); if (!newBase.trim()) return; const value = newBase.trim(); setBases((items) => [...items, value]); setBase(value); setNewBase(''); setShowCreate(false); say(`已创建知识库「${value}」。`); };
-  const ask = (prompt, selectedBase) => { setActiveNav('知识库'); setBase(selectedBase); setMessages((all) => [...all, { id: Date.now(), question: prompt }]); };
-  const addNote = () => { const id = Date.now(); setNotes((items) => [{ id, title: '未命名笔记', body: '在这里写下你的想法。', meta: '刚刚创建 · 0 条引用' }, ...items]); setNoteId(id); say('已新建一篇笔记。'); };
+  const submitHomeQuestion = (request) => {
+    const scope = conversationScope || {
+      bases: request.selectedBases,
+      tags: request.selectedTags,
+      mode: request.mode,
+      online: request.online,
+    };
+    const message = {
+      id: Date.now(),
+      question: request.prompt,
+      mode: scope.mode,
+      online: scope.online,
+      selectedBases: [...scope.bases],
+      selectedTags: [...scope.tags],
+      citations: scope.mode === 'rag' ? [{ label: '小红书增长策略' }, { label: 'SaaS 增长复盘' }] : [],
+    };
+    setConversationScope(scope);
+    setHomeChatOpened(true);
+    setHomeSurface('chat');
+    setHomeMessages((all) => [...all, message]);
+  };
+  const submitKbQuestion = (question) => {
+    const scope = { bases: [base], tags: [], mode: 'rag', online: false };
+    setKbMessages((all) => [...all, {
+      id: Date.now(),
+      question,
+      mode: scope.mode,
+      online: scope.online,
+      selectedBases: scope.bases,
+      selectedTags: scope.tags,
+      citations: [{ label: '小红书增长策略' }, { label: 'SaaS 增长复盘' }],
+    }]);
+  };
+  const saveAnswerCard = (payload) => {
+    setCards((items) => [{ id: `card-${Date.now()}`, ...payload, sourceLabel: payload.citation?.label || '通用回答', savedAt: '刚刚收藏' }, ...items]);
+    say('已保存为灵感卡片。');
+  };
+  const addAnswerToNote = (payload) => {
+    const id = `note-${Date.now()}`;
+    setNotes((items) => [{ id, title: '来自 AI 的回答', content: { text: payload.contentSnapshot, blocks: [] }, notebookId: null, updatedLabel: '刚刚保存', inspirationCardIds: [], syncedBaseIds: [] }, ...items]);
+    say('回答已加入笔记。');
+  };
+  const saveIngestedMaterial = (item) => {
+    setKnowledgeMaterials((items) => [...items, item]);
+    window.sessionStorage.setItem(`refind-material:${item.id}`, JSON.stringify(item));
+  };
+  const openMaterialPreview = (item) => {
+    window.sessionStorage.setItem(`refind-material:${item.id}`, JSON.stringify(item));
+    window.open(getMaterialPreviewUrl(item.id), '_blank', 'noopener,noreferrer');
+  };
 
-  return <main className="app-shell">
-    <aside className="home-sidebar">
+  return <main className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
+    <button className="mobile-nav-trigger" type="button" aria-label="打开导航" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>
+      <Menu size={18} strokeWidth={1.85} />
+    </button>
+    {mobileNavOpen && <button className="mobile-nav-scrim" type="button" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
+    <aside className={`home-sidebar ${mobileNavOpen ? 'is-mobile-open' : ''}`}>
+      <button
+        className="sidebar-toggle"
+        type="button"
+        aria-label={sidebarCollapsed ? '展开导航' : '收起导航'}
+        title={sidebarCollapsed ? '展开导航' : '收起导航'}
+        aria-expanded={!sidebarCollapsed}
+        onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+      >
+        {sidebarCollapsed ? <ChevronRight size={11} strokeWidth={2.4} /> : <ChevronLeft size={11} strokeWidth={2.4} />}
+      </button>
       <div>
-        <div className="home-brand"><img className="brand-logo" src={refindLogo} alt="Refind" /><strong>Refind</strong><span>· 拾藏</span></div>
-        <nav className="home-nav">
-          <NavItem icon={Home} label="首页" active={activeNav === '首页'} onClick={() => switchNav('首页')} />
-          <NavItem icon={FileText} label="笔记" active={activeNav === '笔记'} onClick={() => switchNav('笔记')} />
-          <NavItem icon={Folder} label="知识库" active={activeNav === '知识库'} onClick={() => switchNav('知识库')} trailing={<Plus className="create-kb-plus" size={17} onClick={(event) => { event.stopPropagation(); setShowCreate(true); }} />} />
+        <button
+          type="button"
+          className="home-brand"
+          aria-label="回到首页"
+          onClick={goHomeHero}
+        >
+          <img className="brand-logo" src={refindLogo} alt="" />
+          <strong>Refind</strong>
+          <span className="brand-product">· 拾藏</span>
+        </button>
+        <nav className="home-nav" aria-label="主导航" data-mobile-open={mobileNavOpen}>
+          <NavItem icon={IconHome} label="首页" active={activeNav === '首页'} onClick={goHomeNav} />
+          <NavItem icon={NotebookText} label="笔记" active={activeNav === '笔记'} onClick={() => switchNav('笔记')} />
+          <NavItem
+            icon={IconFolder}
+            label="知识库"
+            active={activeNav === '知识库'}
+            onClick={() => {
+              if (sidebarCollapsed && activeNav === '知识库') {
+                setKbRailOpen((open) => !open);
+                return;
+              }
+              switchNav('知识库');
+              if (sidebarCollapsed) setKbRailOpen(true);
+            }}
+            trailing={sidebarCollapsed ? null : (
+              <span
+                className="create-kb-plus-btn"
+                role="button"
+                tabIndex={0}
+                aria-label="新建知识库"
+                title="新建知识库"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setShowCreate(true);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setShowCreate(true);
+                }}
+              >
+                <Plus className="create-kb-plus" size={14} strokeWidth={2.2} aria-hidden="true" />
+              </span>
+            )}
+          />
         </nav>
-        <label className="sidebar-search"><Search size={16} /><input placeholder="搜索知识库" /></label>
-        {activeNav === '知识库' && <div className="kb-sidebar-list">{bases.map((item) => <button key={item} className={base === item ? 'selected' : ''} onClick={() => setBase(item)}><BookOpen size={15} /><span>{item}</span></button>)}</div>}
+        {sidebarCollapsed && (
+          <div className="sidebar-rail-actions">
+            <button type="button" className="rail-action" aria-label="新建知识库" data-rail-label="新建" title="新建知识库" onClick={() => setShowCreate(true)}><Plus size={16} strokeWidth={1.5} /></button>
+            {activeNav === '知识库' && (
+              <div className="kb-rail-anchor" ref={kbRailRef}>
+                <button type="button" className={`rail-action ${kbRailOpen ? 'is-active' : ''}`} aria-label="切换知识库" data-rail-label="切换" title="切换知识库" aria-expanded={kbRailOpen} onClick={() => setKbRailOpen((open) => !open)}><IconKbItem size={16} /></button>
+                {kbRailOpen && (
+                  <div className="kb-rail-menu" role="menu" aria-label="知识库列表">
+                    {bases.map((item) => (
+                      <button key={item} type="button" role="menuitem" className={base === item ? 'selected' : ''} onClick={() => { setBase(item); setKbRailOpen(false); }}>
+                        <span>{item}</span>
+                        {base === item && <Check size={14} strokeWidth={1.5} />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        <label className="sidebar-search"><Search size={15} strokeWidth={1.5} /><input placeholder="搜索知识库" /></label>
+        {activeNav === '知识库' && <div className="kb-sidebar-list">{bases.map((item) => <button key={item} className={base === item ? 'selected' : ''} onClick={() => setBase(item)}><IconKbItem /><span>{item}</span></button>)}</div>}
       </div>
-      <div className="profile-anchor">
-        <button type="button" className={`profile ${accountOpen ? 'is-active' : ''}`} aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}><span className="profile-avatar">林</span><span><strong>林知夏</strong><small>个人账号</small></span></button>
+      <div className="profile-anchor" ref={accountRef}>
+        <button type="button" className={`profile ${accountOpen ? 'is-active' : ''}`} aria-label="林知夏 个人账号" title="林知夏 个人账号" aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}><span className="profile-avatar">林</span><span><strong>林知夏</strong><small>个人账号</small></span></button>
         {accountOpen && <div className="account-menu"><button type="button" onClick={() => { setAccountOpen(false); say('设置页面即将提供。'); }}><Settings size={15} />设置</button><button type="button" className="account-logout" onClick={() => { setAccountOpen(false); say('已退出登录（演示）。'); }}><LogOut size={15} />退出登录</button></div>}
       </div>
     </aside>
-    {activeNav === '首页' && <section className="home-canvas"><div className="hero-block"><div className="robot-hero"><img src="/assets/refind-home-robot.png" alt="" /></div><h1>Welcome, Refind!</h1><p>把散落的收藏，重新捡回来。</p></div><Composer base={base} bases={bases} onBase={setBase} onSubmit={ask} />{notice && <Toast text={notice} onClose={() => setNotice('')} />}</section>}
-    {activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><header className="workspace-header"><div><span className="eyebrow">个人记录</span><h1>笔记</h1></div><button className="quiet-action" onClick={addNote}><Pencil size={16} />新建笔记</button></header><div className="notes-layout"><aside className="note-list-panel"><label className="list-search"><Search size={15} /><input placeholder="搜索笔记" /></label><div className="note-list">{notes.map((note) => <button key={note.id} onClick={() => setNoteId(note.id)} className={note.id === noteId ? 'selected' : ''}><strong>{note.title}</strong><span>{note.meta}</span></button>)}</div></aside><article className="note-editor-panel"><div className="note-editor-top"><span>笔记</span><button onClick={() => say('笔记已保存。')}>保存</button></div><input className="note-title-input" value={currentNote.title} onChange={(e) => setNotes((items) => items.map((n) => n.id === currentNote.id ? { ...n, title: e.target.value } : n))} /><textarea value={currentNote.body} onChange={(e) => setNotes((items) => items.map((n) => n.id === currentNote.id ? { ...n, body: e.target.value } : n))} /><div className="note-citation">引用自：增长与运营案例 · {currentNote.meta}</div></article></div>{notice && <Toast text={notice} onClose={() => setNotice('')} />}</section>}
-    {activeNav === '知识库' && <section className="workspace-canvas knowledge-canvas">
-      <header className="workspace-header"><div><h1>{base}</h1></div></header>
-      <div className="knowledge-layout">
-        <section className="materials-panel">
-          <div className={`material-tools ${isMaterialSearching ? 'is-searching' : ''}`}>
-            <div className="material-search"><Search size={16} /><input value={query} onFocus={() => setMaterialSearchFocused(true)} onBlur={() => { if (!query) setMaterialSearchFocused(false); }} onChange={(e) => setQuery(e.target.value)} placeholder="搜索资料" />{isMaterialSearching && <button className="material-search-clear" type="button" aria-label="清除搜索" onMouseDown={(event) => event.preventDefault()} onClick={() => { setQuery(''); setMaterialSearchFocused(false); setFilterOpen(false); }}><X size={16} /></button>}</div>
-            {!isMaterialSearching && <div className="filter-anchor">
-              <button className="filter-trigger" type="button" onClick={() => setFilterOpen((open) => !open)}><ListFilter size={16} />筛选<ChevronDown size={15} /></button>
-              {filterOpen && <div className="material-filter-popover">
-                <section><strong>按来源</strong>{sourceOptions.map((item) => <button key={item} className={source === item ? 'selected' : ''} onClick={() => { setSource(item); setFilterOpen(false); }}><span>{item}</span>{source === item && <Check size={14} />}</button>)}</section>
-                <section><strong>按时间 / 标题</strong>{sortOptions.map((item) => <button key={item} className={sort === item ? 'selected' : ''} onClick={() => { setSort(item); setFilterOpen(false); }}><span>{item}</span>{sort === item && <Check size={14} />}</button>)}</section>
-              </div>}
-            </div>}
-            {!isMaterialSearching && <button className="add-link-button" onClick={() => say('粘贴链接后即可自动解析保存。')}><Plus size={16} />添加链接</button>}
+    {activeNav === '首页' && <section className={`home-canvas ${showHomeChat ? 'has-conversation' : ''} ${showHomeChat && homeHistoryOpen ? 'is-history-open' : ''} ${showHomeChat && !homeHistoryOpen ? 'is-history-collapsed' : ''}`}>
+      {!showHomeChat && <div className="hero-block"><div className="robot-hero"><img src="/assets/refind-home-robot.png" alt="" /></div><h1>Welcome, Refind!</h1><p>把散落的收藏，重新捡回来。</p></div>}
+      {showHomeChat && (
+        <>
+          <HomeHistoryCard
+            open={homeHistoryOpen}
+            onOpenChange={setHomeHistoryOpen}
+            onNewChat={() => {
+              exitHomeShare();
+              setHomeMessages([]);
+              setHomeScope(initialHomeScope);
+              setConversationScope(null);
+              setHomeChatOpened(true);
+              setHomeSurface('chat');
+              setHomeHistoryOpen(true);
+            }}
+            activeTitle={homeMessages[0]?.question}
+            onPickHistory={(title) => {
+              exitHomeShare();
+              setHomeMessages([{
+                id: `home-history-${Date.now()}`,
+                question: title,
+                mode: 'rag',
+                selectedBases: ['默认知识库'],
+                selectedTags: [],
+              }]);
+              setConversationScope(null);
+              setHomeChatOpened(true);
+              setHomeSurface('chat');
+            }}
+          />
+          <div className="home-thread">
+            <HomeConversation
+              messages={homeMessages}
+              onSaveCard={saveAnswerCard}
+              onAddToNote={addAnswerToNote}
+              shareMode={homeShareMode}
+              selectedBubbleIds={homeShareSelected}
+              onShareStart={startHomeShare}
+              onToggleBubble={toggleHomeShareBubble}
+            />
+            {homeShareMode
+              ? <HomeShareBar selectedCount={homeShareSelected.length} onCopyLink={copyHomeShareLink} onCancel={exitHomeShare} />
+              : <HomeComposer bases={bases} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
           </div>
-          <div className="material-list">{visibleMaterials.map((item) => <article className="material-row" key={item.id}><div className="material-mark"><BookOpen size={17} /></div><div><h3>{item.title}</h3><p><span>{item.source}</span> · #{item.tag}</p></div><time>{item.time}</time></article>)}{!visibleMaterials.length && <p className="empty-inline">没有匹配的资料。</p>}</div>
-        </section>
-        <aside className="ai-panel"><div className="ai-panel-head"><h2>AI 对话</h2><div><button title="新建会话" onClick={() => setMessages([])}><Plus size={16} /></button><button title="会话历史" onClick={() => setHistoryOpen((v) => !v)}><Clock3 size={16} /></button></div></div>{historyOpen && <div className="history-popover"><strong>会话历史</strong><button onClick={() => { setMessages([]); setHistoryOpen(false); }}>小红书增长策略</button><button onClick={() => { setMessages([]); setHistoryOpen(false); }}>会员活动设计</button></div>}<div className="ai-stream">{messages.length === 0 ? <div className="ai-empty"><KnowledgeAnswerMark /><h3>从你的资料里找答案</h3></div> : messages.map((message) => <div className="conversation" key={message.id}><div className="user-message">{message.question}</div><div className="answer-message"><p>我在「{base}」里找到了三个值得优先关注的方向：</p><ol><li>先用高质量内容建立核心用户的信任感。<Citation label="小红书增长策略" /></li><li>用明确的反馈与激励，缩短用户从浏览到行动的路径。<Citation label="SaaS 增长复盘" /></li><li>持续观察留存和搜索回流，确认增长是否可复制。<Citation label="用户运营案例" /></li></ol><button className="save-answer" onClick={() => { const id = Date.now(); setNotes((items) => [{ id, title: '来自 AI 的知识库摘要', body: '三个值得优先关注的增长方向已保存。', meta: '刚刚保存 · 3 条引用' }, ...items]); setNoteId(id); say('回答已加入笔记。'); }}>加入笔记</button></div></div>)}</div><Composer compact base={base} bases={bases} onBase={setBase} onSubmit={ask} /></aside>
+        </>
+      )}
+      {!showHomeChat && <HomeComposer bases={bases} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
+      {notice && <Toast text={notice} onClose={() => setNotice('')} />}
+    </section>}
+    {activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={demoNotebooks} notice={say} onDeleteCard={(cardId) => setCards((items) => items.filter((card) => card.id !== cardId))} />{notice && <Toast text={notice} onClose={() => setNotice('')} />}</section>}
+    {activeNav === '知识库' && <section className="workspace-canvas knowledge-canvas">
+      <div className="knowledge-layout">
+        <div className="materials-column">
+          <header className="workspace-header">
+            <div><h1>{base}</h1></div>
+            <button className="ai-panel-trigger" type="button" onClick={() => setAiPanelOpen(true)}><MessageSquare size={15} strokeWidth={1.6} />AI 对话</button>
+          </header>
+          <section className="materials-panel">
+            <div className={`material-tools ${isMaterialSearching ? 'is-searching' : ''}`}>
+              <div className="material-search"><Search size={14} strokeWidth={1.6} /><input value={query} onFocus={() => setMaterialSearchFocused(true)} onBlur={() => { if (!query) setMaterialSearchFocused(false); }} onChange={(e) => setQuery(e.target.value)} placeholder="搜索资料" />{isMaterialSearching && <button className="material-search-clear" type="button" aria-label="清除搜索" onMouseDown={(event) => event.preventDefault()} onClick={() => { setQuery(''); setMaterialSearchFocused(false); setFilterOpen(false); }}><X size={14} strokeWidth={1.6} /></button>}</div>
+              {!isMaterialSearching && <div className="filter-anchor" ref={filterRef}>
+                <button className="filter-trigger" type="button" aria-label="筛选" onClick={() => setFilterOpen((open) => !open)}><SlidersHorizontal size={14} strokeWidth={1.7} /><span>筛选</span></button>
+                {filterOpen && <div className="material-filter-popover">
+                  <section><strong>按来源</strong>{sourceOptions.map((item) => <button key={item} className={source === item ? 'selected' : ''} onClick={() => { setSource(item); setFilterOpen(false); }}><span>{item}</span>{source === item && <Check size={13} strokeWidth={1.6} />}</button>)}</section>
+                  <section><strong>按时间 / 标题</strong>{sortOptions.map((item) => <button key={item} className={sort === item ? 'selected' : ''} onClick={() => { setSort(item); setFilterOpen(false); }}><span>{item}</span>{sort === item && <Check size={13} strokeWidth={1.6} />}</button>)}</section>
+                </div>}
+              </div>}
+              {!isMaterialSearching && <MaterialIngest base={base} onMaterialReady={saveIngestedMaterial} />}
+            </div>
+            <div className="material-list">{visibleMaterials.map((item) => <article className="material-row" key={item.id}>
+              <button
+                type="button"
+                className="material-row-button"
+                aria-label={item.fileName || item.title}
+                onClick={() => openMaterialPreview(item)}
+                onMouseEnter={() => setHoveredMaterialId(item.id)}
+                onMouseLeave={() => setHoveredMaterialId(null)}
+                onFocus={() => setHoveredMaterialId(item.id)}
+                onBlur={() => setHoveredMaterialId(null)}
+              >
+                <div className="material-mark"><IconMaterial /></div><div><h3>{item.title}</h3><p><span>{item.source}</span> · #{item.tag}</p></div><time>{item.time}</time>
+              </button>
+              {hoveredMaterialId === item.id && <aside className="material-hover-card" role="tooltip">
+                <strong>{item.fileName || item.title}</strong>
+                <span>AI 解析摘要</span>
+                <p>{item.summary}</p>
+              </aside>}
+            </article>)}{!visibleMaterials.length && <p className="empty-inline">没有匹配的资料。</p>}</div>
+          </section>
+        </div>
+        {aiPanelOpen && <button className="ai-panel-scrim" type="button" aria-label="关闭 AI 对话遮罩" onClick={() => { setAiPanelOpen(false); setHistoryOpen(false); }} />}
+        <aside className={`ai-panel ${aiPanelOpen ? 'is-open' : ''} ${kbShareMode ? 'is-share-mode' : ''}`} data-open={aiPanelOpen ? 'true' : 'false'}>
+          <div className="ai-panel-head" ref={historyRef}>
+            <h2>AI 对话</h2>
+            <div>
+              <button type="button" title="新建会话" aria-label="新建会话" onClick={() => { exitKbShare(); setKbMessages([]); setHistoryOpen(false); }}><Plus size={15} strokeWidth={1.5} /></button>
+              <div className="ai-history-anchor">
+                <button type="button" title="会话历史" aria-label="会话历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)}><Clock3 size={15} strokeWidth={1.5} /></button>
+                {historyOpen && (
+                  <div className="history-popover" role="menu" aria-label="会话历史">
+                    <strong>会话历史</strong>
+                    <button type="button" role="menuitem" onClick={() => { exitKbShare(); setKbMessages([]); setHistoryOpen(false); }}>小红书增长策略</button>
+                    <button type="button" role="menuitem" onClick={() => { exitKbShare(); setKbMessages([]); setHistoryOpen(false); }}>会员活动设计</button>
+                  </div>
+                )}
+              </div>
+              <button className="ai-panel-close" type="button" aria-label="关闭 AI 对话" onClick={() => { exitKbShare(); setAiPanelOpen(false); setHistoryOpen(false); }}><X size={15} strokeWidth={1.5} /></button>
+            </div>
+          </div>
+          <div className={`ai-stream ${kbMessages.length ? 'has-messages' : ''}`}>
+            {kbMessages.length === 0
+              ? <div className="ai-empty"><KnowledgeAnswerMark /><h3>从你的资料里找答案</h3></div>
+              : (
+                <KbConversation
+                  messages={kbMessages}
+                  onSaveCard={saveAnswerCard}
+                  onAddToNote={addAnswerToNote}
+                  shareMode={kbShareMode}
+                  selectedBubbleIds={kbShareSelected}
+                  onShareStart={startKbShare}
+                  onToggleBubble={toggleKbShareBubble}
+                />
+              )}
+          </div>
+          {kbShareMode
+            ? <HomeShareBar selectedCount={kbShareSelected.length} onCopyLink={copyKbShareLink} onCancel={exitKbShare} />
+            : <Composer compact base={base} bases={bases} onBase={setBase} onSubmit={submitKbQuestion} />}
+        </aside>
       </div>{notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
     {showCreate && <div className="modal-layer"><form className="create-modal" onSubmit={createBase}><button className="modal-close" type="button" onClick={() => setShowCreate(false)}><X size={17} /></button><Sparkles size={22} /><h2>新建知识库</h2><p>创建一个主题空间，用来归集和提问。</p><label>知识库名称<input value={newBase} autoFocus onChange={(event) => setNewBase(event.target.value)} placeholder="例如：产品与设计资料" /></label><div><button type="button" onClick={() => setShowCreate(false)}>取消</button><button type="submit">创建</button></div></form></div>}

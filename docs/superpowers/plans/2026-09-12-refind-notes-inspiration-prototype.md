@@ -462,15 +462,15 @@ Expected: sync progress and delete warning tests pass.
 - Modify: `refind-demo/src/styles.css`
 - Create or modify: focused component tests
 
-- [ ] **Step 1: Write failing interaction tests**
+- [x] **Step 1: Write failing interaction tests**
 
 Cover: default DS + online/offline in general mode; selecting a knowledge base or tag disables online and changes the scope label to strict RAG; multiple selected bases display union scope and tags display AND scope; clearing scope restores general controls. Cover the knowledge-base menu, multi-file simulated queue, card-at-list-bottom parsing progress, retained failure card with retry/delete, and automatic attachment-only downgrade after three failures.
 
-- [ ] **Step 2: Implement deterministic UI state**
+- [x] **Step 2: Implement deterministic UI state**
 
 Implement no real network/upload/parser. The file chooser may use selected file names only; use timers or test-controlled transitions to present queued, parsing, ready, failed and downgraded states. Make general-mode answers omit citations and RAG-mode answers display only fixed demo citations. Preserve the current selected scope for all messages in the simulated conversation until changed or reset by new conversation.
 
-- [ ] **Step 3: Run focused tests**
+- [x] **Step 3: Run focused tests**
 
 Run: `npm run test:ui -- src/features/home src/features/knowledge`
 
@@ -482,17 +482,17 @@ Expected: all homepage-scope and ingest state tests pass.
 - Modify: `refind-demo/design-qa.md`
 - Modify: `output/design.md` only if a verified visual implementation requires recording a user-approved deviation.
 
-- [ ] **Step 1: Run all UI and Sites tests**
+- [x] **Step 1: Run all UI and Sites tests**
 
 Run: `npm run test:ui && npm run build && npm run test:sites`
 
 Expected: all tests pass; build emits `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.
 
-- [ ] **Step 2: Perform browser QA at desktop size**
+- [x] **Step 2: Perform browser QA at desktop size**
 
 Verify at 1920 × 1080 and 1440 × 1024: the left-aligned 1200px safe workbench, expanded and icon-only sidebar states, homepage DS/online/scope states, direct material-ingest queue, notes Tab, notebook filter before search, note title/body edit, card capture menu, card detail, selection mode, full-screen inspiration editor, collapsed material panel, generating state, citations, sync notice, and each deletion confirmation. Verify at 1024 × 768: compact two-pane layout with overlay AI/material actions. Verify at 390 × 844: navigation drawer, one visible content pane, 44px touch controls and overlay AI/material actions.
 
-- [ ] **Step 3: Record results**
+- [x] **Step 3: Record results**
 
 Append a dated section to `refind-demo/design-qa.md` that lists each checked path, the viewport, any adjustments made, and `final result: passed` only when no P0–P2 issue remains.
 
@@ -506,7 +506,13 @@ Append a dated section to `refind-demo/design-qa.md` that lists each checked pat
 
 Plan saved to `docs/superpowers/plans/2026-09-12-refind-notes-inspiration-prototype.md`.
 
-Two execution options:
+**Status (2026-09-13):** Tasks 1–8 completed in the prototype working tree (notes/inspiration + homepage scope/MaterialIngest + packaging QA). Navigation responsive work tracked separately in `2026-09-13-navigation-responsive-remediation.md` (completed).
+
+**Next plan:** `docs/superpowers/plans/2026-09-13-menus-home-ai-material-preview.md` — dismissable menus, home/KB AI separation, material hover + in-app preview window.
+
+**Design / PRD / Spec sync:** `docs/superpowers/specs/2026-09-13-prototype-interaction-amendments-design.md`；`output/Refind拾藏PRD_V1.0.md` §九；`output/Refind拾藏开发Spec_V1.0.md` §11；`output/design.md` §10.
+
+Two execution options for remaining work:
 
 1. **Subagent-Driven (recommended)** — dispatch a fresh subagent per task and review between tasks.
 2. **Inline Execution** — execute tasks in this session with checkpoints.
