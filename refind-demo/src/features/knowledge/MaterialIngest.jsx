@@ -4,7 +4,7 @@ import { useDismissable } from '../../hooks/useDismissable.js';
 
 const isFailureName = (name) => name.toLowerCase().includes('.fail');
 
-export function MaterialIngest({ base, onMaterialReady, transitionMs = 900 }) {
+export function MaterialIngest({ base, onCreateStub, onMaterialReady, onDelete, transitionMs = 900 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
   const [link, setLink] = useState('');
@@ -12,8 +12,12 @@ export function MaterialIngest({ base, onMaterialReady, transitionMs = 900 }) {
   const inputRef = useRef(null);
   const ingestAnchorRef = useRef(null);
   const timersRef = useRef(new Map());
+  const onCreateStubRef = useRef(onCreateStub);
   const onMaterialReadyRef = useRef(onMaterialReady);
+  const onDeleteRef = useRef(onDelete);
+  onCreateStubRef.current = onCreateStub;
   onMaterialReadyRef.current = onMaterialReady;
+  onDeleteRef.current = onDelete;
 
   useEffect(() => {
     return () => timersRef.current.forEach((timer) => window.clearTimeout(timer));
@@ -50,33 +54,71 @@ export function MaterialIngest({ base, onMaterialReady, transitionMs = 900 }) {
     timersRef.current.set(item.id, window.setTimeout(() => complete(item), transitionMs));
   };
 
+  const createStub = (item) => {
+    Promise.resolve(onCreateStubRef.current(item))
+      .then((material) => {
+        if (material?.status === 'failed') {
+          setQueue((items) => items.map((entry) => (
+            entry.id === item.id ? { ...entry, materialId: material.id, status: 'failed' } : entry
+          )));
+          return;
+        }
+        if (material?.status === 'link_only') {
+          setQueue((items) => items.map((entry) => (
+            entry.id === item.id ? { ...entry, materialId: material.id, status: 'downgraded' } : entry
+          )));
+          return;
+        }
+        setQueue((items) => items.filter((entry) => entry.id !== item.id));
+      })
+      .catch((error) => {
+        setQueue((items) => items.map((entry) => (
+          entry.id === item.id ? { ...entry, materialId: error?.materialId || entry.materialId, status: 'failed' } : entry
+        )));
+      });
+  };
+
   const enqueue = (items) => {
     const additions = items.map((item, index) => ({
       id: `${Date.now()}-${index}`,
       title: item.title,
       kind: item.kind,
       url: item.url,
+      file: item.file,
       shouldFail: isFailureName(item.title),
       failures: 0,
       progress: 52,
-      status: 'parsing',
+      status: onCreateStubRef.current ? 'processing' : 'parsing',
       base,
     }));
     setQueue((items) => [...items, ...additions]);
-    additions.forEach(schedule);
+    additions.forEach((item) => {
+      if (onCreateStubRef.current) createStub(item);
+      else schedule(item);
+    });
   };
 
   const retry = (id) => {
     const item = queue.find((entry) => entry.id === id);
     if (!item) return;
-    const next = { ...item, status: 'parsing', progress: 52 };
+    const next = { ...item, status: onCreateStubRef.current ? 'processing' : 'parsing', progress: 52 };
     setQueue((items) => items.map((entry) => entry.id === id ? next : entry));
-    schedule(next);
+    if (onCreateStubRef.current) createStub(next);
+    else schedule(next);
   };
-  const remove = (id) => {
-    window.clearTimeout(timersRef.current.get(id));
-    timersRef.current.delete(id);
-    setQueue((items) => items.filter((item) => item.id !== id));
+  const remove = async (id) => {
+    const item = queue.find((entry) => entry.id === id);
+    if (!item) return;
+    try {
+      if (item.materialId && onDeleteRef.current) await onDeleteRef.current(item);
+      window.clearTimeout(timersRef.current.get(id));
+      timersRef.current.delete(id);
+      setQueue((items) => items.filter((entry) => entry.id !== id));
+    } catch {
+      setQueue((items) => items.map((entry) => (
+        entry.id === id ? { ...entry, deleteError: true } : entry
+      )));
+    }
   };
 
   const submitLink = (event) => {
@@ -94,15 +136,16 @@ export function MaterialIngest({ base, onMaterialReady, transitionMs = 900 }) {
         <button type="button" role="menuitem" onClick={() => { setLinkOpen(true); setMenuOpen(false); }}><Link2 size={15} />粘贴链接</button>
         <button type="button" role="menuitem" onClick={() => { inputRef.current?.click(); setMenuOpen(false); }}><FileUp size={15} />上传文件</button>
       </div>}
-      <input ref={inputRef} className="sr-only" aria-label="选择资料文件" type="file" multiple onChange={(event) => { enqueue([...event.target.files].map((file) => ({ title: file.name, kind: 'file' }))); event.target.value = ''; }} />
+      <input ref={inputRef} className="sr-only" aria-label="选择资料文件" type="file" multiple onChange={(event) => { enqueue([...event.target.files].map((file) => ({ title: file.name, kind: 'file', file }))); event.target.value = ''; }} />
       {linkOpen && <form className="material-link-popover" onSubmit={submitLink}><label>粘贴链接<input value={link} autoFocus placeholder="https://" onChange={(event) => setLink(event.target.value)} /></label><button type="button" aria-label="关闭链接输入" onClick={() => setLinkOpen(false)}><X size={14} /></button><button type="submit">加入队列</button></form>}
     </div>
     {queue.length > 0 && <div className="material-queue" aria-label="资料解析队列">
       {queue.map((item) => <article className={`material-ingest-card is-${item.status}`} key={item.id}>
         <div><strong>{item.title}</strong><small>{item.base}</small></div>
         {item.status === 'parsing' && <><span>解析中 {item.progress}%</span><div className="material-progress"><i style={{ width: `${item.progress}%` }} /></div><div className="material-progress-popover">正在解析资料 · {item.progress}%</div></>}
-        {item.status === 'failed' && <><span>解析失败</span><div className="material-ingest-actions"><button type="button" aria-label={`重试：${item.title}`} onClick={() => retry(item.id)}><RotateCcw size={14} />重试</button><button type="button" aria-label={`删除：${item.title}`} onClick={() => remove(item.id)}><Trash2 size={14} />删除</button></div></>}
-        {item.status === 'downgraded' && <><span>{item.kind === 'link' ? '仅链接' : '仅附件'}</span><p>连续 3 次解析失败，已保留为{item.kind === 'link' ? '仅链接' : '仅附件'}资料。</p></>}
+        {item.status === 'processing' && <span>处理中</span>}
+        {item.status === 'failed' && <><span>{item.deleteError ? '删除失败' : item.materialId || !onCreateStubRef.current ? '解析失败' : '添加失败'}</span><div className="material-ingest-actions"><button type="button" aria-label={`重试：${item.title}`} onClick={() => retry(item.id)}><RotateCcw size={14} />重试</button><button type="button" aria-label={`删除：${item.title}`} onClick={() => remove(item.id)}><Trash2 size={14} />删除</button></div></>}
+        {item.status === 'downgraded' && <><span>{item.kind === 'link' ? '仅链接' : '仅附件'}</span><p>连续 3 次解析失败，已保留为{item.kind === 'link' ? '仅链接' : '仅附件'}资料。</p><div className="material-ingest-actions"><button type="button" aria-label={`删除：${item.title}`} onClick={() => remove(item.id)}><Trash2 size={14} />删除</button></div></>}
         {item.status === 'ready' && <span>已加入知识库</span>}
       </article>)}
     </div>}

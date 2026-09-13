@@ -5,6 +5,49 @@ import { useState } from 'react';
 import { cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HomeComposer } from './HomeComposer.jsx';
+
+const { deleteAccount, demoSession, supabase } = vi.hoisted(() => {
+  const session = {
+    access_token: 'test-access-token',
+    token_type: 'bearer',
+    user: { id: 'test-user-1', email: 'demo@refind.test' },
+  };
+  return {
+    deleteAccount: vi.fn(),
+    demoSession: session,
+    supabase: {
+      auth: {
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+      },
+    },
+  };
+});
+
+vi.mock('../../lib/supabaseClient.js', () => ({ supabase }));
+
+vi.mock('../../lib/api/auth.js', () => ({
+  getSession: () => ({
+    then: (resolve) => {
+      resolve({ data: { session: demoSession }, error: null });
+      return { catch() {} };
+    },
+  }),
+  signOut: async () => ({ error: null }),
+  deleteAccount,
+}));
+
+vi.mock('../../lib/api/knowledge.js', () => {
+  const demoKnowledgeBases = [
+    { id: 'base-default', name: '默认知识库', type: 'default' },
+    { id: 'base-growth', name: '增长与运营案例', type: 'custom' },
+    { id: 'base-product', name: '产品与设计资料', type: 'custom' },
+  ];
+  return {
+    listKnowledgeBases: async () => demoKnowledgeBases,
+    createKnowledgeBase: async ({ name }) => ({ id: `base-${name}`, name, type: 'custom' }),
+  };
+});
+
 import { App } from '../../App.jsx';
 
 const bases = ['默认知识库', '增长与运营案例', '产品与设计资料'];
@@ -95,6 +138,19 @@ describe('HomeComposer', () => {
     expect(screen.getByText('会员活动设计')).toBeVisible();
     await user.keyboard('{Escape}');
     expect(screen.queryByText('会员活动设计')).not.toBeInTheDocument();
+  });
+
+  it('confirms before invoking account deletion', async () => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    deleteAccount.mockResolvedValue(undefined);
+    render(<App />);
+
+    await userEvent.click(screen.getByRole('button', { name: '林知夏 个人账号' }));
+    await userEvent.click(screen.getByRole('button', { name: '删除账号' }));
+
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(deleteAccount).toHaveBeenCalledOnce();
+    confirm.mockRestore();
   });
 
   it('keeps the selected scope on submitted messages and reports fixed RAG citations', async () => {

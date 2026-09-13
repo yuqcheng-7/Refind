@@ -490,6 +490,17 @@ V1 数据指标用于评估 Refind 是否帮助用户完成“资料沉淀、知
 
 ## 8.4 迭代规划
 
+### 工程阶段对照（2026-09-13 确认 · 方案 A）
+
+| 工程阶段 | 内容 | 计划 |
+| --- | --- | --- |
+| **阶段一**（已完成） | 高保真原型 `refind-demo`：首页 / 知识库 / 笔记·灵感卡片交互 | 既有 2026-09-12/13 原型计划 |
+| **阶段二** | 真实后端地基：Auth、Postgres、RLS、Storage、上传解析、KB/资料 CRUD、**笔记/卡片持久化（无 AI 生成）** | `docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md` |
+| **阶段三** | 真实 AI/RAG、引用、灵感收藏落库、**笔记 AI 生成 + 引用回链**、笔记↔知识库同步、部署上线 | `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` |
+
+路线图设计：`docs/superpowers/specs/2026-09-13-phase2-3-roadmap-design.md`。  
+PRD「V1.0 产品闭环」= **阶段二 + 阶段三**。
+
 ### V1.0：个人知识库基础闭环
 
 - 邮箱注册登录、账户数据隔离、默认知识库自动创建；
@@ -575,6 +586,8 @@ V1 数据指标用于评估 Refind 是否帮助用户完成“资料沉淀、知
 | 菜单关闭 / 首页会话分离 / 资料预览窗 | 已完成 |
 | 首页对话壳 + 历史卡 + 分享选气泡 | 已完成 |
 | 笔记工作台收紧 + 全屏入口分流 | 已完成（含 Task 6：选择条弱渐变圆角 + 笔记引用 hover 预览；见 `docs/superpowers/plans/2026-09-13-notes-workspace-remediation.md`） |
+| 阶段二：后端地基（计划已就绪） | 待开始 — `docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md` |
+| 阶段三：AI / RAG / 上线（计划已就绪） | 待开始 — `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` |
 
 ## 9.8 笔记工作台修订（已完成）
 

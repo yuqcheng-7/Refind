@@ -78,6 +78,33 @@ final result: passed
 
 ---
 
+## 2026-09-13 — Phase 2 foundation
+
+### Account deletion
+- Account menu now requires a native confirmation before calling the authenticated `account-delete` Edge Function.
+- The function uses the service role to remove `materials` storage objects under `user_id/`, then deletes the authenticated user. Foreign-key cascades delete the profile, knowledge bases, materials, notes, and related records; the default knowledge-base trigger permits this cascade when `auth.uid()` is null.
+
+### Live-environment verification status
+- **BLOCKED — not verified in this workspace.** Docker and the Supabase local runtime are unavailable, so no Phase 2 item that requires real Postgres, Storage, Auth, RLS, or Edge Function execution may be reported as passed.
+- The automated UI suite only exercises mocked client boundaries. Run the blocked checklist against `supabase start` with two test accounts before release; it is not replaced by unit or UI test success.
+
+### Acceptance checklist
+| Check | Result |
+| --- | --- |
+| Signup → 默认知识库 | **BLOCKED** — requires local Supabase/Docker to create and inspect a real user |
+| Link + file ingest → ready / fail / link_only | **BLOCKED** — requires local Supabase Storage and Edge Function runtime |
+| Notes + cards survive refresh | covered by existing Phase 2 UI persistence tests |
+| Create fullscreen no materials; organize with materials | covered by existing Phase 2 UI tests |
+| Cross-user RLS denied | **BLOCKED** — Docker unavailable; requires two local Supabase users |
+| Generate note not calling DeepSeek | covered by the local UI-only note generation implementation; no DeepSeek request path is configured |
+| Account deletion removes storage then auth user | **BLOCKED** — implementation + UI regressions exist, but local end-to-end execution requires Docker/Supabase |
+
+### Automated verification
+- Focused account-delete regression tests: 22 passed.
+- `npm run test:ui`: 73 passed.
+
+---
+
 ## 2026-09-13 — Menus / Home AI / Material Preview QA
 
 ### Automated verification
@@ -115,6 +142,34 @@ final result: passed
 | Floating answer menus above composer / history / scroll clip | passed |
 | Flat charcoal left checks; theme-aligned share bar | passed (visual) |
 | Docs sync: PRD §9 / Spec §11 / design.md §10 / amendments / plan Task 5 | passed |
+
+### Final result
+final result: passed
+
+---
+
+## 2026-09-13 — End-to-end walkthrough（笔记打磨后）
+
+### Automated verification
+- `npm run test:ui` — 56 passed
+
+### Checked paths (browser @ `127.0.0.1:5174`, 1920 宽)
+| Path | Result |
+| --- | --- |
+| 笔记页头 / 我的笔记双栏 / 笔记本+搜索同行 | passed |
+| 灵感卡片：无筛选；搜索 +「整理为笔记」 | passed |
+| 选择条：内嵌 12px 圆角；渐变 `#EEEEED→#E9E9E8→#E8E8E7`；非通栏 | passed（computed style） |
+| 整理为笔记 → 全屏 + 素材面板 +「生成笔记」 | passed |
+| 生成正文内联 `[1]`/`[2]`；无「（来源：）」 | passed |
+| 点击引用 → 预览菜单 + 灵感卡片详情；菜单未越界（`--end`） | passed |
+| 返回 →「我的笔记」并选中该笔记 | passed |
+| 「新建笔记」→ 全屏且无素材面板 / 无生成按钮 | passed |
+| 知识库资料点击 → 新窗 `#/material/m1` 预览 +「在原站打开」 | passed |
+| 首页发送留在首页 chat；历史卡；分享选气泡底栏 | passed |
+
+### Residual polish（非阻塞）
+- [P3] 生成文案偶发双句号（如「…步骤。。」），来自 `contentSnapshot` 已带句号再拼接。
+- [P3] 生成后 sections 视图暂不可直接 contentEditable（需撤销或重新进入空白编辑）；原型可接受，正式产品需可编辑策略。
 
 ### Final result
 final result: passed

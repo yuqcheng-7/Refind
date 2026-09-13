@@ -52,6 +52,55 @@ describe('MaterialIngest', () => {
     expect(screen.getAllByText(/解析中/)).toHaveLength(2);
   });
 
+  it('creates a processing stub immediately when an API callback is provided', async () => {
+    let resolveStub;
+    const onCreateStub = vi.fn(() => new Promise((resolve) => { resolveStub = resolve; }));
+    render(<MaterialIngest base="默认知识库" onCreateStub={onCreateStub} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '添加资料' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '上传文件' }));
+    await userEvent.upload(screen.getByLabelText('选择资料文件'), new File(['source'], '待处理资料.pdf'));
+
+    expect(onCreateStub).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'file',
+      title: '待处理资料.pdf',
+      base: '默认知识库',
+    }));
+    expect(screen.getByText('处理中')).toBeVisible();
+    resolveStub();
+  });
+
+  it('retains a server-side parse failure for retrying the same material', async () => {
+    const onCreateStub = vi.fn().mockResolvedValue({ id: 'material-1', status: 'failed' });
+    render(<MaterialIngest base="默认知识库" onCreateStub={onCreateStub} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '添加资料' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '上传文件' }));
+    await userEvent.upload(screen.getByLabelText('选择资料文件'), new File(['source'], '待重试资料.txt'));
+
+    expect(await screen.findByText('解析失败')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '重试：待重试资料.txt' }));
+    expect(onCreateStub).toHaveBeenLastCalledWith(expect.objectContaining({ materialId: 'material-1' }));
+  });
+
+  it('retains a created material ID when parsing rejects after stub creation', async () => {
+    const parseError = Object.assign(new Error('解析服务不可用'), { materialId: 'material-1' });
+    const onCreateStub = vi.fn().mockRejectedValue(parseError);
+    const onDelete = vi.fn().mockResolvedValue();
+    render(<MaterialIngest base="默认知识库" onCreateStub={onCreateStub} onDelete={onDelete} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '添加资料' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '上传文件' }));
+    await userEvent.upload(screen.getByLabelText('选择资料文件'), new File(['source'], '解析中断资料.txt'));
+
+    await screen.findByText('解析失败');
+    await userEvent.click(screen.getByRole('button', { name: '重试：解析中断资料.txt' }));
+    expect(onCreateStub).toHaveBeenLastCalledWith(expect.objectContaining({ materialId: 'material-1' }));
+
+    await userEvent.click(screen.getByRole('button', { name: '删除：解析中断资料.txt' }));
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ materialId: 'material-1' }));
+  });
+
   it('inserts a completed card into the base selected when it was queued', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const onMaterialReady = vi.fn();
@@ -99,6 +148,21 @@ describe('MaterialIngest', () => {
     expect(screen.getByRole('button', { name: '重试：损坏资料.fail.pdf' })).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: '删除：损坏资料.fail.pdf' }));
     expect(screen.queryByText('损坏资料.fail.pdf')).not.toBeInTheDocument();
+  });
+
+  it('persists deletion for a failed server-side material', async () => {
+    const onDelete = vi.fn().mockResolvedValue();
+    const onCreateStub = vi.fn().mockResolvedValue({ id: 'material-1', status: 'failed' });
+    render(<MaterialIngest base="默认知识库" onCreateStub={onCreateStub} onDelete={onDelete} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '添加资料' }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '上传文件' }));
+    await userEvent.upload(screen.getByLabelText('选择资料文件'), new File(['source'], '待删除资料.txt'));
+    await screen.findByText('解析失败');
+    await userEvent.click(screen.getByRole('button', { name: '删除：待删除资料.txt' }));
+
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ materialId: 'material-1' }));
+    expect(screen.queryByText('待删除资料.txt')).not.toBeInTheDocument();
   });
 
   it('downgrades to attachment-only after three consecutive failures', async () => {

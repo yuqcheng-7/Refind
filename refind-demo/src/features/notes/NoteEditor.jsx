@@ -1,6 +1,5 @@
 import { ArrowDown, ArrowUp, Bold, ChevronLeft, GripVertical, Italic, Link2, List, ListOrdered, Maximize2, PanelBottomClose, PanelBottomOpen, Plus, Quote, Redo2, Trash2, Undo2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { generateNoteDocument } from './noteState.js';
 import { CardDetailDialog } from './NoteDialogs.jsx';
 
 const toolbarItems = [
@@ -100,6 +99,8 @@ function MaterialsPanel({ cards, thoughts, onReorder, onThoughtChange, onRemove 
 export function NoteEditor({
   note,
   onChange,
+  onPersist,
+  onMaterialsChange,
   mode = 'plain',
   showMaterials,
   cards = [],
@@ -122,7 +123,14 @@ export function NoteEditor({
   const [revisions, setRevisions] = useState([]);
   const [detailCard, setDetailCard] = useState(null);
   const bodyRef = useRef(null);
+  const persistTimerRef = useRef(null);
+  const pendingPersistRef = useRef(null);
+  const onPersistRef = useRef(onPersist);
   const syncTokenRef = useRef(`${note.id}:${note.content?.text || ''}`);
+
+  useEffect(() => {
+    onPersistRef.current = onPersist;
+  }, [onPersist]);
   const selectedCards = useMemo(() => note.inspirationCardIds.map((id) => cards.find((card) => card.id === id)).filter(Boolean), [note.inspirationCardIds, cards]);
   const availableCards = cards.filter((card) => !note.inspirationCardIds.includes(card.id));
 
@@ -138,6 +146,14 @@ export function NoteEditor({
     const timer = window.setTimeout(() => setSaveState('已保存'), 550);
     return () => window.clearTimeout(timer);
   }, [saveState]);
+
+  useEffect(() => () => {
+    window.clearTimeout(persistTimerRef.current);
+    if (pendingPersistRef.current) {
+      onPersistRef.current?.(pendingPersistRef.current);
+      pendingPersistRef.current = null;
+    }
+  }, []);
 
   // Keep contentEditable uncontrolled while typing; only sync on note switch / external content changes.
   useEffect(() => {
@@ -162,7 +178,20 @@ export function NoteEditor({
       setRedoStack([]);
     }
     setSaveState('正在保存');
-    onChange({ ...note, ...changes, updatedLabel: '刚刚编辑' });
+    const nextNote = { ...note, ...changes, updatedLabel: '刚刚编辑' };
+    onChange(nextNote);
+    if (changes.title !== undefined || changes.content !== undefined) {
+      pendingPersistRef.current = nextNote;
+      window.clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = window.setTimeout(() => {
+        const pending = pendingPersistRef.current;
+        pendingPersistRef.current = null;
+        onPersistRef.current?.(pending);
+      }, 1200);
+    }
+    if (changes.inspirationCardIds !== undefined || changes.materialThoughts !== undefined) {
+      onMaterialsChange?.(nextNote);
+    }
   };
 
   const undo = () => {
@@ -219,19 +248,7 @@ export function NoteEditor({
   };
   const generate = () => {
     if (!selectedCards.length || generating) return;
-    setGenerating(true);
-    setRevisions((items) => [...items, { title: note.title, content: note.content }]);
-    window.setTimeout(() => {
-      const document = generateNoteDocument(note, cards);
-      const thoughtText = note.inspirationCardIds.map((id) => note.materialThoughts?.[id]).filter(Boolean).join('\n');
-      const next = thoughtText ? { ...document, text: `${document.text}\n\n${thoughtText}` } : document;
-      syncTokenRef.current = '';
-      commit({ content: next });
-      onGenerate?.(next);
-      setGenerating(false);
-      if (!navigator.userAgent.includes('jsdom')) window.scrollTo?.({ top: 0, behavior: 'smooth' });
-      window.requestAnimationFrame(() => bodyRef.current?.focus());
-    }, 700);
+    onGenerate?.();
   };
   const sections = note.content.sections;
   const hasSections = Array.isArray(sections) && sections.length > 0;
@@ -282,9 +299,7 @@ export function NoteEditor({
               {panelOpen ? <PanelBottomClose size={15} /> : <PanelBottomOpen size={15} />}
               素材面板
             </button>
-            <button type="button" className="note-editor__generate" disabled={!selectedCards.length || generating} onClick={generate}>
-              {generating ? '生成中' : '生成笔记'}
-            </button>
+            <button type="button" className="note-editor__generate" disabled={!selectedCards.length || generating} onClick={generate}>生成笔记</button>
             {pickerOpen && (
               <div className="note-editor__card-picker" role="menu">
                 <header>

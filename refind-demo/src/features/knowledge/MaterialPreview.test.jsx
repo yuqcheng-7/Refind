@@ -2,9 +2,62 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { App } from '../../App.jsx';
 import { MaterialPreviewPage } from './MaterialPreviewPage.jsx';
 import { materialDemo } from './materialDemo.js';
+
+const { demoSession, supabase } = vi.hoisted(() => {
+  const session = {
+    access_token: 'test-access-token',
+    token_type: 'bearer',
+    user: { id: 'test-user-1', email: 'demo@refind.test' },
+  };
+  return {
+    demoSession: session,
+    supabase: {
+      auth: {
+        onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+      },
+    },
+  };
+});
+
+vi.mock('../../lib/supabaseClient.js', () => ({ supabase }));
+
+vi.mock('../../lib/api/auth.js', () => ({
+  getSession: () => ({
+    then: (resolve) => {
+      resolve({ data: { session: demoSession }, error: null });
+      return { catch() {} };
+    },
+  }),
+  signOut: async () => ({ error: null }),
+}));
+
+vi.mock('../../lib/api/knowledge.js', () => {
+  const demoKnowledgeBases = [
+    { id: 'base-default', name: '默认知识库', type: 'default' },
+    { id: 'base-growth', name: '增长与运营案例', type: 'custom' },
+    { id: 'base-product', name: '产品与设计资料', type: 'custom' },
+  ];
+  return {
+    listKnowledgeBases: async () => demoKnowledgeBases,
+    createKnowledgeBase: async ({ name }) => ({ id: `base-${name}`, name, type: 'custom' }),
+  };
+});
+
+vi.mock('../../lib/api/materials.js', () => ({
+  listMaterials: async () => materialDemo.map((item, index) => ({
+    ...item,
+    knowledgeBaseId: 'base-default',
+    inputType: item.kind === 'link' ? 'link' : 'file',
+    status: 'ready',
+    createdAt: `2026-09-${String(10 - index).padStart(2, '0')}T00:00:00.000Z`,
+  })),
+  createMaterialStub: async () => null,
+  deleteMaterial: async () => undefined,
+}));
+
+import { App } from '../../App.jsx';
 
 afterEach(() => {
   cleanup();

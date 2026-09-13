@@ -12,17 +12,16 @@ export function KnowledgeBaseSyncDialog({ note, bases, onConfirm, onClose }) {
   const toggleBase = (id) => setSelectedIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
   return <DialogShell label="添加至知识库" onClose={onClose}>
     <header><div><span className="eyebrow">知识库同步</span><h2>添加至知识库</h2></div><button type="button" aria-label="关闭同步" onClick={onClose}><X size={17} /></button></header>
-    <p>选择要同步这篇笔记的知识库。正文将保持双向同步。</p>
+    <p>笔记同步将在 Phase 3 开放；当前不会创建知识库资料或建立双向同步。</p>
     <div className="note-dialog__check-list">{bases.map((base) => <label key={base.id}><input type="checkbox" aria-label={base.name} checked={selectedIds.includes(base.id)} onChange={() => toggleBase(base.id)} />{base.name}</label>)}</div>
-    <footer><button type="button" onClick={onClose}>取消</button><button type="button" className="quiet-action" disabled={!selectedIds.length} onClick={() => onConfirm?.(selectedIds)}>确认同步</button></footer>
+    <footer><button type="button" onClick={onClose}>取消</button><button type="button" className="quiet-action" disabled={!selectedIds.length} onClick={() => onConfirm?.(selectedIds)}>确认</button></footer>
   </DialogShell>;
 }
 
 export function DeleteNoteDialog({ note, onConfirm, onClose }) {
-  const materialCount = note.syncedBaseIds?.length || 0;
   return <DialogShell label="删除笔记" onClose={onClose}>
     <header><h2>删除这篇笔记？</h2><button type="button" aria-label="关闭删除笔记" onClick={onClose}><X size={17} /></button></header>
-    <p>删除后将同步删除 {materialCount} 条知识库资料，不会删除灵感卡片。</p>
+    <p>删除后无法恢复，不会删除灵感卡片。</p>
     <footer><button type="button" onClick={onClose}>取消</button><button type="button" className="note-dialog__danger" onClick={onConfirm}>删除笔记</button></footer>
   </DialogShell>;
 }

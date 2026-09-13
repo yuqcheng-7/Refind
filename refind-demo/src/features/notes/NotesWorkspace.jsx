@@ -1,10 +1,19 @@
 import { FolderPlus, MoreVertical, Pencil, Search } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { attachCards, createBlankNote, filterNotes, syncNoteToBases } from './noteState.js';
+import { useEffect, useMemo, useState } from 'react';
+import { attachCards, filterNotes } from './noteState.js';
 import { NoteEditor } from './NoteEditor.jsx';
 import { InspirationCards } from './InspirationCards.jsx';
 import { DeleteNotebookDialog, DeleteNoteDialog, KnowledgeBaseSyncDialog, NotebookManagerDialog } from './NoteDialogs.jsx';
 import { demoKnowledgeBases } from './demoData.js';
+import {
+  createNote as createPersistedNote,
+  createNotebook as createPersistedNotebook,
+  deleteNote as deletePersistedNote,
+  deleteNotebook as deletePersistedNotebook,
+  renameNotebook as renamePersistedNotebook,
+  setNoteMaterials,
+  updateNote as updatePersistedNote,
+} from '../../lib/api/notes.js';
 
 export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demoKnowledgeBases, notice, onCreateOrganizedNote, onDeleteCard }) {
   const [tab, setTab] = useState('notes');
@@ -17,9 +26,10 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
   const [contextNoteId, setContextNoteId] = useState(null);
   const [syncNoteId, setSyncNoteId] = useState(null);
   const [deleteNoteId, setDeleteNoteId] = useState(null);
-  const [syncState, setSyncState] = useState(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [deleteNotebook, setDeleteNotebook] = useState(null);
+
+  useEffect(() => setManagedNotebooks(notebooks), [notebooks]);
 
   const visibleNotes = useMemo(() => filterNotes(notes, query, notebookId), [notes, query, notebookId]);
   const selectedNote = notes.find((note) => note.id === selectedNoteId) || visibleNotes[0] || notes[0];
@@ -33,73 +43,129 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
     setTab('notes');
   };
 
-  const createNote = () => {
-    const note = createBlankNote(Date.now());
-    setNotes((items) => [note, ...items]);
-    setSelectedNoteId(note.id);
-    setFullscreenNoteId(note.id);
-    setTab('notes');
-    notice?.('已新建一篇笔记。');
+  const createNote = async () => {
+    try {
+      const note = await createPersistedNote();
+      setNotes((items) => [note, ...items]);
+      setSelectedNoteId(note.id);
+      setFullscreenNoteId(note.id);
+      setTab('notes');
+      notice?.('已新建一篇笔记。');
+    } catch {
+      notice?.('新建笔记失败，请稍后重试。');
+    }
   };
 
   const updateNote = (updatedNote) => setNotes((items) => items.map((note) => note.id === updatedNote.id ? updatedNote : note));
+  const persistNote = async (note) => {
+    try {
+      await updatePersistedNote(note.id, { title: note.title, content: note.content });
+    } catch {
+      notice?.('笔记保存失败，请稍后重试。');
+    }
+  };
+  const persistMaterials = async (note) => {
+    try {
+      await setNoteMaterials(note.id, {
+        cardIdsOrdered: note.inspirationCardIds,
+        thoughtsByCardId: note.materialThoughts,
+      });
+    } catch (error) {
+      notice?.('素材保存失败，请稍后重试。');
+      throw error;
+    }
+  };
   const contextNote = notes.find((note) => note.id === contextNoteId);
   const syncNote = notes.find((note) => note.id === syncNoteId);
   const notePendingDelete = notes.find((note) => note.id === deleteNoteId);
   const syncSelectedNote = (baseIds) => {
     if (!syncNote) return;
     setSyncNoteId(null);
-    updateNote({ ...syncNote, syncedBaseIds: baseIds });
-    setSyncState({ status: 'syncing', total: baseIds.length });
-    window.setTimeout(() => {
-      const result = syncNoteToBases(syncNote, baseIds);
-      updateNote({ ...syncNote, syncedBaseIds: result.synced });
-      setSyncState({ status: 'complete', total: baseIds.length });
-      window.setTimeout(() => setSyncState(null), 1300);
-    }, 550);
+    notice?.('笔记同步至知识库将在 Phase 3 开放。');
   };
-  const deleteNote = () => {
+  const deleteNote = async () => {
     if (!notePendingDelete) return;
-    setNotes((items) => items.filter((note) => note.id !== notePendingDelete.id));
-    setSelectedNoteId((id) => id === notePendingDelete.id ? notes.find((note) => note.id !== id)?.id ?? null : id);
-    if (fullscreenNoteId === notePendingDelete.id) setFullscreenNoteId(null);
-    setDeleteNoteId(null);
-    notice?.('笔记及关联知识库资料已删除；灵感卡片仍被保留。');
+    try {
+      await deletePersistedNote(notePendingDelete.id);
+      setNotes((items) => items.filter((note) => note.id !== notePendingDelete.id));
+      setSelectedNoteId((id) => id === notePendingDelete.id ? notes.find((note) => note.id !== id)?.id ?? null : id);
+      if (fullscreenNoteId === notePendingDelete.id) setFullscreenNoteId(null);
+      setDeleteNoteId(null);
+      notice?.('笔记及关联知识库资料已删除；灵感卡片仍被保留。');
+    } catch {
+      notice?.('删除笔记失败，请稍后重试。');
+    }
   };
-  const moveContextNote = (nextNotebookId) => {
+  const moveContextNote = async (nextNotebookId) => {
     if (!contextNote) return;
-    updateNote({ ...contextNote, notebookId: nextNotebookId });
-    setContextNoteId(null);
-    notice?.(nextNotebookId ? '笔记已移动至笔记本。' : '笔记已移至未分类。');
+    try {
+      await updatePersistedNote(contextNote.id, { notebookId: nextNotebookId });
+      updateNote({ ...contextNote, notebookId: nextNotebookId });
+      setContextNoteId(null);
+      notice?.(nextNotebookId ? '笔记已移动至笔记本。' : '笔记已移至未分类。');
+    } catch {
+      notice?.('移动笔记失败，请稍后重试。');
+    }
   };
-  const createNotebook = (name) => setManagedNotebooks((items) => [...items, { id: `notebook-${Date.now()}`, name }]);
-  const renameNotebook = (id, name) => { if (name) setManagedNotebooks((items) => items.map((notebook) => notebook.id === id ? { ...notebook, name } : notebook)); };
-  const removeNotebook = (mode) => {
+  const createNotebook = async (name) => {
+    try {
+      const notebook = await createPersistedNotebook({ name });
+      setManagedNotebooks((items) => [...items, notebook]);
+    } catch {
+      notice?.('创建笔记本失败，请稍后重试。');
+    }
+  };
+  const renameNotebook = async (id, name) => {
+    if (!name) return;
+    try {
+      const notebook = await renamePersistedNotebook(id, name);
+      setManagedNotebooks((items) => items.map((item) => item.id === id ? notebook : item));
+    } catch {
+      notice?.('重命名笔记本失败，请稍后重试。');
+    }
+  };
+  const removeNotebook = async (mode) => {
     if (!deleteNotebook) return;
     const affected = notes.filter((note) => note.notebookId === deleteNotebook.id);
-    if (mode === 'unfile') setNotes((items) => items.map((note) => note.notebookId === deleteNotebook.id ? { ...note, notebookId: null } : note));
-    else setNotes((items) => items.filter((note) => note.notebookId !== deleteNotebook.id));
-    setManagedNotebooks((items) => items.filter((notebook) => notebook.id !== deleteNotebook.id));
-    if (notebookId === deleteNotebook.id) setNotebookId('all');
-    setDeleteNotebook(null);
-    notice?.(mode === 'unfile' ? `已删除笔记本，${affected.length} 篇笔记已移至未分类。` : `已删除笔记本及 ${affected.length} 篇笔记的关联资料。`);
+    try {
+      await deletePersistedNotebook(deleteNotebook.id, { strategy: mode === 'unfile' ? 'unfile' : 'delete_notes' });
+      if (mode === 'unfile') setNotes((items) => items.map((note) => note.notebookId === deleteNotebook.id ? { ...note, notebookId: null } : note));
+      else setNotes((items) => items.filter((note) => note.notebookId !== deleteNotebook.id));
+      setManagedNotebooks((items) => items.filter((notebook) => notebook.id !== deleteNotebook.id));
+      if (notebookId === deleteNotebook.id) setNotebookId('all');
+      setDeleteNotebook(null);
+      notice?.(mode === 'unfile' ? `已删除笔记本，${affected.length} 篇笔记已移至未分类。` : `已删除笔记本及 ${affected.length} 篇笔记的关联资料。`);
+    } catch {
+      notice?.('删除笔记本失败，请稍后重试。');
+    }
   };
-  const createOrganizedNote = (cardIds) => {
-    const nextNote = attachCards(createBlankNote(Date.now()), cardIds);
-    setNotes((items) => [nextNote, ...items]);
-    setSelectedNoteId(nextNote.id);
-    setFullscreenNoteId(nextNote.id);
-    setTab('notes');
-    onCreateOrganizedNote?.(cardIds);
-    notice?.(`已创建笔记，并放入 ${cardIds.length} 张灵感卡片。`);
+  const createOrganizedNote = async (cardIds) => {
+    try {
+      const nextNote = await createPersistedNote();
+      const noteWithCards = attachCards(nextNote, cardIds);
+      await persistMaterials(noteWithCards);
+      setNotes((items) => [noteWithCards, ...items]);
+      setSelectedNoteId(noteWithCards.id);
+      setFullscreenNoteId(noteWithCards.id);
+      setTab('notes');
+      onCreateOrganizedNote?.(cardIds);
+      notice?.(`已创建笔记，并放入 ${cardIds.length} 张灵感卡片。`);
+    } catch {
+      notice?.('整理笔记失败，请稍后重试。');
+    }
   };
-  const addCardToNote = (card) => {
-    const nextNote = attachCards(createBlankNote(Date.now()), [card.id]);
-    setNotes((items) => [nextNote, ...items]);
-    setSelectedNoteId(nextNote.id);
-    setFullscreenNoteId(nextNote.id);
-    setTab('notes');
-    notice?.('已将灵感卡片加入新笔记。');
+  const addCardToNote = async (card) => {
+    try {
+      const nextNote = attachCards(await createPersistedNote(), [card.id]);
+      await persistMaterials(nextNote);
+      setNotes((items) => [nextNote, ...items]);
+      setSelectedNoteId(nextNote.id);
+      setFullscreenNoteId(nextNote.id);
+      setTab('notes');
+      notice?.('已将灵感卡片加入新笔记。');
+    } catch {
+      notice?.('添加灵感卡片失败，请稍后重试。');
+    }
   };
   const removeCard = (cardId) => {
     const affectedNotes = notes.filter((note) => note.inspirationCardIds.includes(cardId));
@@ -107,10 +173,16 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
     onDeleteCard?.(cardId);
     notice?.('灵感卡片已删除。');
   };
-  const attachCardsToSelectedNote = (cardIds) => {
+  const attachCardsToSelectedNote = async (cardIds) => {
     const target = fullscreenNote || selectedNote;
     if (!target) return;
-    updateNote(attachCards(target, cardIds));
+    const nextNote = attachCards(target, cardIds);
+    try {
+      await persistMaterials(nextNote);
+      updateNote(nextNote);
+    } catch {
+      // persistMaterials has already provided the user-facing failure notice.
+    }
   };
   const noteButton = (note) => (
     <button
@@ -135,6 +207,9 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
           note={fullscreenNote}
           cards={cards}
           onChange={updateNote}
+          onPersist={persistNote}
+          onMaterialsChange={persistMaterials}
+          onGenerate={() => notice?.('AI 生成笔记将在下一阶段开放。')}
           onAttachCards={attachCardsToSelectedNote}
           onAddToNote={addCardToNote}
           onDeleteCard={removeCard}
@@ -201,6 +276,8 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
               note={selectedNote}
               cards={cards}
               onChange={updateNote}
+              onPersist={persistNote}
+              onMaterialsChange={persistMaterials}
               onAddToNote={addCardToNote}
               onDeleteCard={removeCard}
               onEnterFullscreen={() => setFullscreenNoteId(selectedNote.id)}
@@ -246,7 +323,6 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
           onClose={() => setDeleteNotebook(null)}
         />
       )}
-      {syncState && <div className="sync-notice" role="status">{syncState.status === 'syncing' ? `正在同步至 ${syncState.total} 个知识库` : `已同步至 ${syncState.total} 个知识库`}</div>}
     </section>
   );
 }

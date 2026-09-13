@@ -3,19 +3,33 @@ import { ArrowUp, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Clock
 import refindLogo from '/Users/zoecheng/Downloads/ChatGPT Image Sep 12, 2026, 10_56_22 AM.png';
 import './styles.css';
 import { NotesWorkspace } from './features/notes/NotesWorkspace.jsx';
-import { demoInspirationCards, demoNotes, demoNotebooks } from './features/notes/demoData.js';
 import { HomeComposer, defaultHomeScope } from './features/home/HomeComposer.jsx';
 import { HomeConversation, HomeShareBar } from './features/home/HomeConversation.jsx';
 import { KbConversation } from './features/knowledge/KbConversation.jsx';
 import { HomeHistoryCard } from './features/home/HomeHistoryCard.jsx';
 import { MaterialIngest } from './features/knowledge/MaterialIngest.jsx';
-import { getMaterialPreviewUrl, materialDemo } from './features/knowledge/materialDemo.js';
+import { getMaterialPreviewUrl } from './features/knowledge/materialDemo.js';
 import { useDismissable } from './hooks/useDismissable.js';
+import { AuthScreen } from './features/auth/AuthScreen.jsx';
+import { deleteAccount, getSession, signOut } from './lib/api/auth.js';
+import { createKnowledgeBase, listKnowledgeBases } from './lib/api/knowledge.js';
+import { createMaterialStub, deleteMaterial, listMaterials } from './lib/api/materials.js';
+import { inferMaterialInputType, parseAndPollMaterial, uploadMaterialFile } from './lib/api/ingest.js';
+import {
+  createInspirationCard,
+  createNote,
+  deleteInspirationCard,
+  listInspirationCards,
+  listNotebooks,
+  listNotes,
+  updateNote,
+} from './lib/api/notes.js';
+import { supabase } from './lib/supabaseClient.js';
 
-const initialBases = ['默认知识库', '增长与运营案例', '产品与设计资料', '行业研究报告'];
 const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎', 'B 站', '其他'];
 const sortOptions = ['从新到旧', '从旧到新', 'A-Z', 'Z-A'];
 const initialHomeScope = defaultHomeScope;
+const platformCodes = { 小红书: 'xhs', 抖音: 'douyin', 微信: 'wechat_mp', 知乎: 'zhihu', 'B 站': 'bilibili', 其他: 'other' };
 function IconHome({ size = 18, strokeWidth = 1.5, ...props }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
@@ -163,18 +177,20 @@ function Composer({ base, bases, onBase, onSubmit, compact = false }) {
 }
 
 export function App() {
+  const [session, setSession] = useState(undefined);
   const [activeNav, setActiveNav] = useState('首页');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [kbRailOpen, setKbRailOpen] = useState(false);
-  const [bases, setBases] = useState(initialBases);
+  const [knowledgeBases, setKnowledgeBases] = useState([]);
   const [base, setBase] = useState('默认知识库');
   const [notice, setNotice] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [newBase, setNewBase] = useState('');
-  const [notes, setNotes] = useState(demoNotes);
-  const [cards, setCards] = useState(demoInspirationCards);
+  const [notes, setNotes] = useState([]);
+  const [cards, setCards] = useState([]);
+  const [notebooks, setNotebooks] = useState([]);
   const [query, setQuery] = useState('');
   const [materialSearchFocused, setMaterialSearchFocused] = useState(false);
   const [source, setSource] = useState('全部来源');
@@ -202,9 +218,89 @@ export function App() {
       setConversationScope(null);
     }
   }, [homeScope.selectedBases, homeScope.selectedTags]);
-  const [knowledgeMaterials, setKnowledgeMaterials] = useState(materialDemo);
+  const [knowledgeMaterials, setKnowledgeMaterials] = useState([]);
   const [hoveredMaterialId, setHoveredMaterialId] = useState(null);
+  const bases = useMemo(() => knowledgeBases.map((item) => item.name), [knowledgeBases]);
+  const selectedKnowledgeBase = useMemo(
+    () => knowledgeBases.find((item) => item.name === base) || null,
+    [knowledgeBases, base],
+  );
   const isMaterialSearching = materialSearchFocused || Boolean(query);
+  useEffect(() => {
+    let active = true;
+    getSession().then(({ data }) => {
+      if (active) setSession(data.session);
+    }).catch(() => {
+      if (active) setSession(null);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (active) setSession(nextSession);
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+  useEffect(() => {
+    if (!session) {
+      setKnowledgeBases([]);
+      setKnowledgeMaterials([]);
+      return undefined;
+    }
+    let active = true;
+    listKnowledgeBases()
+      .then((items) => {
+        if (!active) return;
+        setKnowledgeBases(items);
+        setBase((current) => items.some((item) => item.name === current) ? current : items.find((item) => item.type === 'default')?.name || '');
+      })
+      .catch(() => {
+        if (active) {
+          setKnowledgeBases([]);
+          say('知识库暂时无法加载，请稍后重试。');
+        }
+      });
+    return () => { active = false; };
+  }, [session]);
+  useEffect(() => {
+    if (!session) {
+      setNotes([]);
+      setCards([]);
+      setNotebooks([]);
+      return undefined;
+    }
+    let active = true;
+    Promise.all([listNotes(), listInspirationCards(), listNotebooks()])
+      .then(([nextNotes, nextCards, nextNotebooks]) => {
+        if (!active) return;
+        setNotes(nextNotes);
+        setCards(nextCards);
+        setNotebooks(nextNotebooks);
+      })
+      .catch(() => {
+        if (active) say('笔记暂时无法加载，请稍后重试。');
+      });
+    return () => { active = false; };
+  }, [session]);
+  useEffect(() => {
+    if (!session || !selectedKnowledgeBase) {
+      setKnowledgeMaterials([]);
+      return undefined;
+    }
+    let active = true;
+    listMaterials(selectedKnowledgeBase.id, {
+      query,
+      platform: platformCodes[source] || 'all',
+    })
+      .then((items) => { if (active) setKnowledgeMaterials(items); })
+      .catch(() => {
+        if (active) {
+          setKnowledgeMaterials([]);
+          say('资料暂时无法加载，请稍后重试。');
+        }
+      });
+    return () => { active = false; };
+  }, [session, selectedKnowledgeBase, query, source]);
   useDismissable({ open: filterOpen, onClose: () => setFilterOpen(false), rootRef: filterRef });
   useDismissable({ open: historyOpen, onClose: () => setHistoryOpen(false), rootRef: historyRef });
   useDismissable({ open: accountOpen, onClose: () => setAccountOpen(false), rootRef: accountRef });
@@ -229,14 +325,13 @@ export function App() {
     };
   }, []);
   const visibleMaterials = useMemo(() => {
-    const rank = { m1: 4, m2: 3, m3: 2, m4: 1 };
-    return knowledgeMaterials.filter((item) => item.base === base && (source === '全部来源' || item.source === source) && item.title.includes(query)).sort((a, b) => {
-      if (sort === '从旧到新') return rank[a.id] - rank[b.id];
+    return [...knowledgeMaterials].sort((a, b) => {
+      if (sort === '从旧到新') return new Date(a.createdAt) - new Date(b.createdAt);
       if (sort === 'A-Z') return a.title.localeCompare(b.title, 'zh-Hans-CN');
       if (sort === 'Z-A') return b.title.localeCompare(a.title, 'zh-Hans-CN');
-      return rank[b.id] - rank[a.id];
+      return new Date(b.createdAt) - new Date(a.createdAt);
     });
-  }, [base, knowledgeMaterials, source, query, sort]);
+  }, [knowledgeMaterials, sort]);
   const say = (text) => setNotice(text);
   const exitHomeShare = () => {
     setHomeShareMode(false);
@@ -302,7 +397,21 @@ export function App() {
     setHomeSurface(homeChatOpened || homeMessages.length > 0 ? 'chat' : 'hero');
     setHomeHistoryOpen(true);
   };
-  const createBase = (event) => { event.preventDefault(); if (!newBase.trim()) return; const value = newBase.trim(); setBases((items) => [...items, value]); setBase(value); setNewBase(''); setShowCreate(false); say(`已创建知识库「${value}」。`); };
+  const createBase = async (event) => {
+    event.preventDefault();
+    if (!newBase.trim()) return;
+    const value = newBase.trim();
+    try {
+      const created = await createKnowledgeBase({ name: value });
+      setKnowledgeBases((items) => [...items, created]);
+      setBase(created.name);
+      setNewBase('');
+      setShowCreate(false);
+      say(`已创建知识库「${created.name}」。`);
+    } catch {
+      say('创建知识库失败，请稍后重试。');
+    }
+  };
   const submitHomeQuestion = (request) => {
     const scope = conversationScope || {
       bases: request.selectedBases,
@@ -336,24 +445,123 @@ export function App() {
       citations: [{ label: '小红书增长策略' }, { label: 'SaaS 增长复盘' }],
     }]);
   };
-  const saveAnswerCard = (payload) => {
-    setCards((items) => [{ id: `card-${Date.now()}`, ...payload, sourceLabel: payload.citation?.label || '通用回答', savedAt: '刚刚收藏' }, ...items]);
-    say('已保存为灵感卡片。');
+  const saveAnswerCard = async (payload) => {
+    try {
+      const card = await createInspirationCard(payload);
+      setCards((items) => [card, ...items]);
+      say('已保存为灵感卡片。');
+    } catch {
+      say('保存灵感卡片失败，请稍后重试。');
+    }
   };
-  const addAnswerToNote = (payload) => {
-    const id = `note-${Date.now()}`;
-    setNotes((items) => [{ id, title: '来自 AI 的回答', content: { text: payload.contentSnapshot, blocks: [] }, notebookId: null, updatedLabel: '刚刚保存', inspirationCardIds: [], syncedBaseIds: [] }, ...items]);
-    say('回答已加入笔记。');
+  const addAnswerToNote = async (payload) => {
+    try {
+      const note = await createNote({ title: '来自 AI 的回答' });
+      const saved = await updateNote(note.id, { content: { text: payload.contentSnapshot, blocks: [], sections: [] } });
+      setNotes((items) => [saved, ...items]);
+      say('回答已加入笔记。');
+    } catch {
+      say('添加笔记失败，请稍后重试。');
+    }
   };
-  const saveIngestedMaterial = (item) => {
-    setKnowledgeMaterials((items) => [...items, item]);
-    window.sessionStorage.setItem(`refind-material:${item.id}`, JSON.stringify(item));
+  const createIngestedMaterialStub = async (item) => {
+    if (!selectedKnowledgeBase) {
+      const error = new Error('请先选择一个知识库');
+      say(error.message);
+      throw error;
+    }
+    let materialId = item.materialId;
+    try {
+      if (materialId) {
+        const parsed = await parseAndPollMaterial(materialId);
+        const refreshed = await listMaterials(selectedKnowledgeBase.id, {
+          query,
+          platform: platformCodes[source] || 'all',
+        });
+        setKnowledgeMaterials(refreshed);
+        return { ...parsed, id: materialId };
+      }
+      const inputType = item.kind === 'link' ? 'link' : inferMaterialInputType(item.file);
+      const storageObjectKey = item.file
+        ? await uploadMaterialFile(session.user.id, item.file)
+        : undefined;
+      const created = await createMaterialStub({
+        knowledgeBaseId: selectedKnowledgeBase.id,
+        inputType,
+        sourceUrl: item.url,
+        title: item.title,
+        storageObjectKey,
+        fileMimeType: item.file?.type,
+        fileSizeBytes: item.file?.size,
+      });
+      materialId = created.id;
+      setKnowledgeMaterials((items) => [created, ...items]);
+      const parsed = await parseAndPollMaterial(materialId);
+      const refreshed = await listMaterials(selectedKnowledgeBase.id, {
+        query,
+        platform: platformCodes[source] || 'all',
+      });
+      setKnowledgeMaterials(refreshed);
+      return { ...parsed, id: materialId };
+    } catch (error) {
+      say('添加资料失败，请稍后重试。');
+      if (materialId && error && typeof error === 'object') error.materialId = materialId;
+      throw error;
+    }
+  };
+  const deleteIngestedMaterial = async (item) => {
+    if (!item.materialId) return;
+    try {
+      await deleteMaterial(item.materialId);
+    } catch (error) {
+      say('删除资料失败，请稍后重试。');
+      throw error;
+    } finally {
+      if (selectedKnowledgeBase) {
+        try {
+          const refreshed = await listMaterials(selectedKnowledgeBase.id, {
+            query,
+            platform: platformCodes[source] || 'all',
+          });
+          setKnowledgeMaterials(refreshed);
+        } catch {
+          // The next normal list refresh will reconcile the UI.
+        }
+      }
+    }
   };
   const openMaterialPreview = (item) => {
     window.sessionStorage.setItem(`refind-material:${item.id}`, JSON.stringify(item));
     window.open(getMaterialPreviewUrl(item.id), '_blank', 'noopener,noreferrer');
   };
+  const handleSignOut = async () => {
+    try {
+      const { error } = await signOut();
+      if (error) {
+        say('退出登录失败，请稍后重试。');
+        return;
+      }
+      setAccountOpen(false);
+    } catch {
+      say('退出登录失败，请稍后重试。');
+    }
+  };
+  const handleDeleteAccount = async () => {
+    const confirmed = window.confirm('删除账号后，所有知识库、资料和笔记将永久删除，且无法恢复。确定要删除吗？');
+    if (!confirmed) return;
+    try {
+      await deleteAccount();
+      await signOut();
+      setAccountOpen(false);
+    } catch {
+      say('删除账号失败，请稍后重试。');
+    }
+  };
 
+  if (session === undefined) {
+    return <main className="auth-screen" aria-busy="true">正在恢复登录状态…</main>;
+  }
+  if (!session) return <AuthScreen />;
   return <main className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
     <button className="mobile-nav-trigger" type="button" aria-label="打开导航" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>
       <Menu size={18} strokeWidth={1.85} />
@@ -444,7 +652,7 @@ export function App() {
       </div>
       <div className="profile-anchor" ref={accountRef}>
         <button type="button" className={`profile ${accountOpen ? 'is-active' : ''}`} aria-label="林知夏 个人账号" title="林知夏 个人账号" aria-expanded={accountOpen} onClick={() => setAccountOpen((open) => !open)}><span className="profile-avatar">林</span><span><strong>林知夏</strong><small>个人账号</small></span></button>
-        {accountOpen && <div className="account-menu"><button type="button" onClick={() => { setAccountOpen(false); say('设置页面即将提供。'); }}><Settings size={15} />设置</button><button type="button" className="account-logout" onClick={() => { setAccountOpen(false); say('已退出登录（演示）。'); }}><LogOut size={15} />退出登录</button></div>}
+        {accountOpen && <div className="account-menu"><button type="button" onClick={() => { setAccountOpen(false); say('设置页面即将提供。'); }}><Settings size={15} />设置</button><button type="button" className="account-logout" onClick={handleSignOut}><LogOut size={15} />退出登录</button><button type="button" className="account-delete" onClick={handleDeleteAccount}>删除账号</button></div>}
       </div>
     </aside>
     {activeNav === '首页' && <section className={`home-canvas ${showHomeChat ? 'has-conversation' : ''} ${showHomeChat && homeHistoryOpen ? 'is-history-open' : ''} ${showHomeChat && !homeHistoryOpen ? 'is-history-collapsed' : ''}`}>
@@ -497,7 +705,19 @@ export function App() {
       {!showHomeChat && <HomeComposer bases={bases} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
       {notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
-    {activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={demoNotebooks} notice={say} onDeleteCard={(cardId) => setCards((items) => items.filter((card) => card.id !== cardId))} />{notice && <Toast text={notice} onClose={() => setNotice('')} />}</section>}
+    {activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} notice={say} onDeleteCard={async (cardId) => {
+      try {
+        await deleteInspirationCard(cardId);
+        setCards((items) => items.filter((card) => card.id !== cardId));
+        setNotes((items) => items.map((note) => ({
+          ...note,
+          inspirationCardIds: note.inspirationCardIds.filter((id) => id !== cardId),
+          materialThoughts: Object.fromEntries(Object.entries(note.materialThoughts || {}).filter(([id]) => id !== cardId)),
+        })));
+      } catch {
+        say('删除灵感卡片失败，请稍后重试。');
+      }
+    }} />{notice && <Toast text={notice} onClose={() => setNotice('')} />}</section>}
     {activeNav === '知识库' && <section className="workspace-canvas knowledge-canvas">
       <div className="knowledge-layout">
         <div className="materials-column">
@@ -515,7 +735,7 @@ export function App() {
                   <section><strong>按时间 / 标题</strong>{sortOptions.map((item) => <button key={item} className={sort === item ? 'selected' : ''} onClick={() => { setSort(item); setFilterOpen(false); }}><span>{item}</span>{sort === item && <Check size={13} strokeWidth={1.6} />}</button>)}</section>
                 </div>}
               </div>}
-              {!isMaterialSearching && <MaterialIngest base={base} onMaterialReady={saveIngestedMaterial} />}
+              {!isMaterialSearching && <MaterialIngest base={base} onCreateStub={createIngestedMaterialStub} onDelete={deleteIngestedMaterial} />}
             </div>
             <div className="material-list">{visibleMaterials.map((item) => <article className="material-row" key={item.id}>
               <button
@@ -528,7 +748,7 @@ export function App() {
                 onFocus={() => setHoveredMaterialId(item.id)}
                 onBlur={() => setHoveredMaterialId(null)}
               >
-                <div className="material-mark"><IconMaterial /></div><div><h3>{item.title}</h3><p><span>{item.source}</span> · #{item.tag}</p></div><time>{item.time}</time>
+                <div className="material-mark"><IconMaterial /></div><div><h3>{item.title}</h3><p><span>{item.source}</span> · #{item.tag}{item.status === 'processing' && <><span> · </span><span>处理中</span></>}</p></div><time>{item.time}</time>
               </button>
               {hoveredMaterialId === item.id && <aside className="material-hover-card" role="tooltip">
                 <strong>{item.fileName || item.title}</strong>

@@ -1012,6 +1012,17 @@ disconnected → connecting → connected → expired → reconnecting → conne
 | `2026-09-13-menus-home-ai-material-preview.md` Task 1–5 | 已完成 |
 | `2026-09-13-notes-workspace-remediation.md` Task 1–5 | 已完成 |
 | 同上 Task 6（选择条弱渐变圆角 + 笔记引用 hover 预览） | 已完成 |
+| `2026-09-13-phase2-3-roadmap-design.md`（方案 A） | 已确认 |
+| `2026-09-13-phase2-backend-foundation.md` | 计划已就绪 · 待执行 |
+| `2026-09-13-phase3-ai-rag-launch.md` | 计划已就绪 · 待执行 |
+
+### 工程阶段对照
+
+| 阶段 | 范围 | Spec 落点 |
+| --- | --- | --- |
+| 一 | 原型交互 | §11 既有原型任务 |
+| 二 | Auth / 库表 RLS / Storage / 解析入库 / 笔记与卡片持久化（无生成） | §3–§4、§5.1–§5.7 持久化部分、§6 CRUD |
+| 三 | Embedding / RAG / 引用 / 生成笔记 / 同步 / 部署 | §5.7 生成与同步、§5.8 AI、§7–§8、部署 |
 
 ## 11.8 笔记工作台修订（已完成）
 

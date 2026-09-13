@@ -215,7 +215,8 @@ Refind 拾藏是个人资料收藏、归集与知识库提问工具。整体采�
 
 - 设计说明：`docs/superpowers/specs/2026-09-13-prototype-interaction-amendments-design.md`
 - 笔记修订：`docs/superpowers/specs/2026-09-13-notes-workspace-remediation-design.md`
-- 开发计划：`docs/superpowers/plans/2026-09-13-menus-home-ai-material-preview.md`；笔记：`docs/superpowers/plans/2026-09-13-notes-workspace-remediation.md`
+- 阶段二/三路线图：`docs/superpowers/specs/2026-09-13-phase2-3-roadmap-design.md`
+- 开发计划：`docs/superpowers/plans/2026-09-13-menus-home-ai-material-preview.md`；笔记：`docs/superpowers/plans/2026-09-13-notes-workspace-remediation.md`；阶段二：`docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md`；阶段三：`docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md`
 - QA：`refind-demo/design-qa.md`
 
 ### 10.4 笔记工作台后续打磨（已确认）
