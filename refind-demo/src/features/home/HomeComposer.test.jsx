@@ -191,6 +191,18 @@ describe('HomeComposer', () => {
     expect(screen.getByPlaceholderText(homePlaceholder)).toHaveValue('#增长策略 ');
   });
 
+  it('removes #tag from the prompt when deselecting a selected tag', async () => {
+    render(<HomeComposer bases={bases} availableTags={[{ id: '1', name: '增长策略' }]} onSubmit={vi.fn()} />);
+
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
+    await userEvent.click(screen.getByRole('option', { name: '#增长策略' }));
+    expect(screen.getByPlaceholderText(homePlaceholder)).toHaveValue('#增长策略 ');
+
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
+    await userEvent.click(screen.getByRole('option', { name: '#增长策略' }));
+    expect(screen.getByPlaceholderText(homePlaceholder)).toHaveValue('');
+  });
+
   it('shows 暂无标签 when availableTags is empty instead of demo names', async () => {
     render(<HomeComposer bases={bases} availableTags={[]} onSubmit={vi.fn()} />);
 

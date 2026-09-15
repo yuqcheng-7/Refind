@@ -49,13 +49,24 @@ export function HomeComposer({ bases, availableTags = [], onSubmit, scope: contr
   };
 
   const insertTag = (tag) => {
-    setPrompt((value) => value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `));
+    const removing = selectedTags.includes(tag);
     setScope((current) => ({
       ...current,
-      selectedTags: current.selectedTags.includes(tag)
+      selectedTags: removing
         ? current.selectedTags.filter((item) => item !== tag)
         : [...current.selectedTags, tag],
     }));
+    setPrompt((value) => {
+      if (removing) {
+        const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return value
+          .replace(/(^|\s)#[^\s#]*$/, '$1')
+          .replace(new RegExp(`(^|\\s)#${escaped}(?=\\s|$)`, 'g'), '$1')
+          .replace(/[ \t]{2,}/g, ' ')
+          .trim();
+      }
+      return value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `);
+    });
     setTagMenu(false);
     setTagQuery('');
   };

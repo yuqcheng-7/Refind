@@ -1,4 +1,4 @@
--- supabase/migrations/202609150005_materials_tags_user_edited.sql
+-- supabase/migrations/202609150006_materials_tags_user_edited.sql
 alter table public.materials
   add column if not exists tags_user_edited boolean not null default false;
 

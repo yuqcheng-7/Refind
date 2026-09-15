@@ -37,7 +37,6 @@ import {
   createConversation,
   deleteConversation,
   groupConversationsByDay,
-  isPlaceholderTitle,
   listConversations,
   loadConversationTurns,
   renameConversation,
@@ -137,10 +136,21 @@ function Composer({ base, bases, availableTags = [], onBase, onSubmit, compact =
     setTagQuery('');
   };
   const insertTag = (tag) => {
-    setPrompt((value) => value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `));
+    const removing = selectedTags.includes(tag);
     setSelectedTags((current) => (
-      current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]
+      removing ? current.filter((item) => item !== tag) : [...current, tag]
     ));
+    setPrompt((value) => {
+      if (removing) {
+        const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return value
+          .replace(/(^|\s)#[^\s#]*$/, '$1')
+          .replace(new RegExp(`(^|\\s)#${escaped}(?=\\s|$)`, 'g'), '$1')
+          .replace(/[ \t]{2,}/g, ' ')
+          .trim();
+      }
+      return value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `);
+    });
     setTagMenu(false);
     setTagQuery('');
   };
@@ -585,18 +595,6 @@ export function App() {
     setHomeNavUnlocked(true);
     setHomeSurface('chat');
     setHomeHistoryOpen(true);
-
-    const active = homeConversations.find((item) => item.id === homeConversationId);
-    if (
-      homeConversationId
-      && homeMessages.length === 0
-      && active
-      && isPlaceholderTitle(active.title)
-    ) {
-      setHomeMessages([]);
-      return;
-    }
-
     setHomeMessages([]);
     try {
       const created = await createConversation({ surface: 'home' });
@@ -631,17 +629,6 @@ export function App() {
       setKbConversationId(null);
       setKbMessages([]);
       say('请先选择一个知识库。');
-      return;
-    }
-
-    const active = kbConversations.find((item) => item.id === kbConversationId);
-    if (
-      kbConversationId
-      && kbMessages.length === 0
-      && active
-      && isPlaceholderTitle(active.title)
-    ) {
-      setKbMessages([]);
       return;
     }
 
