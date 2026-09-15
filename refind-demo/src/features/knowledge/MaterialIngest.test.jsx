@@ -31,9 +31,9 @@ describe('MaterialIngest', () => {
 
     await user.click(screen.getByRole('button', { name: '添加资料' }));
     await user.click(screen.getByRole('menuitem', { name: '粘贴链接' }));
-    expect(screen.getByPlaceholderText('https://')).toBeVisible();
+    expect(screen.getByPlaceholderText('支持整段分享文案，自动提取链接')).toBeVisible();
     await user.keyboard('{Escape}');
-    expect(screen.queryByPlaceholderText('https://')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('支持整段分享文案，自动提取链接')).not.toBeInTheDocument();
   });
 
   it('adds multiple selected files as current-base parsing cards', async () => {
@@ -66,7 +66,8 @@ describe('MaterialIngest', () => {
       title: '待处理资料.pdf',
       base: '默认知识库',
     }));
-    expect(screen.getByText('处理中')).toBeVisible();
+    // Processing status lives on the list row; toast only appears for failed / downgraded.
+    expect(screen.queryByText('处理中')).not.toBeInTheDocument();
     resolveStub();
   });
 
@@ -131,7 +132,7 @@ describe('MaterialIngest', () => {
 
     expect(onMaterialReady).toHaveBeenCalledTimes(1);
     expect(screen.queryByText('已完成资料.pdf')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('资料解析队列')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('资料解析提醒')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '添加资料' })).toBeVisible();
   });
 
@@ -189,12 +190,12 @@ describe('MaterialIngest', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '添加资料' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '粘贴链接' }));
-    await userEvent.type(screen.getByPlaceholderText('https://'), 'https://example.fail');
+    await userEvent.type(screen.getByPlaceholderText('支持整段分享文案，自动提取链接'), 'https://example.fail');
     await userEvent.click(screen.getByRole('button', { name: '加入队列' }));
     await vi.advanceTimersByTimeAsync(20);
-    await userEvent.click(screen.getByRole('button', { name: '重试：https://example.fail' }));
+    await userEvent.click(screen.getByRole('button', { name: '重试：链接 · example.fail' }));
     await vi.advanceTimersByTimeAsync(20);
-    await userEvent.click(screen.getByRole('button', { name: '重试：https://example.fail' }));
+    await userEvent.click(screen.getByRole('button', { name: '重试：链接 · example.fail' }));
     await vi.advanceTimersByTimeAsync(20);
 
     expect(screen.getByText('仅链接')).toBeVisible();

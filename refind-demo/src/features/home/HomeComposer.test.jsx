@@ -6,15 +6,40 @@ import { cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HomeComposer } from './HomeComposer.jsx';
 
-const { deleteAccount, demoSession, supabase } = vi.hoisted(() => {
+const { deleteAccount, demoSession, sendChatMessage, supabase, conversationStore } = vi.hoisted(() => {
   const session = {
     access_token: 'test-access-token',
     token_type: 'bearer',
     user: { id: 'test-user-1', email: 'demo@refind.test' },
   };
+  const store = {
+    homeItems: [],
+  };
   return {
     deleteAccount: vi.fn(),
     demoSession: session,
+    conversationStore: store,
+    sendChatMessage: vi.fn(async (payload) => {
+      const conversationId = payload.conversationId || 'conv-test-1';
+      store.homeItems = [{
+        id: conversationId,
+        title: `会话 · ${String(payload.content || '未命名').slice(0, 24)}`,
+        updatedAt: new Date().toISOString(),
+      }];
+      return {
+        id: `assistant-${payload.content}`,
+        conversationId,
+        question: payload.content,
+        answer: `API 回答：${payload.content}${payload.knowledgeBaseIds.length ? '[1]' : ''}`,
+        mode: payload.surface === 'knowledge' || payload.knowledgeBaseIds.length ? 'rag' : 'general',
+        online: payload.onlineEnabled,
+        selectedBases: payload.selectedBases,
+        selectedTags: payload.selectedTags,
+        citations: payload.knowledgeBaseIds.length
+          ? [{ order: 1, label: '真实资料标题', materialId: 'material-1', excerpt: '真实摘录' }]
+          : [],
+      };
+    }),
     supabase: {
       auth: {
         onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
@@ -24,6 +49,7 @@ const { deleteAccount, demoSession, supabase } = vi.hoisted(() => {
 });
 
 vi.mock('../../lib/supabaseClient.js', () => ({ supabase }));
+vi.mock('../../lib/api/chat.js', () => ({ sendChatMessage }));
 
 vi.mock('../../lib/api/auth.js', () => ({
   getSession: () => ({
@@ -36,6 +62,26 @@ vi.mock('../../lib/api/auth.js', () => ({
   deleteAccount,
 }));
 
+vi.mock('../../lib/api/profiles.js', () => ({
+  getMyProfile: async () => ({ id: 'test-user-1', email: 'demo@refind.test', display_name: '林知夏' }),
+  resolveDisplayName: (profile, session) => profile?.display_name || session?.user?.user_metadata?.display_name || '林知夏',
+  updateMyDisplayName: async (name) => ({ id: 'test-user-1', email: 'demo@refind.test', display_name: name }),
+}));
+
+vi.mock('../../lib/api/conversations.js', () => ({
+  listConversations: async ({ surface } = {}) => (
+    surface === 'knowledge'
+      ? [{ id: 'kb-conv-1', title: '会员活动设计', updatedAt: new Date().toISOString() }]
+      : [...conversationStore.homeItems]
+  ),
+  loadConversationTurns: async () => [],
+  renameConversation: async (id, title) => ({ id, title, updatedAt: new Date().toISOString() }),
+  deleteConversation: async () => {},
+  groupConversationsByDay: (items = []) => (items.length ? [{ label: '今天', items }] : []),
+  groupLabelForDate: () => '今天',
+  pairChatTurns: () => [],
+}));
+
 vi.mock('../../lib/api/knowledge.js', () => {
   const demoKnowledgeBases = [
     { id: 'base-default', name: '默认知识库', type: 'default' },
@@ -45,6 +91,11 @@ vi.mock('../../lib/api/knowledge.js', () => {
   return {
     listKnowledgeBases: async () => demoKnowledgeBases,
     createKnowledgeBase: async ({ name }) => ({ id: `base-${name}`, name, type: 'custom' }),
+    filterKnowledgeBaseNames: (names, query = '') => {
+      const needle = String(query || '').trim().toLowerCase();
+      if (!needle) return names;
+      return names.filter((name) => String(name).toLowerCase().includes(needle));
+    },
   };
 });
 
@@ -53,7 +104,11 @@ import { App } from '../../App.jsx';
 const bases = ['默认知识库', '增长与运营案例', '产品与设计资料'];
 const homePlaceholder = '请输入内容进行提问，输入 # 可选择标签';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sendChatMessage.mockClear();
+  conversationStore.homeItems = [];
+});
 
 describe('HomeComposer', () => {
   it('defaults to DS fast and offline in general-task mode', () => {
@@ -146,6 +201,8 @@ describe('HomeComposer', () => {
     render(<App />);
 
     await userEvent.click(screen.getByRole('button', { name: '林知夏 个人账号' }));
+    await userEvent.click(screen.getByRole('button', { name: '设置' }));
+    await userEvent.click(screen.getByRole('tab', { name: '账户与安全' }));
     await userEvent.click(screen.getByRole('button', { name: '删除账号' }));
 
     expect(confirm).toHaveBeenCalledOnce();
@@ -153,7 +210,7 @@ describe('HomeComposer', () => {
     confirm.mockRestore();
   });
 
-  it('keeps the selected scope on submitted messages and reports fixed RAG citations', async () => {
+  it('keeps the selected scope on submitted messages without composer-generated citations', async () => {
     const onSubmit = vi.fn();
     render(<HomeComposer bases={bases} onSubmit={onSubmit} />);
 
@@ -168,7 +225,28 @@ describe('HomeComposer', () => {
       mode: 'rag',
       selectedBases: ['默认知识库'],
       selectedTags: [],
-      citations: [{ label: '小红书增长策略' }, { label: 'SaaS 增长复盘' }],
+    }));
+    expect(onSubmit.mock.calls[0][0]).not.toHaveProperty('citations');
+  });
+
+  it('renders the chat API answer and resolves selected knowledge-base names to ids', async () => {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
+    await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
+    fireEvent.pointerDown(document.body);
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '基于资料回答');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(await screen.findByText('API 回答：基于资料回答')).toBeVisible();
+    expect(screen.getByRole('button', { name: '引用 1：真实资料标题' })).toBeVisible();
+    expect(sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({
+      content: '基于资料回答',
+      thinkingMode: 'fast',
+      onlineEnabled: false,
+      knowledgeBaseIds: ['base-default'],
+      tagFilters: [],
+      surface: 'knowledge',
     }));
   });
 
@@ -223,7 +301,7 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
     expect(screen.queryByText('Welcome, Refind!')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: '回到首页' }));
+    await userEvent.click(screen.getByRole('button', { name: '回到英雄区' }));
     expect(screen.getByText('Welcome, Refind!')).toBeVisible();
     expect(screen.queryByLabelText('会话历史')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(homePlaceholder)).toBeVisible();
@@ -234,12 +312,62 @@ describe('HomeComposer', () => {
 
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '保留的会话内容');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
-    await userEvent.click(screen.getByRole('button', { name: '回到首页' }));
+    await userEvent.click(screen.getByRole('button', { name: '回到英雄区' }));
     expect(screen.getByText('Welcome, Refind!')).toBeVisible();
 
     await userEvent.click(screen.getByRole('button', { name: '首页' }));
     expect(screen.queryByText('Welcome, Refind!')).not.toBeInTheDocument();
     expect(screen.getByText('保留的会话内容')).toBeVisible();
+    expect(screen.getByLabelText('会话历史')).toBeVisible();
+  });
+
+  it('keeps first-entry hero without Home hover until Home is clicked', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(screen.getByText('Welcome, Refind!')).toBeVisible();
+    expect(screen.getByRole('button', { name: '首页' })).toHaveClass('is-hover-locked');
+    expect(screen.getByRole('button', { name: '首页' })).not.toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: '回到英雄区' })).not.toHaveClass('is-active');
+
+    await user.hover(screen.getByRole('button', { name: '首页' }));
+    expect(screen.getByText('Welcome, Refind!')).toBeVisible();
+    expect(screen.queryByLabelText('会话历史')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '首页' }));
+    expect(screen.getByRole('button', { name: '首页' })).not.toHaveClass('is-hover-locked');
+    // No history yet → still hero; Home stays inactive on hero.
+    expect(screen.getByText('Welcome, Refind!')).toBeVisible();
+    expect(screen.getByRole('button', { name: '首页' })).not.toHaveClass('is-active');
+  });
+
+  it('opens AI chat from Home click/hover only after unlock and when history exists', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(screen.getByPlaceholderText(homePlaceholder), '首次会话');
+    await user.click(screen.getByRole('button', { name: '发送提问' }));
+    expect(await screen.findByText('首次会话')).toBeVisible();
+    expect(screen.getByRole('button', { name: '首页' })).toHaveClass('is-active');
+
+    await user.click(screen.getByRole('button', { name: '回到英雄区' }));
+    expect(screen.getByText('Welcome, Refind!')).toBeVisible();
+    expect(screen.getByRole('button', { name: '首页' })).not.toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: '回到英雄区' })).not.toHaveClass('is-active');
+
+    await user.click(screen.getByRole('button', { name: '首页' }));
+    expect(screen.queryByText('Welcome, Refind!')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('会话历史')).toBeVisible();
+    expect(screen.getByRole('button', { name: '首页' })).toHaveClass('is-active');
+
+    await user.click(screen.getByRole('button', { name: '回到英雄区' }));
+    expect(screen.getByText('Welcome, Refind!')).toBeVisible();
+    // Move away from logo/Home so hover suppress clears, then re-enter Home.
+    fireEvent.mouseLeave(screen.getByRole('button', { name: '回到英雄区' }), {
+      relatedTarget: document.body,
+    });
+    await user.hover(screen.getByRole('button', { name: '首页' }));
+    expect(screen.queryByText('Welcome, Refind!')).not.toBeInTheDocument();
     expect(screen.getByLabelText('会话历史')).toBeVisible();
   });
 
@@ -346,6 +474,6 @@ describe('HomeComposer', () => {
     expect(screen.getByText(/默认知识库、#产品灵感/)).toBeVisible();
     expect(screen.queryAllByText(/默认知识库、#产品灵感/)).toHaveLength(1);
     expect(screen.getByText('范围已清后的追问').closest('.home-conversation-turn')).toBeTruthy();
-    expect(screen.getAllByText('这里有三个可先行验证的通用方向：')).toHaveLength(1);
+    expect(await screen.findByText('API 回答：范围已清后的追问')).toBeVisible();
   });
 });

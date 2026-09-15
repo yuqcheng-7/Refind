@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { ArrowRight, KeyRound, Mail } from 'lucide-react';
+import { ArrowRight, KeyRound, Mail, UserRound } from 'lucide-react';
 import { mapAuthError, resetPassword, signIn, signUp } from '../../lib/api/auth.js';
 
-const initialCredentials = { email: '', password: '' };
+const initialCredentials = { email: '', password: '', displayName: '' };
 
 export function AuthScreen() {
   const [mode, setMode] = useState('login');
@@ -29,13 +29,23 @@ export function AuthScreen() {
     event.preventDefault();
     setError('');
     setMessage('');
+
+    if (isSignup && !credentials.displayName.trim()) {
+      setError('请填写用户名');
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
       const result = isForgotPassword
         ? await resetPassword(credentials.email)
         : isSignup
-          ? await signUp(credentials)
+          ? await signUp({
+            email: credentials.email,
+            password: credentials.password,
+            displayName: credentials.displayName,
+          })
           : await signIn(credentials);
 
       if (result.error) {
@@ -72,6 +82,24 @@ export function AuthScreen() {
           <span>{isSignup ? '开始整理散落在各处的灵感。' : isForgotPassword ? '输入账户邮箱，我们会发送重置链接。' : '登录后继续你的拾藏。'}</span>
         </header>
         <form onSubmit={submit}>
+          {isSignup && (
+            <label>
+              用户名
+              <span className="auth-field">
+                <UserRound size={16} aria-hidden="true" />
+                <input
+                  name="displayName"
+                  type="text"
+                  autoComplete="nickname"
+                  value={credentials.displayName}
+                  onChange={updateCredentials}
+                  placeholder="用于侧栏展示的昵称"
+                  maxLength={32}
+                  required
+                />
+              </span>
+            </label>
+          )}
           <label>
             邮箱
             <span className="auth-field"><Mail size={16} aria-hidden="true" /><input name="email" type="email" autoComplete="email" value={credentials.email} onChange={updateCredentials} placeholder="you@example.com" required /></span>

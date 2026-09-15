@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn the Phase 2 backend into a V1.0 product: real embeddings + strict RAG, citation UX, inspiration-card capture from answers, AI note generation with card citations, note↔knowledge-base sync, and production deploy.
+**Goal:** Turn the Phase 2 backend into a V1.0 product: real embeddings + strict RAG, citation UX, inspiration-card capture from answers, AI note generation with card citations, note↔knowledge-base sync, **platform login B + hosted parser**, and production deploy.
 
-**Architecture:** Edge Functions orchestrate DeepSeek Chat + 阿里云百炼 `text-embedding-v4`. Material ready events enqueue chunk embedding into `material_chunks.embedding` (pgvector). Chat endpoints retrieve top-k chunks under KB/tag filters, persist `chat_messages` + `message_citations`. Note generate creates `note_revisions` then writes `content.sections` with `cardId` / citation indexes (prototype Task 6 contract). Sync creates `origin_type=note` materials linked via `note_knowledge_base_materials`. Deploy: Supabase prod + static frontend (Cloudflare Pages or existing Sites packaging).
+**Architecture:** Edge Functions orchestrate DeepSeek Chat + 阿里云百炼 `text-embedding-v4`. Material ready events enqueue chunk embedding into `material_chunks.embedding` (pgvector). Chat endpoints retrieve top-k chunks under KB/tag filters, persist `chat_messages` + `message_citations`. Note generate creates `note_revisions` then writes `content.sections` with `cardId` / citation indexes (prototype Task 6 contract). Sync creates `origin_type=note` materials linked via `note_knowledge_base_materials`. Deploy: Supabase prod（东京）+ static frontend（Vercel 或 Cloudflare Pages）+ **自定义域名** + **托管解析服务**（替换本机 parser）。
 
-**Tech Stack:** Supabase Edge Functions (Deno), DeepSeek Chat API, DashScope/Bailian embedding API, pgvector, React 19 + Vite, CI deploy.
+**Tech Stack:** Supabase Edge Functions (Deno), DeepSeek Chat API, DashScope/Bailian embedding API, pgvector, React 19 + Vite, CI deploy, hosted platform-parser.
 
 **Depends on:** Phase 2 complete (`docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md`)  
 **Canonical design:** `docs/superpowers/specs/2026-09-13-phase2-3-roadmap-design.md`
@@ -19,6 +19,7 @@
 - Note generate: create `before_generate` revision; replace body in place; RAG cards → interactive `[n]` bound to `cardId`; general cards → no fake material citations.
 - Note sync: editing note updates all linked materials; editing a synced material updates note then fans out; deleting KB/material only unlinks; deleting note deletes all synced materials.
 - Secrets only in Edge Function env (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`, service role); never in Vite bundle.
+- Link ingest (from Phase 2 Task 8): mainstream platforms via MediaCrawler; other sites anonymous Crawl4AI/Readability; no forcing users to register on long-tail sites; Douyin/Bilibili no ASR/comments.
 - Do not commit unless the user asks.
 
 ---
@@ -279,29 +280,36 @@ If mindmap slips schedule, document as Phase 3.1 residual — **do not block** d
 - Modify: `refind-demo/design-qa.md`
 - Modify: `output/Refind拾藏PRD_V1.0.md` milestone status (when done)
 
-- [ ] **Step 1: Supabase prod project** — link, push migrations, set secrets (`DEEPSEEK_API_KEY`, `DASHSCOPE_API_KEY`), deploy functions.
+- [ ] **Step 1: Supabase prod project** — 使用东京（`ap-northeast-1`）项目；link、push migrations、set secrets（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`）、deploy functions。
 
-- [ ] **Step 2: Frontend build**
+- [ ] **Step 2: Frontend build + 自定义域名**
 
 ```bash
 cd refind-demo
 npm run build
-# deploy dist/client via Cloudflare Pages or existing Sites packaging
+# 部署 dist/client：Vercel 或 Cloudflare Pages
+# 国内访问：绑定自定义域名；勿依赖 *.vercel.app（常不可达）
+# 可选：Cloudflare 代理自有域名
 ```
+
+- [ ] **Step 2b: 托管解析服务** — 部署可访问国内平台的 parser（替换本机 `8787`）；前端 `VITE_PLATFORM_PARSER_URL` 指向生产 URL；完成平台连接 B（真实会话）后再对外宣称「连接账号」。
 
 - [ ] **Step 3: E2E launch checklist**
 
 | Path | Pass? |
 | --- | --- |
 | Register → default KB | |
-| Upload/parse → embed ready | |
+| 侧栏未进知识库页即可搜索列表 | |
+| Upload/parse → embed ready（经托管 parser） | |
 | Home general ask | |
 | Home RAG with KB + citations | |
 | KB AI RAG | |
 | Save inspiration card | |
 | Organize → generate note → citation opens card | |
 | Sync note to KB | |
+| 设置：平台连接 B / 账户安全 | |
 | Second browser / user isolation | |
+| 国内网络打开自定义域名 | |
 
 - [ ] **Step 4: Record QA in `design-qa.md`; mark Phase 3 plan tasks complete.**
 
@@ -309,8 +317,9 @@ npm run build
 
 ## Plan Self-Review
 
-- Roadmap §4.1 items 1–8 covered by Tasks 1–7 (mindmap optional in Task 6).
+- Roadmap §4.1 items 1–9 covered by Tasks 1–7 + deploy/host parser（mindmap optional in Task 6）.
 - Phase 2 non-goals correctly become Phase 3 goals.
 - Note content shape matches prototype (`sections` + `cardId`) for citation hover.
-- Secrets stay server-side; Vite only gets anon key + URL.
-- V1.5 items (rerank, batch tags, MediaCrawler full platforms) explicitly out of this plan.
+- Secrets stay server-side; Vite only gets anon key + URL + parser URL.
+- V1.5 items (rerank, batch tags, MediaCrawler / 匿名网页抽取质量深化) explicitly out of this plan.
+- `*.vercel.app` 国内可达性风险与托管解析已写入 Step 2 / 2b。

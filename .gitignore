@@ -5,3 +5,10 @@ dist/
 refind-demo/dist/
 .vite/
 coverage/
+
+.env
+refind-demo/.env
+
+# Local platform login sessions (Phase B)
+tools/platform-parser/sessions/
+tools/platform-parser/cookies.txt

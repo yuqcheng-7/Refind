@@ -1,5 +1,16 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import JSZip from 'npm:jszip@3.10.1';
+import { extractText, getDocumentProxy } from 'npm:unpdf@1.0.6';
 import { isAllowedPublicUrl, isBlockedIpAddress } from './urlSafety.js';
+import { extractDocumentText, OFFICE_PARSEABLE_TYPES } from './extractDocumentText.js';
+import { extractLinkContent, LINK_BROWSER_UA } from './extractLinkContent.js';
+import { invokeEmbedMaterial } from './embedHook.js';
+import { chunkText } from '../_shared/chunkText.js';
+
+const documentDeps = {
+  JSZip,
+  unpdf: { extractText, getDocumentProxy },
+};
 
 const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -10,6 +21,7 @@ const corsHeaders = {
 const textFileTypes = new Set(['txt', 'markdown', 'csv']);
 const maxUrlResponseBytes = 2 * 1024 * 1024;
 const allowedUrlContentTypes = new Set(['text/html', 'text/plain', 'application/xhtml+xml']);
+const maxFileBytes = 15 * 1024 * 1024;
 
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: corsHeaders });
@@ -17,33 +29,6 @@ function response(body: unknown, status = 200) {
 
 function cleanText(value: string) {
   return value.replace(/\s+/g, ' ').trim();
-}
-
-function extractHtmlText(html: string) {
-  return cleanText(
-    html
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&nbsp;/gi, ' ')
-      .replace(/&amp;/gi, '&')
-      .replace(/&lt;/gi, '<')
-      .replace(/&gt;/gi, '>'),
-  );
-}
-
-function getHtmlTitle(html: string) {
-  const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
-  return match ? cleanText(match[1]) : null;
-}
-
-function chunkText(text: string, size = 1200) {
-  const chunks: { content: string; source_start: number; source_end: number }[] = [];
-  for (let start = 0; start < text.length; start += size) {
-    const end = Math.min(start + size, text.length);
-    chunks.push({ content: text.slice(start, end), source_start: start, source_end: end });
-  }
-  return chunks;
 }
 
 async function assertSafePublicUrl(value: string) {
@@ -102,18 +87,65 @@ async function readLimitedText(fetched: Response) {
 
 async function fetchSafeUrl(sourceUrl: string) {
   let url = await assertSafePublicUrl(sourceUrl);
-  for (let redirects = 0; redirects <= 3; redirects += 1) {
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
     const fetched = await fetch(url, {
       redirect: 'manual',
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(12_000),
+      headers: {
+        'User-Agent': LINK_BROWSER_UA,
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
     });
-    if (![301, 302, 303, 307, 308].includes(fetched.status)) return fetched;
+    if (![301, 302, 303, 307, 308].includes(fetched.status)) {
+      return { response: fetched, finalUrl: url.href };
+    }
 
     const location = fetched.headers.get('location');
-    if (!location || redirects === 3) throw new Error('链接重定向次数过多');
+    if (!location || redirects === 5) throw new Error('链接重定向次数过多');
     url = await assertSafePublicUrl(new URL(location, url).href);
   }
   throw new Error('链接重定向次数过多');
+}
+
+function asCleanString(value: unknown) {
+  return typeof value === 'string' ? cleanText(value) : '';
+}
+
+function fromPrefetched(prefetched: Record<string, unknown> | null) {
+  if (!prefetched) return null;
+  const content = asCleanString(prefetched.content_text)
+    || asCleanString(prefetched.caption_text)
+    || asCleanString(prefetched.title);
+  if (!content && !asCleanString(prefetched.title)) return null;
+  return {
+    platform: asCleanString(prefetched.platform),
+    title: asCleanString(prefetched.title),
+    author_name: asCleanString(prefetched.author_name),
+    caption_text: asCleanString(prefetched.caption_text),
+    subtitle_text: asCleanString(prefetched.subtitle_text),
+    content_text: content,
+    summary_seed: asCleanString(prefetched.summary) || content,
+    playback_mode: asCleanString(prefetched.playback_mode) || null,
+    playback_url: asCleanString(prefetched.playback_url),
+    playback_embed_html: asCleanString(prefetched.playback_embed_html),
+    quality: asCleanString(prefetched.quality) || 'partial',
+    canonical_url: asCleanString(prefetched.canonical_url),
+  };
+}
+
+function buildSummary(seed: string, text: string, title = '') {
+  const value = cleanText(seed || text);
+  const heading = cleanText(title);
+  if (!value) return '暂无摘要';
+  // Avoid presenting a bare title / BV placeholder as if it were an AI summary.
+  if (heading && (value === heading || value === `B站视频 ${heading}`)) {
+    return `「${heading}」已入库。源站简介有限，完整 AI 摘要将在正文更充足后生成。`;
+  }
+  if (/^B站视频\s+BV/i.test(value) && value.length < 40) {
+    return '视频已入库。完整简介与 AI 摘要待源站数据可用后补全。';
+  }
+  return value.length > 140 ? `${value.slice(0, 140)}…` : value;
 }
 
 Deno.serve(async (req) => {
@@ -132,8 +164,13 @@ Deno.serve(async (req) => {
   if (userError || !user) return response({ error: 'Unauthorized' }, 401);
 
   let materialId: string;
+  let force = false;
+  let prefetched: Record<string, unknown> | null = null;
   try {
-    ({ materialId } = await req.json());
+    const body = await req.json();
+    materialId = body.materialId;
+    force = Boolean(body.force);
+    prefetched = body.prefetched && typeof body.prefetched === 'object' ? body.prefetched : null;
   } catch {
     return response({ error: 'Invalid JSON body' }, 400);
   }
@@ -151,7 +188,8 @@ Deno.serve(async (req) => {
     .single();
   if (materialError || !material) return response({ error: 'Material not found' }, 404);
 
-  if (material.status === 'ready' || material.status === 'link_only') {
+  // Only skip completed ready parses. link_only/failed must be re-runnable (retry).
+  if (material.status === 'ready' && !force) {
     return response({ ok: true, status: material.status });
   }
 
@@ -164,24 +202,108 @@ Deno.serve(async (req) => {
 
     let text = '';
     let title = material.title;
+    let linkFields: Record<string, unknown> = {};
     if (material.source_url) {
-      const fetched = await fetchSafeUrl(material.source_url);
-      if (!fetched.ok) throw new Error(`链接获取失败 (${fetched.status})`);
-      assertAllowedUrlContentType(fetched.headers.get('content-type'));
-      const html = await readLimitedText(fetched);
-      text = extractHtmlText(html);
-      title ||= getHtmlTitle(html);
-    } else if (material.storage_object_key) {
-      if (!textFileTypes.has(material.input_type)) {
-        throw new Error(`Phase 2 暂不支持解析 ${material.input_type} 文件`);
+      const local = fromPrefetched(prefetched);
+      if (local) {
+        text = local.content_text || '';
+        title = title || local.title || material.source_url;
+        linkFields = {
+          platform_code: local.platform || material.platform_code,
+          author_name: local.author_name || material.author_name,
+          caption_text: local.caption_text || null,
+          subtitle_text: local.subtitle_text || null,
+          playback_mode: local.playback_mode,
+          playback_url: local.playback_url || null,
+          playback_embed_html: local.playback_embed_html || null,
+          summary_seed: local.summary_seed,
+          quality: local.quality,
+          canonical_url: local.canonical_url || material.source_url,
+        };
+      } else {
+        let html = '';
+        let resolvedUrl = material.source_url;
+        try {
+          const { response: fetched, finalUrl } = await fetchSafeUrl(material.source_url);
+          resolvedUrl = finalUrl || material.source_url;
+          if (fetched.ok) {
+            const contentType = fetched.headers.get('content-type');
+            try {
+              assertAllowedUrlContentType(contentType);
+              html = await readLimitedText(fetched);
+            } catch {
+              // Still try platform APIs / OG-less metadata path.
+            }
+          }
+        } catch {
+          // Platform APIs may still succeed without HTML (e.g. Bilibili).
+        }
+
+        const extracted = await extractLinkContent({
+          sourceUrl: material.source_url,
+          resolvedUrl,
+          html,
+          env: {
+            PLATFORM_PARSER_URL: Deno.env.get('PLATFORM_PARSER_URL') || '',
+          },
+        });
+        text = extracted.content_text || '';
+        title = title || extracted.title || material.source_url;
+        linkFields = {
+          platform_code: extracted.platform || material.platform_code,
+          author_name: extracted.author_name || material.author_name,
+          caption_text: extracted.caption_text || null,
+          subtitle_text: extracted.subtitle_text || null,
+          playback_mode: extracted.playback_mode,
+          playback_url: extracted.playback_url || null,
+          playback_embed_html: extracted.playback_embed_html || null,
+          summary_seed: extracted.summary_seed,
+          quality: extracted.quality,
+          canonical_url: extracted.canonical_url || resolvedUrl,
+        };
       }
+    } else if (material.storage_object_key) {
       const { data: file, error } = await admin.storage.from('materials').download(material.storage_object_key);
       if (error || !file) throw error || new Error('文件下载失败');
-      text = cleanText(await file.text());
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (bytes.byteLength > maxFileBytes) throw new Error('文件超过 15MB 限制');
+
+      if (textFileTypes.has(material.input_type)) {
+        text = cleanText(new TextDecoder().decode(bytes));
+      } else if (OFFICE_PARSEABLE_TYPES.has(material.input_type)) {
+        text = await extractDocumentText(material.input_type, bytes, documentDeps);
+      } else if (material.input_type === 'doc') {
+        text = await extractDocumentText('doc', bytes, documentDeps);
+      } else if (material.input_type === 'image') {
+        throw new Error('图片 OCR 即将支持，请稍后再试');
+      } else {
+        throw new Error(`暂不支持解析 ${material.input_type} 文件`);
+      }
     } else {
       throw new Error('资料没有可解析的链接或文件');
     }
-    if (!text) throw new Error('未提取到可用正文');
+    if (!text) {
+      if (material.source_url) {
+        const hasPartial = Boolean(title && title !== material.source_url);
+        const { error: linkOnlyError } = await admin.from('materials').update({
+          title: title || material.source_url,
+          summary: hasPartial
+            ? '仅获取到标题等信息，正文暂不可用。'
+            : '暂无法解析正文，已保存为仅链接。',
+          content_excerpt: material.source_url,
+          status: 'link_only',
+          last_parse_error: '未提取到可用正文',
+          platform_code: (linkFields.platform_code as string) || material.platform_code,
+          author_name: (linkFields.author_name as string) || material.author_name,
+          playback_mode: (linkFields.playback_mode as string) || null,
+          playback_url: (linkFields.playback_url as string) || null,
+          playback_embed_html: (linkFields.playback_embed_html as string) || null,
+        }).eq('id', material.id);
+        if (linkOnlyError) throw linkOnlyError;
+        return response({ ok: true, status: 'link_only' });
+      }
+      throw new Error('未提取到可用正文');
+    }
 
     const chunks = chunkText(text);
     const { error: deleteError } = await admin.from('material_chunks').delete().eq('material_id', material.id);
@@ -195,16 +317,41 @@ Deno.serve(async (req) => {
     })));
     if (chunksError) throw chunksError;
 
-    const { error: updateError } = await admin.from('materials').update({
+    const summarySeed = typeof linkFields.summary_seed === 'string' ? linkFields.summary_seed : '';
+    const readyPatch: Record<string, unknown> = {
       title: title || material.file_name || material.source_url,
       content_text: text,
       content_excerpt: text.slice(0, 240),
-      summary: `已解析 ${chunks.length} 个文本片段。`,
+      summary: buildSummary(summarySeed, text, typeof title === 'string' ? title : ''),
       status: 'ready',
       last_parse_error: null,
-    }).eq('id', material.id);
+      parse_attempt_count: 0,
+      platform_code: (linkFields.platform_code as string) || material.platform_code,
+      author_name: (linkFields.author_name as string) || material.author_name,
+      caption_text: (linkFields.caption_text as string) || null,
+      subtitle_text: (linkFields.subtitle_text as string) || null,
+      playback_mode: (linkFields.playback_mode as string) || null,
+      playback_url: (linkFields.playback_url as string) || null,
+      playback_embed_html: (linkFields.playback_embed_html as string) || null,
+    };
+    if (!material.canonical_url && linkFields.canonical_url) {
+      readyPatch.canonical_url = linkFields.canonical_url;
+    }
+    const { error: updateError } = await admin.from('materials').update(readyPatch).eq('id', material.id);
     if (updateError) throw updateError;
-    return response({ ok: true, status: 'ready' });
+    const embedPromise = invokeEmbedMaterial({
+      supabaseUrl: Deno.env.get('SUPABASE_URL') || '',
+      serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
+      materialId: material.id,
+    });
+    const edgeRuntime = (globalThis as any).EdgeRuntime;
+    const waitUntil = edgeRuntime?.waitUntil?.bind(edgeRuntime);
+    if (typeof waitUntil === 'function') {
+      waitUntil(embedPromise);
+    } else {
+      await embedPromise.catch(() => {});
+    }
+    return response({ ok: true, status: 'ready', quality: linkFields.quality || 'full' });
   } catch (error) {
     const attempts = material.parse_attempt_count + 1;
     const status = attempts >= 3 ? 'link_only' : 'failed';

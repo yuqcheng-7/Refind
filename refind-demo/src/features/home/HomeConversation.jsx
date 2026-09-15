@@ -1,8 +1,7 @@
 import { Check } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { AnswerContent } from '../chat/AnswerContent.jsx';
 import { AnswerActions } from '../knowledge/AnswerActions.jsx';
-
-const answerContent = '先用高质量内容建立核心用户的信任感；再用明确的反馈与激励，缩短用户从浏览到行动的路径；最后持续观察留存和搜索回流，确认增长是否可复制。';
 
 function BubbleCheck({ selected }) {
   return (
@@ -47,8 +46,10 @@ function BubbleRow({
 
 export function HomeConversation({
   messages,
+  emptyPrompt,
   onSaveCard,
   onAddToNote,
+  onOpenMaterial,
   shareMode = false,
   selectedBubbleIds = [],
   onShareStart,
@@ -60,20 +61,34 @@ export function HomeConversation({
     endRef.current?.scrollIntoView?.({ block: 'end' });
   }, [messages.length]);
 
+  if (!messages.length && emptyPrompt) {
+    return (
+      <div className="home-chat-column">
+        <section className="home-conversation home-conversation--empty" aria-label="首页 AI 对话">
+          <div className="home-chat-empty">
+            <p>{emptyPrompt}</p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="home-chat-column">
       <section className={`home-conversation ${shareMode ? 'is-share-mode' : ''}`} aria-label="首页 AI 对话">
         {messages.map((message) => {
           const isRag = message.mode === 'rag';
-          const scopeName = [...(message.selectedBases || []), ...(message.selectedTags || []).map((tag) => `#${tag}`)].join('、') || '通用任务';
+          const scopeName = [...(message.selectedBases || []), ...(message.selectedTags || []).map((tag) => `#${tag}`)].join('、');
           const userId = `${message.id}-user`;
           const answerId = `${message.id}-answer`;
           const answer = {
             id: answerId,
-            content: answerContent,
+            content: message.answer || '',
             questionSnapshot: message.question,
             answerMode: message.mode,
-            citation: isRag ? { label: '小红书增长策略', sourceId: 'source-xiaohongshu-growth' } : undefined,
+            citation: message.citations?.[0]
+              ? { label: message.citations[0].label, sourceId: message.citations[0].materialId }
+              : undefined,
           };
 
           return (
@@ -87,30 +102,36 @@ export function HomeConversation({
               >
                 <div className="home-user-message">{message.question}</div>
               </BubbleRow>
-              <BubbleRow
-                align="answer"
-                shareMode={shareMode}
-                selected={selected.has(answerId)}
-                label="选择回答"
-                onToggle={() => onToggleBubble?.(answerId)}
-              >
-                <div className="home-answer-message">
-                  <AnswerActions
-                    answer={answer}
-                    shareMode={shareMode}
-                    onSaveCard={onSaveCard}
-                    onAddToNote={onAddToNote}
-                    onShare={() => onShareStart?.(answerId)}
-                  >
-                    <p>{isRag ? `我在「${scopeName}」里找到了三个值得优先关注的方向：` : '这里有三个可先行验证的通用方向：'}</p>
-                    <ol>
-                      <li>先用高质量内容建立核心用户的信任感。</li>
-                      <li>用明确的反馈与激励，缩短用户从浏览到行动的路径。</li>
-                      <li>持续观察留存和搜索回流，确认增长是否可复制。</li>
-                    </ol>
-                  </AnswerActions>
-                </div>
-              </BubbleRow>
+              {message.answer ? (
+                <BubbleRow
+                  align="answer"
+                  shareMode={shareMode}
+                  selected={selected.has(answerId)}
+                  label="选择回答"
+                  onToggle={() => onToggleBubble?.(answerId)}
+                >
+                  <div className={`home-answer-message ${message.failed ? 'is-failed' : ''}`}>
+                    <AnswerActions
+                      answer={answer}
+                      shareMode={shareMode}
+                      onSaveCard={onSaveCard}
+                      onAddToNote={onAddToNote}
+                      onShare={() => onShareStart?.(answerId)}
+                    >
+                      {isRag && scopeName && <p className="home-answer-scope">{scopeName}</p>}
+                      <AnswerContent
+                        text={message.answer}
+                        citations={isRag ? message.citations : []}
+                        conversational={!isRag && !message.failed}
+                        interactive={!shareMode}
+                        onOpenMaterial={onOpenMaterial}
+                      />
+                    </AnswerActions>
+                  </div>
+                </BubbleRow>
+              ) : (
+                <div className="home-answer-message is-pending" role="status">正在生成回答…</div>
+              )}
             </article>
           );
         })}

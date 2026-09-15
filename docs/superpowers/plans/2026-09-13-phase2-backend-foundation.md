@@ -2,14 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up Supabase Auth + Postgres + Storage + Edge Functions, persist knowledge bases / materials / notebooks / notes / inspiration cards, and wire `refind-demo` to real APIs while keeping phase-1 UI behavior.
+**Goal:** Stand up Supabase Auth + Postgres + Storage + Edge Functions, persist knowledge bases / materials / notebooks / notes / inspiration cards, and wire `refind-demo` to real APIs while keeping phase-1 UI behavior. **2026-09-14:** Task 8 补强文档/OCR/链接双路径（见文末）。**2026-09-15：** 设置页平台连接 A（演示态）+ 侧栏知识库常显/空状态已落地；真实登录 B 与托管解析归阶段三。
 
-**Architecture:** Create a `supabase/` project sibling to `refind-demo`. Schema + RLS live in SQL migrations; auth and CRUD go through Supabase client from the React app; async link/file ingest runs in Edge Functions that update `materials.status`. Notes persist as `content jsonb` with `note_inspiration_cards` for materials; **no** DeepSeek generate / RAG / note↔KB sync in this phase.
+**Architecture:** Create a `supabase/` project sibling to `refind-demo`. Schema + RLS live in SQL migrations; auth and CRUD go through Supabase client from the React app; async link/file ingest runs in Edge Functions that update `materials.status`. Dev link prefetch may use local `tools/platform-parser`. Notes persist as `content jsonb` with `note_inspiration_cards` for materials; **no** DeepSeek generate / RAG / note↔KB sync in this phase. Current cloud project: Tokyo `ap-northeast-1`.
 
-**Tech Stack:** Supabase (Auth, Postgres, Storage, Edge Functions), pgvector extension enabled but embeddings deferred, React 19 + Vite + `@supabase/supabase-js`, Vitest.
+**Tech Stack:** Supabase (Auth, Postgres, Storage, Edge Functions), pgvector extension enabled but embeddings deferred, React 19 + Vite + `@supabase/supabase-js`, Vitest; parse hardening uses MediaCrawler（主流）+ Crawl4AI/Readability（其他网页）.
 
 **Canonical design:** `docs/superpowers/specs/2026-09-13-phase2-3-roadmap-design.md`  
-**Data model / APIs:** `output/Refind拾藏开发Spec_V1.0.md` §3–§6
+**Related specs:** `2026-09-14-platform-connection-settings-ui.md`、`2026-09-14-link-parse-pipeline-trial.md`、`2026-09-15-sidebar-kb-empty-states.md`  
+**Data model / APIs:** `output/Refind拾藏开发Spec_V1.0.md` §3–§6、§12–§13
 
 ## Global Constraints
 
@@ -445,9 +446,47 @@ Expected: PASS.
 
 ---
 
+### Task 8: Parse hardening（2026-09-14 产品确认）
+
+> 对齐 Spec §12 / PRD §9.9 / 路线图 §2–§3。在 Task 4 stub 之上按顺序补强，不改变 `processing → ready | failed | link_only` 状态机。
+
+**Files:**
+- Modify: `supabase/functions/parse-material/index.ts`
+- Modify / Create: `supabase/functions/parse-material/extractDocumentText.js`（及 OCR / 网页抽取模块）
+- Modify: `refind-demo/src/lib/api/ingest.js`（Storage key = `userId/uuid.ext`）
+- Optional service: MediaCrawler 外置进程或 HTTP 适配；Crawl4AI / Readability 调用封装
+
+#### 8A. 文档文本提取 — **已完成**
+
+- [x] PDF / DOCX / PPTX / XLSX 文本提取并写入 `body_text` / chunks
+- [x] 静态 npm 依赖部署（避免 Deno 动态 import 约束失败）
+- [x] Storage key 不含原始中文/`+` 文件名
+
+#### 8B. 图片 OCR — **待做**
+
+- [ ] **Step 1:** 选定 OCR 提供方（云端 API 可接受）；密钥仅存 Edge secrets
+- [ ] **Step 2:** `input_type=image` 下载 Storage 对象 → OCR 文字 + 简短视觉描述 → `ready`；失败计入 `parse_attempt_count`
+- [ ] **Step 3:** 手工验证中英文截图各一张进入 `ready` 并可被关键词搜到（Phase 3 前可仅 body 可搜）
+
+#### 8C. 链接双路径加强 — **待做**
+
+- [ ] **Step 1: 分流** — 按 `platform_code`：`xhs|douyin|zhihu|bilibili|wechat_mp` → 路径 A；其余 → 路径 B
+- [ ] **Step 2: 路径 B（其他网页）** — 匿名抽取（Crawl4AI / Readability）；强 SPA 可 Playwright **匿名**渲染；**禁止**要求用户注册目标站
+- [ ] **Step 3: 路径 A（主流平台）** — 接入 MediaCrawler；有平台会话则带会话；无会话仍尝试公开可达解析，或提示连接 / 「仅保存链接」
+- [ ] **Step 4: 抖音/B 站（方案 A）** — MediaCrawler 产出：
+  - `playback_mode` + embed/临时可播 URL（**不**上传视频到 Storage）
+  - `content_text` = 文案/简介 + 已有字幕
+  - `summary` = 基于 `content_text` 的 AI 摘要（Phase 2 可 stub，Phase 3 接 DeepSeek）
+  - 无 ASR、无评论；预览窗点击播放
+- [ ] **Step 5: UX** — 乐观 `processing` 行；无默认 `#待整理`；类型标签按平台/文件类型；列表可滚且隐藏滚动条；视频预览 = 播放器 + 摘要 + 正文
+- [ ] **Step 6: 验收** — 公开博客 URL → `ready`；需登录墙的长尾站 → 可 `link_only`；主流平台未连接仍可保存链接；抖音/B 站有文案时可 `ready` 且预览能播或降级「在原站打开」
+
+---
+
 ## Plan Self-Review
 
-- Roadmap §3.1 items 1–7 each map to Tasks 1–6; verification = Task 7.
-- Explicit non-goals (RAG, generate, sync, deploy) not scheduled.
+- Roadmap §3.1 items 1–7 each map to Tasks 1–6; verification = Task 7; parse hardening = Task 8.
+- Explicit non-goals (RAG, generate, sync, deploy, ASR, 长尾站强制注册) not scheduled.
 - Spec table names used (`note_inspiration_cards`, not demo-only names).
 - Embeddings enabled as extension only; no Phase 3 indexing required here.
+- Link architecture: MediaCrawler（主流）+ Crawl4AI/Readability（其他网页）已写入 Spec §12。

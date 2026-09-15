@@ -69,6 +69,11 @@ vi.mock('../../lib/api/knowledge.js', () => {
   return {
     listKnowledgeBases: async () => demoKnowledgeBases,
     createKnowledgeBase: async ({ name }) => ({ id: `base-${name}`, name, type: 'custom' }),
+    filterKnowledgeBaseNames: (names, query = '') => {
+      const needle = String(query || '').trim().toLowerCase();
+      if (!needle) return names;
+      return names.filter((name) => String(name).toLowerCase().includes(needle));
+    },
   };
 });
 
