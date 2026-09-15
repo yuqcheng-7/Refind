@@ -6,6 +6,10 @@ import { extractDocumentText, OFFICE_PARSEABLE_TYPES } from './extractDocumentTe
 import { extractLinkContent, LINK_BROWSER_UA } from './extractLinkContent.js';
 import { invokeEmbedMaterial } from './embedHook.js';
 import { chunkText } from '../_shared/chunkText.js';
+import { deepseekChat } from '../_shared/ai.ts';
+import { enrichMaterialSummaryAndTags } from './enrichMaterial.js';
+import { shouldReplaceTags } from './enrichment.js';
+import { replaceMaterialTagRelations } from './applyTags.js';
 
 const documentDeps = {
   JSZip,
@@ -193,6 +197,10 @@ Deno.serve(async (req) => {
     return response({ ok: true, status: material.status });
   }
 
+  const wasReady = material.status === 'ready';
+  const priorSummary = material.summary;
+  const priorContentText = material.content_text;
+
   try {
     const { error: processingError } = await admin.from('materials').update({
       status: 'processing',
@@ -284,6 +292,18 @@ Deno.serve(async (req) => {
     }
     if (!text) {
       if (material.source_url) {
+        if (wasReady) {
+          const { error: restoreError } = await admin.from('materials').update({
+            status: 'ready',
+            summary: priorSummary,
+            content_text: priorContentText,
+            last_parse_error: '未提取到可用正文（已保留原 ready 结果）',
+            platform_code: (linkFields.platform_code as string) || material.platform_code,
+            author_name: (linkFields.author_name as string) || material.author_name,
+          }).eq('id', material.id);
+          if (restoreError) throw restoreError;
+          return response({ ok: true, status: 'ready', preserved: true });
+        }
         const hasPartial = Boolean(title && title !== material.source_url);
         const { error: linkOnlyError } = await admin.from('materials').update({
           title: title || material.source_url,
@@ -318,11 +338,27 @@ Deno.serve(async (req) => {
     if (chunksError) throw chunksError;
 
     const summarySeed = typeof linkFields.summary_seed === 'string' ? linkFields.summary_seed : '';
+    const stubSummary = buildSummary(summarySeed, text, typeof title === 'string' ? title : '');
+    let enrichment: { summary: string | null; tags: string[] | null; usedAi: boolean } = {
+      summary: null,
+      tags: null,
+      usedAi: false,
+    };
+    try {
+      enrichment = await enrichMaterialSummaryAndTags({
+        deepseekChat,
+        title: typeof title === 'string' ? title : '',
+        platform: (linkFields.platform_code as string) || material.platform_code || 'web',
+        contentText: text,
+      });
+    } catch (aiError) {
+      console.error('enrichment failed', aiError);
+    }
     const readyPatch: Record<string, unknown> = {
       title: title || material.file_name || material.source_url,
       content_text: text,
       content_excerpt: text.slice(0, 240),
-      summary: buildSummary(summarySeed, text, typeof title === 'string' ? title : ''),
+      summary: enrichment.summary || stubSummary,
       status: 'ready',
       last_parse_error: null,
       parse_attempt_count: 0,
@@ -339,6 +375,22 @@ Deno.serve(async (req) => {
     }
     const { error: updateError } = await admin.from('materials').update(readyPatch).eq('id', material.id);
     if (updateError) throw updateError;
+
+    if (
+      shouldReplaceTags({ tagsUserEdited: Boolean(material.tags_user_edited) })
+      && enrichment.tags
+      && enrichment.tags.length > 0
+    ) {
+      try {
+        await replaceMaterialTagRelations(admin, {
+          userId: material.user_id,
+          materialId: material.id,
+          tagNames: enrichment.tags,
+        });
+      } catch (tagError) {
+        console.error('apply tags failed', tagError);
+      }
+    }
     const embedPromise = invokeEmbedMaterial({
       supabaseUrl: Deno.env.get('SUPABASE_URL') || '',
       serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
@@ -353,9 +405,19 @@ Deno.serve(async (req) => {
     }
     return response({ ok: true, status: 'ready', quality: linkFields.quality || 'full' });
   } catch (error) {
+    const message = error instanceof Error ? error.message : '解析失败';
+    if (wasReady) {
+      const { error: restoreError } = await admin.from('materials').update({
+        status: 'ready',
+        summary: priorSummary,
+        content_text: priorContentText,
+        last_parse_error: `${message}（已保留原 ready 结果）`,
+      }).eq('id', material.id);
+      if (restoreError) return response({ error: restoreError.message }, 500);
+      return response({ ok: false, status: 'ready', preserved: true, error: message });
+    }
     const attempts = material.parse_attempt_count + 1;
     const status = attempts >= 3 ? 'link_only' : 'failed';
-    const message = error instanceof Error ? error.message : '解析失败';
     const { error: updateError } = await admin.from('materials').update({
       parse_attempt_count: attempts,
       last_parse_error: message,
