@@ -753,6 +753,26 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .material-context-menu button.is-checked{color:#1f2b38;font-weight:650}
 .material-context-menu button.is-danger,.note-context-menu button.is-danger{color:#a54b4b}
 .material-context-menu button.is-danger:hover{background:#f8efed}
+.material-simple-dialog{width:min(380px,calc(100vw - 32px));display:grid;gap:16px;padding:22px;border:1px solid rgba(255,255,255,.8);border-radius:18px;background:#fff;box-shadow:0 24px 60px rgba(28,39,53,.2)}
+.material-simple-dialog header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.material-simple-dialog h2{margin:0;color:#1f2b38;font-size:18px;letter-spacing:-.03em}
+.material-simple-dialog header>button{width:32px;height:32px;display:grid;place-items:center;border:0;border-radius:8px;color:#607083;background:transparent}
+.material-simple-dialog header>button:hover{background:#f3f5f7}
+.material-simple-dialog label{display:grid;gap:8px;color:#607083;font-size:12.5px}
+.material-simple-dialog input{height:40px;padding:0 12px;border:1px solid rgba(151,164,181,.34);border-radius:10px;color:#1f2b38;background:#fbfcfd;font:inherit}
+.material-simple-dialog footer{display:flex;justify-content:flex-end;gap:8px}
+.material-simple-dialog footer button{height:36px;padding:0 14px;border:1px solid rgba(151,164,181,.28);border-radius:10px;background:#fff;color:#405164;font:inherit}
+.material-simple-dialog footer button[type="submit"]{border-color:#172432;background:#172432;color:#fff}
+.material-simple-dialog footer button:disabled{opacity:.6;cursor:wait}
+.material-tag-editor{display:grid;gap:12px}
+.material-tag-editor__chips{display:flex;flex-wrap:wrap;gap:6px;min-height:28px}
+.material-tag-chip{height:28px;display:inline-flex;align-items:center;gap:6px;padding:0 10px;border:1px solid rgba(151,164,181,.28);border-radius:999px;background:#f5f7f9;color:#314152;font-size:12px}
+.material-tag-chip:hover{background:#eef2f6}
+.material-move-list{display:grid;gap:4px;max-height:min(320px,50vh);overflow:auto}
+.material-move-list button{min-height:36px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:#314152;font:inherit;text-align:left}
+.material-move-list button:hover:not(:disabled){background:#f3f5f7}
+.material-move-list button.is-current{color:#1f2b38;font-weight:650}
+.material-move-list button:disabled{opacity:.72;cursor:default}
 .material-ingest-hint{margin:4px 8px 2px;color:#8a96a4;font-size:10px;line-height:1.4}
 .material-preview-summary-body{color:#445667;font-size:15px;line-height:1.8;font-weight:500}
 
@@ -768,6 +788,7 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .material-preview-status.is-failed{background:#f8ece8;color:#a05444}
 .material-preview-status.is-link_only{background:#f7f1e4;color:#8a7348}
 .material-preview-status.is-processing{background:#eef2f6;color:#6f7f91}
+.material-preview-error{margin:18px 0 0;padding:10px 12px;border-radius:10px;background:#f8ecec;color:#9a4040;font-size:13px;line-height:1.45}
 
 /* Knowledge toolbar: one shared control size so search/filter/add stay aligned */
 .knowledge-canvas .material-tools{

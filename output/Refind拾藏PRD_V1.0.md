@@ -654,7 +654,7 @@ PRD「V1.0 产品闭环」= **阶段二 + 阶段三**。
 
 - 开发：浏览器 → 本机 `platform-parser` 预取 → Edge 落库；已连接平台可带 `use_saved_session`。
 - 生产：前端静态托管（Vercel 或 Cloudflare Pages）+ **自定义域名**（`*.vercel.app` 国内常不可达，可用 Cloudflare 等代理自有域名）；数据面 Supabase 东京；解析服务单独托管。
-- AI 摘要仍为 stub，真实 DeepSeek 属阶段三（C）。
+- **AI 摘要与标签已落地（阶段三 · C）：** 解析成功时由 DeepSeek 生成简明摘要与约 3 个资料标签（非正文截断 stub）；AI 失败时资料仍可 `ready` 并回退截断摘要；用户手改标签后写入 `tags_user_edited`，重新解析重写摘要但保留手改标签；首页/知识库 `#` 筛选使用库内真实标签（UUID `tagFilters`）。
 
 ## 9.9 会话历史分面与持久化（已落地 · 2026-09-15）
 

@@ -9,13 +9,16 @@ import { HomeConversation, HomeShareBar } from './features/home/HomeConversation
 import { KbConversation } from './features/knowledge/KbConversation.jsx';
 import { HomeHistoryCard } from './features/home/HomeHistoryCard.jsx';
 import { MaterialIngest } from './features/knowledge/MaterialIngest.jsx';
+import { EditMaterialTagsDialog } from './features/knowledge/EditMaterialTagsDialog.jsx';
+import { MoveMaterialDialog } from './features/knowledge/MoveMaterialDialog.jsx';
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
 import { getMaterialPreviewUrl } from './features/knowledge/materialDemo.js';
 import { useDismissable } from './hooks/useDismissable.js';
 import { AuthScreen } from './features/auth/AuthScreen.jsx';
 import { deleteAccount, getSession, signOut } from './lib/api/auth.js';
 import { createKnowledgeBase, filterKnowledgeBaseNames, listKnowledgeBases } from './lib/api/knowledge.js';
-import { createMaterialStub, deleteMaterial, getMaterialById, listMaterials, moveMaterial, replaceMaterialTag, formatMaterialTitle, formatMaterialTypeLabel, inferPlatformFromUrl } from './lib/api/materials.js';
+import { createMaterialStub, deleteMaterial, getMaterialById, listMaterials, listMaterialTags, moveMaterial, replaceMaterialTags, formatMaterialTitle, formatMaterialTypeLabel, inferPlatformFromUrl } from './lib/api/materials.js';
+import { resolveTagFilterIds } from './lib/api/tagFilters.js';
 import { isHttpUrlLike } from './lib/extractUrlFromPaste.js';
 import { inferMaterialInputType, parseAndPollMaterial, uploadMaterialFile } from './lib/api/ingest.js';
 import {
@@ -49,6 +52,7 @@ const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎'
 const sortOptions = ['从新到旧', '从旧到新', 'A-Z', 'Z-A'];
 const initialHomeScope = defaultHomeScope;
 const platformCodes = { 小红书: 'xhs', 抖音: 'douyin', 微信: 'wechat_mp', 知乎: 'zhihu', 'B 站': 'bilibili', 其他: 'other' };
+
 function IconHome({ size = 18, strokeWidth = 1.5, ...props }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" {...props}>
@@ -107,18 +111,19 @@ function Citation({ label }) {
 function KnowledgeAnswerMark() {
   return <svg className="knowledge-answer-mark" viewBox="0 0 48 48" aria-hidden="true"><defs><linearGradient id="mark-light" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#e2e5e9" /><stop offset="1" stopColor="#c8cdd4" /></linearGradient><linearGradient id="mark-dark" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#9ca4ae" /><stop offset="1" stopColor="#707985" /></linearGradient></defs><path d="M8.1 5.4c4.4-1.1 12.1-2.1 16.1 1.2 4.2 3.4 2.9 10.2-.8 14.5L15 30.6c-3.8 4.2-11.2 2-12.2-3.5C1.7 21.5 3.6 7.9 8.1 5.4Z" fill="url(#mark-light)" /><path d="M34.4 18.7c4.5-.8 9.4 3 10 7.7.6 4.6-1.1 11.4-4.2 14.5-3.1 3.2-12.9 3.1-17.1 2.2-4.2-.9-6.1-6.6-3.4-10.2l8.9-11.6c1.4-1.8 3.5-2.3 5.8-2.6Z" fill="url(#mark-dark)" /></svg>;
 }
-function Composer({ base, bases, onBase, onSubmit, compact = false }) {
+function Composer({ base, bases, availableTags = [], onBase, onSubmit, compact = false }) {
   const [prompt, setPrompt] = useState('');
   const [menu, setMenu] = useState(false);
   const [thinkingMode, setThinkingMode] = useState('fast');
   const [modelMenu, setModelMenu] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
   const [tagQuery, setTagQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
   const baseMenuRef = useRef(null);
   const modelMenuRef = useRef(null);
   const tagMenuRef = useRef(null);
-  const tags = ['增长策略', '用户研究', '产品灵感'];
-  const filteredTags = tags.filter((item) => !tagQuery || item.includes(tagQuery));
+  const tagNames = availableTags.map((tag) => tag.name);
+  const filteredTags = tagNames.filter((item) => !tagQuery || item.includes(tagQuery));
   const selectedModel = thinkingMode === 'deep' ? 'DS深度' : 'DS快速';
   const syncHashMenu = (value) => {
     if (!compact) return;
@@ -133,6 +138,9 @@ function Composer({ base, bases, onBase, onSubmit, compact = false }) {
   };
   const insertTag = (tag) => {
     setPrompt((value) => value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `));
+    setSelectedTags((current) => (
+      current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag]
+    ));
     setTagMenu(false);
     setTagQuery('');
   };
@@ -142,8 +150,9 @@ function Composer({ base, bases, onBase, onSubmit, compact = false }) {
   const send = (event) => {
     event.preventDefault();
     if (!prompt.trim()) return;
-    onSubmit({ prompt, thinkingMode });
+    onSubmit({ prompt, thinkingMode, selectedTags: [...selectedTags] });
     setPrompt('');
+    setSelectedTags([]);
     setMenu(false);
     setModelMenu(false);
     setTagMenu(false);
@@ -169,11 +178,14 @@ function Composer({ base, bases, onBase, onSubmit, compact = false }) {
       />
       {compact && tagMenu && (
         <div className="composer-menu composer-tag-suggest" role="listbox" aria-label="选择标签">
-          {(filteredTags.length ? filteredTags : tags).map((item) => (
+          {filteredTags.length ? filteredTags.map((item) => (
             <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
               <span>#{item}</span>
+              {selectedTags.includes(item) && <Check size={15} />}
             </button>
-          ))}
+          )) : (
+            <div className="composer-tag-suggest__empty">暂无标签</div>
+          )}
         </div>
       )}
     </div>
@@ -267,8 +279,13 @@ export function App() {
     }
   }, [homeScope.selectedBases, homeScope.selectedTags]);
   const [knowledgeMaterials, setKnowledgeMaterials] = useState([]);
+  const [homeTagOptions, setHomeTagOptions] = useState([]);
+  const [kbTagOptions, setKbTagOptions] = useState([]);
   const [hoveredMaterialId, setHoveredMaterialId] = useState(null);
   const [materialMenu, setMaterialMenu] = useState(null);
+  const [editTagsMaterial, setEditTagsMaterial] = useState(null);
+  const [editTagsSaving, setEditTagsSaving] = useState(false);
+  const [moveMaterialTarget, setMoveMaterialTarget] = useState(null);
   const materialMenuRef = useRef(null);
   const bases = useMemo(() => knowledgeBases.map((item) => item.name), [knowledgeBases]);
   const visibleBases = useMemo(() => filterKnowledgeBaseNames(bases, kbQuery), [bases, kbQuery]);
@@ -409,6 +426,28 @@ export function App() {
       });
     return () => { active = false; };
   }, [session, selectedKnowledgeBase, query, source]);
+  useEffect(() => {
+    if (!session) {
+      setHomeTagOptions([]);
+      return undefined;
+    }
+    let active = true;
+    listMaterialTags()
+      .then((tags) => { if (active) setHomeTagOptions(tags); })
+      .catch(() => { if (active) setHomeTagOptions([]); });
+    return () => { active = false; };
+  }, [session, knowledgeMaterials]);
+  useEffect(() => {
+    if (!selectedKnowledgeBase?.id) {
+      setKbTagOptions([]);
+      return undefined;
+    }
+    let active = true;
+    listMaterialTags({ knowledgeBaseId: selectedKnowledgeBase.id })
+      .then((tags) => { if (active) setKbTagOptions(tags); })
+      .catch(() => { if (active) setKbTagOptions([]); });
+    return () => { active = false; };
+  }, [selectedKnowledgeBase?.id, knowledgeMaterials]);
   useDismissable({ open: filterOpen, onClose: () => setFilterOpen(false), rootRef: filterRef });
   useDismissable({
     open: historyOpen && !kbHistoryMenu,
@@ -763,7 +802,7 @@ export function App() {
         thinkingMode: request.thinkingMode || 'fast',
         onlineEnabled: scope.online,
         knowledgeBaseIds,
-        tagFilters: [],
+        tagFilters: resolveTagFilterIds(scope.tags, homeTagOptions),
         surface,
         conversationId: homeConversationId,
         selectedBases: scope.bases,
@@ -788,7 +827,8 @@ export function App() {
   const submitKbQuestion = async (request) => {
     const question = typeof request === 'string' ? request : request.prompt;
     const thinkingMode = typeof request === 'string' ? 'fast' : request.thinkingMode;
-    const scope = { bases: [base], tags: [], mode: 'rag', online: false };
+    const selectedTags = typeof request === 'string' ? [] : (request.selectedTags || []);
+    const scope = { bases: [base], tags: selectedTags, mode: 'rag', online: false };
     const pendingId = `pending-kb-${Date.now()}-${crypto.randomUUID()}`;
     const pendingMessage = {
       id: pendingId,
@@ -796,7 +836,7 @@ export function App() {
       mode: scope.mode,
       online: scope.online,
       selectedBases: scope.bases,
-      selectedTags: scope.tags,
+      selectedTags: [...scope.tags],
       citations: [],
     };
     setKbMessages((all) => [...all, pendingMessage]);
@@ -806,11 +846,11 @@ export function App() {
         thinkingMode: thinkingMode || 'fast',
         onlineEnabled: false,
         knowledgeBaseIds: selectedKnowledgeBase ? [selectedKnowledgeBase.id] : [],
-        tagFilters: [],
+        tagFilters: resolveTagFilterIds(selectedTags, kbTagOptions),
         surface: 'knowledge',
         conversationId: kbConversationId,
         selectedBases: scope.bases,
-        selectedTags: [],
+        selectedTags,
       });
       setKbMessages((all) => all.map((item) => item.id === pendingId ? message : item));
       if (message.conversationId) setKbConversationId(message.conversationId);
@@ -959,21 +999,38 @@ export function App() {
       // Preview page will fetch from API on its own.
     }
   };
-  const editMaterialTag = async (material) => {
-    const nextTag = window.prompt('编辑标签', material.tag || '');
-    if (nextTag == null) return;
+  const reparseMaterial = async (material) => {
+    setMaterialMenu(null);
     try {
-      await replaceMaterialTag(material.id, nextTag);
+      await parseAndPollMaterial(material.id, {
+        force: true,
+        sourceUrl: material.url || '',
+      });
       await refreshMaterials();
+      say('已重新解析。');
+    } catch (error) {
+      say(error instanceof Error ? error.message : '重新解析失败，请稍后重试。');
+    }
+  };
+  const saveMaterialTags = async (tags) => {
+    if (!editTagsMaterial) return;
+    setEditTagsSaving(true);
+    try {
+      await replaceMaterialTags(editTagsMaterial.id, tags);
+      await refreshMaterials();
+      setEditTagsMaterial(null);
       say('标签已更新。');
     } catch {
       say('更新标签失败，请稍后重试。');
+    } finally {
+      setEditTagsSaving(false);
     }
   };
   const moveMaterialToBase = async (material, targetBase) => {
     try {
       await moveMaterial(material.id, targetBase.id);
       await refreshMaterials();
+      setMoveMaterialTarget(null);
       say(`已移动到「${targetBase.name}」。`);
     } catch {
       say('移动资料失败，请稍后重试。');
@@ -1222,11 +1279,11 @@ export function App() {
             />
             {homeShareMode
               ? <HomeShareBar selectedCount={homeShareSelected.length} onCopyLink={copyHomeShareLink} onCancel={exitHomeShare} />
-              : <HomeComposer bases={bases} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
+              : <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
           </div>
         </>
       )}
-      {!showHomeChat && <HomeComposer bases={bases} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
+      {!showHomeChat && <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
       {notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
     {!settingsOpen && activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} notice={say} onDeleteCard={async (cardId) => {
@@ -1315,29 +1372,10 @@ export function App() {
                   ref={materialMenuRef}
                   style={{ left: materialMenu.x, top: materialMenu.y }}
                 >
-                  <p className="material-context-menu__title" title={menuMaterial.title}>{menuMaterial.title}</p>
-                  <button type="button" role="menuitem" onClick={() => { setMaterialMenu(null); editMaterialTag(menuMaterial); }}>编辑标签</button>
-                  <p className="material-context-menu__label">移动到</p>
-                  {knowledgeBases.map((target) => {
-                    const isCurrent = target.id === menuMaterial.knowledgeBaseId;
-                    return (
-                      <button
-                        key={target.id}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={isCurrent}
-                        className={isCurrent ? 'is-checked' : ''}
-                        onClick={() => {
-                          setMaterialMenu(null);
-                          if (!isCurrent) moveMaterialToBase(menuMaterial, target);
-                        }}
-                      >
-                        <span>{target.name}</span>
-                        {isCurrent && <Check size={14} strokeWidth={1.9} />}
-                      </button>
-                    );
-                  })}
-                  <button type="button" role="menuitem" className="is-danger" onClick={() => { deleteListedMaterial(menuMaterial); }}>删除</button>
+                  <button type="button" role="menuitem" onClick={() => { reparseMaterial(menuMaterial); }}>重新解析</button>
+                  <button type="button" role="menuitem" onClick={() => { setMaterialMenu(null); setEditTagsMaterial(menuMaterial); }}>编辑标签</button>
+                  <button type="button" role="menuitem" onClick={() => { setMaterialMenu(null); setMoveMaterialTarget(menuMaterial); }}>移动到</button>
+                  <button type="button" role="menuitem" className="is-danger" onClick={() => { deleteListedMaterial(menuMaterial); }}>删除资料</button>
                 </div>
               );
             })()}
@@ -1470,10 +1508,24 @@ export function App() {
           </div>
           {kbShareMode
             ? <HomeShareBar selectedCount={kbShareSelected.length} onCopyLink={copyKbShareLink} onCancel={exitKbShare} />
-            : <Composer compact base={base} bases={bases} onBase={setBase} onSubmit={submitKbQuestion} />}
+            : <Composer key={selectedKnowledgeBase?.id || 'kb'} compact base={base} bases={bases} availableTags={kbTagOptions} onBase={setBase} onSubmit={submitKbQuestion} />}
         </aside>
       </div>{notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
     {showCreate && <div className="modal-layer"><form className="create-modal" onSubmit={createBase}><button className="modal-close" type="button" onClick={() => setShowCreate(false)}><X size={17} /></button><Sparkles size={22} /><h2>新建知识库</h2><p>创建一个主题空间，用来归集和提问。</p><label>知识库名称<input value={newBase} autoFocus onChange={(event) => setNewBase(event.target.value)} placeholder="例如：产品与设计资料" /></label><div><button type="button" onClick={() => setShowCreate(false)}>取消</button><button type="submit">创建</button></div></form></div>}
+    <EditMaterialTagsDialog
+      open={Boolean(editTagsMaterial)}
+      initialTags={editTagsMaterial?.tags || (editTagsMaterial?.tag ? [editTagsMaterial.tag] : [])}
+      onSave={saveMaterialTags}
+      onClose={() => { if (!editTagsSaving) setEditTagsMaterial(null); }}
+      saving={editTagsSaving}
+    />
+    <MoveMaterialDialog
+      open={Boolean(moveMaterialTarget)}
+      bases={knowledgeBases}
+      currentBaseId={moveMaterialTarget?.knowledgeBaseId}
+      onPick={(targetBase) => moveMaterialToBase(moveMaterialTarget, targetBase)}
+      onClose={() => setMoveMaterialTarget(null)}
+    />
   </main>;
 }

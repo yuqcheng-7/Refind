@@ -705,7 +705,7 @@ Web 客户端
 
 - UI + `platform_connections` 读写已落地；连接写入**演示态**会话标记，**非**真实平台登录；
 - 已连接时解析预取可带 `use_saved_session`（优先本机 Cookie）；
-- 真实扫码登录（B）与托管解析服务、DeepSeek 真摘要（C）见路线图 §1.1 / 阶段三。
+- 真实扫码登录（B）与托管解析服务见路线图 §1.1 / 阶段三；**DeepSeek 真摘要与标签（C）已落地**（见 §8.2）。
 # 6. 服务端接口规格
 
 以下为逻辑接口，可按 REST、RPC 或 Edge Function 实现；请求均默认包含认证上下文。
@@ -859,11 +859,13 @@ disconnected → connecting → connected → expired → reconnecting → conne
 
 ## 8.2 AI 结构化
 
+> **已落地（2026-09-15）：** `parse-material` 在正文可用且即将标 `ready` 时同步调用 DeepSeek enrichment（摘要 + 约 3 标签）；失败不阻断入库，摘要回退正文截断；`materials.tags_user_edited` 为真时重新解析不覆盖标签关系，摘要每次重写。本切片不做历史资料批量回填。
+
 - 生成模型：DeepSeek Chat；
 - 输入：已解析的标题、内容主体、来源平台与可用元数据；
 - 输出：简明摘要和资料标签；
-- 用户对摘要和标签的编辑优先于 AI 结果；
-- AI 生成摘要或标签失败不删除已入库资料；资料保持失败/可重试状态，成功解析后再进入索引；
+- 用户对摘要和标签的编辑优先于 AI 结果；手改标签置 `tags_user_edited=true`；
+- AI 生成摘要或标签失败不删除已入库资料；资料可保持 `ready`（截断摘要 / 标签可空），用户可「重新解析」；
 - 未得到主体文本时不可生成向量索引。
 
 ## 8.3 向量检索

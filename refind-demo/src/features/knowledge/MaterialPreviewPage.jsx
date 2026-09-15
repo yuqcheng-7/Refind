@@ -65,7 +65,13 @@ function VideoPlayer({ material }) {
   );
 }
 
-export function MaterialPreviewPage({ material, loading = false, error = '' }) {
+export function MaterialPreviewPage({
+  material,
+  loading = false,
+  error = '',
+  onReparse,
+  reparsing = false,
+}) {
   if (loading && !material) {
     return (
       <main className="material-preview-page material-preview-empty" aria-busy="true">
@@ -142,11 +148,26 @@ export function MaterialPreviewPage({ material, loading = false, error = '' }) {
             </div>
           ) : null}
         </dl>
-        {isLink ? (
-          <a className="material-original-link" href={material.url} target="_blank" rel="noreferrer">
-            在原站打开 <ExternalLink size={14} />
-          </a>
+        {error ? (
+          <p className="material-preview-error" role="alert">{error}</p>
         ) : null}
+        <div className="material-preview-tools">
+          {typeof onReparse === 'function' ? (
+            <button
+              type="button"
+              className="material-original-link"
+              onClick={onReparse}
+              disabled={reparsing}
+            >
+              重新解析
+            </button>
+          ) : null}
+          {isLink ? (
+            <a className="material-original-link" href={material.url} target="_blank" rel="noreferrer">
+              在原站打开 <ExternalLink size={14} />
+            </a>
+          ) : null}
+        </div>
       </header>
 
       <section className="material-preview-summary" aria-labelledby="preview-summary-title">

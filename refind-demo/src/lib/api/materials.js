@@ -113,6 +113,7 @@ export function mapMaterial(row) {
     platform,
     tag: tags[0] || '',
     tags,
+    tagsUserEdited: Boolean(row.tags_user_edited),
     time: formatRelativeDateTime(row.created_at),
     summary,
     body,
@@ -210,28 +211,57 @@ export async function moveMaterial(id, knowledgeBaseId) {
   return mapMaterial(data);
 }
 
-export async function replaceMaterialTag(materialId, tagName) {
+export async function listMaterialTags({ knowledgeBaseId } = {}) {
   const userId = await getCurrentUserId();
-  const name = String(tagName || '').trim();
-  if (!name) throw new Error('标签不能为空');
-
-  const { data: existingTags, error: lookupError } = await supabase
-    .from('material_tags')
-    .select('id, name')
+  let query = supabase
+    .from('materials')
+    .select('material_tag_relations(material_tags(id, name))')
     .eq('user_id', userId)
-    .eq('name', name)
-    .limit(1);
-  if (lookupError) throw lookupError;
+    .neq('status', 'deleted');
+  if (knowledgeBaseId) {
+    query = query.eq('knowledge_base_id', knowledgeBaseId);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  const map = new Map();
+  for (const row of data || []) {
+    for (const rel of row.material_tag_relations || []) {
+      const tag = rel.material_tags;
+      if (tag?.id && tag?.name) map.set(tag.id, { id: tag.id, name: tag.name });
+    }
+  }
+  return [...map.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+}
 
-  let tagId = existingTags?.[0]?.id;
-  if (!tagId) {
-    const { data: created, error: createError } = await supabase
+export async function replaceMaterialTags(materialId, tagNames) {
+  const userId = await getCurrentUserId();
+  const names = [...new Set(
+    (tagNames || [])
+      .map((n) => String(n || '').trim().replace(/^#+/, '').trim())
+      .filter(Boolean),
+  )];
+
+  const tagIds = [];
+  for (const name of names) {
+    const { data: existingTags, error: lookupError } = await supabase
       .from('material_tags')
-      .insert({ user_id: userId, name })
-      .select('id')
-      .single();
-    if (createError) throw createError;
-    tagId = created.id;
+      .select('id, name')
+      .eq('user_id', userId)
+      .eq('name', name)
+      .limit(1);
+    if (lookupError) throw lookupError;
+
+    let tagId = existingTags?.[0]?.id;
+    if (!tagId) {
+      const { data: created, error: createError } = await supabase
+        .from('material_tags')
+        .insert({ user_id: userId, name })
+        .select('id')
+        .single();
+      if (createError) throw createError;
+      tagId = created.id;
+    }
+    tagIds.push(tagId);
   }
 
   const { error: clearError } = await supabase
@@ -240,10 +270,18 @@ export async function replaceMaterialTag(materialId, tagName) {
     .eq('material_id', materialId);
   if (clearError) throw clearError;
 
-  const { error: linkError } = await supabase
-    .from('material_tag_relations')
-    .insert({ material_id: materialId, tag_id: tagId });
-  if (linkError) throw linkError;
+  if (tagIds.length) {
+    const { error: linkError } = await supabase
+      .from('material_tag_relations')
+      .insert(tagIds.map((tag_id) => ({ material_id: materialId, tag_id })));
+    if (linkError) throw linkError;
+  }
+
+  const { error: flagError } = await supabase
+    .from('materials')
+    .update({ tags_user_edited: true })
+    .eq('id', materialId);
+  if (flagError) throw flagError;
 
   return getMaterialById(materialId);
 }

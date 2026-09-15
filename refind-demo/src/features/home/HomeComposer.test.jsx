@@ -99,15 +99,47 @@ vi.mock('../../lib/api/knowledge.js', () => {
   };
 });
 
+const { listMaterialTags } = vi.hoisted(() => ({
+  listMaterialTags: vi.fn(async () => [
+    { id: 'tag-growth', name: '增长策略' },
+    { id: 'tag-research', name: '用户研究' },
+    { id: 'tag-product', name: '产品灵感' },
+  ]),
+}));
+
+vi.mock('../../lib/api/materials.js', () => ({
+  listMaterials: async () => [],
+  listMaterialTags,
+  createMaterialStub: async () => null,
+  deleteMaterial: async () => undefined,
+  getMaterialById: async () => null,
+  moveMaterial: async () => null,
+  replaceMaterialTags: async () => [],
+  formatMaterialTitle: (item) => item?.title || '',
+  formatMaterialTypeLabel: () => '',
+  inferPlatformFromUrl: () => 'other',
+}));
+
 import { App } from '../../App.jsx';
 
 const bases = ['默认知识库', '增长与运营案例', '产品与设计资料'];
+const demoAvailableTags = [
+  { id: 'tag-growth', name: '增长策略' },
+  { id: 'tag-research', name: '用户研究' },
+  { id: 'tag-product', name: '产品灵感' },
+];
 const homePlaceholder = '请输入内容进行提问，输入 # 可选择标签';
 
 afterEach(() => {
   cleanup();
   sendChatMessage.mockClear();
   conversationStore.homeItems = [];
+  listMaterialTags.mockClear();
+  listMaterialTags.mockResolvedValue([
+    { id: 'tag-growth', name: '增长策略' },
+    { id: 'tag-research', name: '用户研究' },
+    { id: 'tag-product', name: '产品灵感' },
+  ]);
 });
 
 describe('HomeComposer', () => {
@@ -143,8 +175,8 @@ describe('HomeComposer', () => {
     expect(screen.getByRole('button', { name: '选择知识库' })).toHaveTextContent('增长与运营案例');
   });
 
-  it('shows multi-base label and opens hash tag suggestions', async () => {
-    render(<HomeComposer bases={bases} onSubmit={vi.fn()} />);
+  it('shows multi-base label and opens hash tag suggestions from availableTags', async () => {
+    render(<HomeComposer bases={bases} availableTags={[{ id: '1', name: '增长策略' }]} onSubmit={vi.fn()} />);
 
     await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
     await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
@@ -159,9 +191,18 @@ describe('HomeComposer', () => {
     expect(screen.getByPlaceholderText(homePlaceholder)).toHaveValue('#增长策略 ');
   });
 
+  it('shows 暂无标签 when availableTags is empty instead of demo names', async () => {
+    render(<HomeComposer bases={bases} availableTags={[]} onSubmit={vi.fn()} />);
+
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
+    expect(screen.getByRole('listbox', { name: '选择标签' })).toBeVisible();
+    expect(screen.getByText('暂无标签')).toBeVisible();
+    expect(screen.queryByRole('option', { name: '#增长策略' })).not.toBeInTheDocument();
+  });
+
   it('dismisses open scope menus on outside pointerdown and Escape', async () => {
     const user = userEvent.setup();
-    render(<><HomeComposer bases={bases} onSubmit={vi.fn()} /><button type="button">页面其他位置</button></>);
+    render(<><HomeComposer bases={bases} availableTags={demoAvailableTags} onSubmit={vi.fn()} /><button type="button">页面其他位置</button></>);
 
     await user.click(screen.getByRole('button', { name: '选择知识库' }));
     expect(screen.getByRole('listbox', { name: '知识库选择' })).toBeVisible();
@@ -246,6 +287,58 @@ describe('HomeComposer', () => {
       onlineEnabled: false,
       knowledgeBaseIds: ['base-default'],
       tagFilters: [],
+      surface: 'knowledge',
+    }));
+  });
+
+  it('resolves selected tag names to tagFilter ids when sending home chat', async () => {
+    render(<App />);
+
+    await screen.findByPlaceholderText(homePlaceholder);
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
+    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
+    await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '带标签提问');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(await screen.findByText('API 回答：带标签提问')).toBeVisible();
+    expect(sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({
+      content: '带标签提问',
+      tagFilters: ['tag-product'],
+      selectedTags: ['产品灵感'],
+    }));
+  });
+
+  it('clears KB composer selectedTags after each send', async () => {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole('button', { name: '知识库' }));
+    const kbInput = await screen.findByPlaceholderText('基于当前知识库提问，输入 # 可选择标签');
+    await userEvent.type(kbInput, '#');
+    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
+    await userEvent.clear(kbInput);
+    await userEvent.type(kbInput, '第一次带标签');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(await screen.findByText('API 回答：第一次带标签')).toBeVisible();
+    expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '第一次带标签',
+      tagFilters: ['tag-product'],
+      selectedTags: ['产品灵感'],
+      surface: 'knowledge',
+    }));
+
+    await userEvent.type(
+      screen.getByPlaceholderText('基于当前知识库提问，输入 # 可选择标签'),
+      '第二次不带标签',
+    );
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(await screen.findByText('API 回答：第二次不带标签')).toBeVisible();
+    expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '第二次不带标签',
+      tagFilters: [],
+      selectedTags: [],
       surface: 'knowledge',
     }));
   });
@@ -417,7 +510,7 @@ describe('HomeComposer', () => {
     function Harness() {
       const [mounted, setMounted] = useState(true);
       const [scope, setScope] = useState({ online: true, selectedBases: [], selectedTags: [] });
-      return <><button type="button" onClick={() => setMounted((value) => !value)}>切换页面</button>{mounted && <HomeComposer bases={bases} onSubmit={vi.fn()} scope={scope} onScopeChange={setScope} />}</>;
+      return <><button type="button" onClick={() => setMounted((value) => !value)}>切换页面</button>{mounted && <HomeComposer bases={bases} availableTags={demoAvailableTags} onSubmit={vi.fn()} scope={scope} onScopeChange={setScope} />}</>;
     }
     render(<Harness />);
 
@@ -441,7 +534,7 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('option', { name: '产品与设计资料' }));
     fireEvent.pointerDown(document.body);
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(screen.getByRole('option', { name: '#产品灵感' }));
+    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '首个问题');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
@@ -458,7 +551,7 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
     fireEvent.pointerDown(document.body);
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(screen.getByRole('option', { name: '#产品灵感' }));
+    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '首个问题');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
@@ -466,7 +559,7 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
     fireEvent.pointerDown(document.body);
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(screen.getByRole('option', { name: '#产品灵感' }));
+    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '范围已清后的追问');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));

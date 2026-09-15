@@ -58,8 +58,15 @@ vi.mock('../../lib/api/materials.js', () => ({
     status: 'ready',
     createdAt: `2026-09-${String(10 - index).padStart(2, '0')}T00:00:00.000Z`,
   })),
+  listMaterialTags: async () => [],
   createMaterialStub: async () => null,
   deleteMaterial: async () => undefined,
+  getMaterialById: async () => null,
+  moveMaterial: async () => null,
+  replaceMaterialTags: async () => [],
+  formatMaterialTitle: (item) => item?.title || item?.fileName || '',
+  formatMaterialTypeLabel: () => '',
+  inferPlatformFromUrl: () => 'other',
 }));
 
 import { App } from '../../App.jsx';
@@ -140,5 +147,28 @@ describe('material previews', () => {
     expect(screen.getByText('本地上传')).toBeVisible();
     expect(screen.getByText('PDF')).toBeVisible();
     expect(screen.queryByRole('link', { name: '在原站打开' })).not.toBeInTheDocument();
+  });
+
+  it('exposes reparse action', async () => {
+    const onReparse = vi.fn();
+    const material = materialDemo.find((item) => item.kind === 'link' && item.platform === 'xhs');
+    render(<MaterialPreviewPage material={material} onReparse={onReparse} />);
+    await userEvent.click(screen.getByRole('button', { name: '重新解析' }));
+    expect(onReparse).toHaveBeenCalled();
+  });
+
+  it('shows reparse error when material is loaded', () => {
+    const onReparse = vi.fn();
+    const material = materialDemo.find((item) => item.kind === 'link' && item.platform === 'xhs');
+    render(
+      <MaterialPreviewPage
+        material={material}
+        error="重新解析失败"
+        onReparse={onReparse}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('重新解析失败');
+    expect(screen.getByRole('button', { name: '重新解析' })).toBeVisible();
   });
 });

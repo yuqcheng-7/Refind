@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import { ArrowUp, BookOpen, Check, ChevronDown, Globe2, WifiOff } from 'lucide-react';
 import { useDismissable } from '../../hooks/useDismissable.js';
 
-const tags = ['增长策略', '用户研究', '产品灵感'];
 export const defaultHomeScope = {
   thinkingMode: 'fast',
   online: false,
@@ -14,7 +13,7 @@ export function modelLabel(thinkingMode) {
   return thinkingMode === 'deep' ? 'DS深度' : 'DS快速';
 }
 
-export function HomeComposer({ bases, onSubmit, scope: controlledScope, onScopeChange }) {
+export function HomeComposer({ bases, availableTags = [], onSubmit, scope: controlledScope, onScopeChange }) {
   const [prompt, setPrompt] = useState('');
   const [localScope, setLocalScope] = useState(defaultHomeScope);
   const [baseMenu, setBaseMenu] = useState(false);
@@ -28,7 +27,8 @@ export function HomeComposer({ bases, onSubmit, scope: controlledScope, onScopeC
   const setScope = onScopeChange || setLocalScope;
   const { thinkingMode = 'fast', online, selectedBases, selectedTags } = scope;
   const hasScope = selectedBases.length > 0 || selectedTags.length > 0;
-  const filteredTags = tags.filter((item) => !tagQuery || item.includes(tagQuery));
+  const tagNames = availableTags.map((tag) => tag.name);
+  const filteredTags = tagNames.filter((item) => !tagQuery || item.includes(tagQuery));
   const selectedModel = modelLabel(thinkingMode);
   const toggle = (key, value) => setScope((current) => ({ ...current, [key]: current[key].includes(value) ? current[key].filter((item) => item !== value) : [...current[key], value] }));
   useDismissable({ open: baseMenu, onClose: () => setBaseMenu(false), rootRef: baseMenuRef });
@@ -104,12 +104,14 @@ export function HomeComposer({ bases, onSubmit, scope: controlledScope, onScopeC
         />
         {tagMenu && (
           <div className="composer-menu composer-tag-suggest" role="listbox" aria-label="选择标签">
-            {(filteredTags.length ? filteredTags : tags).map((item) => (
+            {filteredTags.length ? filteredTags.map((item) => (
               <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
                 <span>#{item}</span>
                 {selectedTags.includes(item) && <Check size={14} />}
               </button>
-            ))}
+            )) : (
+              <div className="composer-tag-suggest__empty">暂无标签</div>
+            )}
           </div>
         )}
       </div>

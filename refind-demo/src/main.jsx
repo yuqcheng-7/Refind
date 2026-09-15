@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.jsx";
 import { MaterialPreviewPage } from "./features/knowledge/MaterialPreviewPage.jsx";
 import { getMaterialIdFromHash, materialDemo } from "./features/knowledge/materialDemo.js";
+import { parseAndPollMaterial } from "./lib/api/ingest.js";
 import { getMaterialById } from "./lib/api/materials.js";
 import "./styles.css";
 
@@ -26,6 +27,28 @@ function RefindRoot() {
   });
   const [previewLoading, setPreviewLoading] = React.useState(() => Boolean(getMaterialIdFromHash()));
   const [previewError, setPreviewError] = React.useState('');
+  const [reparsing, setReparsing] = React.useState(false);
+
+  const onReparse = async () => {
+    if (!routeId || !previewMaterial) return;
+    setReparsing(true);
+    try {
+      await parseAndPollMaterial(routeId, {
+        force: true,
+        sourceUrl: previewMaterial.url || '',
+      });
+      const latest = await getMaterialById(routeId);
+      if (latest) {
+        setPreviewError('');
+        setPreviewMaterial(latest);
+        window.sessionStorage.setItem(`refind-material:${routeId}`, JSON.stringify(latest));
+      }
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : '重新解析失败');
+    } finally {
+      setReparsing(false);
+    }
+  };
 
   React.useEffect(() => {
     const updateRoute = () => setRouteId(getMaterialIdFromHash());
@@ -77,6 +100,8 @@ function RefindRoot() {
         material={previewMaterial}
         loading={previewLoading}
         error={previewError}
+        onReparse={onReparse}
+        reparsing={reparsing}
       />
     );
   }
