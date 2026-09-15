@@ -42,6 +42,11 @@ vi.mock('../../lib/api/knowledge.js', () => {
   return {
     listKnowledgeBases: async () => demoKnowledgeBases,
     createKnowledgeBase: async ({ name }) => ({ id: `base-${name}`, name, type: 'custom' }),
+    filterKnowledgeBaseNames: (names, query = '') => {
+      const needle = String(query || '').trim().toLowerCase();
+      if (!needle) return names;
+      return names.filter((name) => String(name).toLowerCase().includes(needle));
+    },
   };
 });
 
@@ -90,19 +95,50 @@ describe('material previews', () => {
   });
 
   it('offers an original-site action for link previews', () => {
-    const material = materialDemo.find((item) => item.kind === 'link');
+    const material = materialDemo.find((item) => item.kind === 'link' && item.platform === 'xhs');
     render(<MaterialPreviewPage material={material} />);
 
-    expect(screen.getByRole('heading', { name: material.fileName })).toBeVisible();
+    expect(screen.getByRole('heading', { name: material.title })).toBeVisible();
+    expect(screen.getByText('来源')).toBeVisible();
+    expect(screen.getByText('xiaohongshu.com')).toBeVisible();
+    expect(screen.getByText('类型')).toBeVisible();
+    expect(screen.getByText('小红书')).toBeVisible();
+    expect(screen.getByText('AI 摘要')).toBeVisible();
     expect(screen.getByText(material.summary)).toBeVisible();
-    expect(screen.getByText(material.body)).toBeVisible();
+    expect(screen.getByText('原文')).toBeVisible();
+    expect(screen.getByText(/冷启动阶段优先聚焦/)).toBeVisible();
     expect(screen.getByRole('link', { name: '在原站打开' })).toHaveAttribute('href', material.url);
+  });
+
+  it('shows video player, caption, and subtitles for bilibili materials', () => {
+    const material = materialDemo.find((item) => item.platform === 'bilibili');
+    render(<MaterialPreviewPage material={material} />);
+
+    expect(screen.getByText('B 站视频')).toBeVisible();
+    expect(screen.getByTitle(`${material.title}播放器`)).toBeInTheDocument();
+    expect(screen.getByText('文案 / 简介')).toBeVisible();
+    expect(screen.getByText(/关注续费与扩展使用/)).toBeVisible();
+    expect(screen.getByText('字幕')).toBeVisible();
+    expect(screen.getByText(/从 0 到 1 的增长路径/)).toBeVisible();
+  });
+
+  it('hides the subtitles section when a video has none', () => {
+    const material = {
+      ...materialDemo.find((item) => item.platform === 'bilibili'),
+      subtitles: '',
+    };
+    render(<MaterialPreviewPage material={material} />);
+
+    expect(screen.queryByText('字幕')).not.toBeInTheDocument();
+    expect(screen.getByText('文案 / 简介')).toBeVisible();
   });
 
   it('does not offer an original-site action for file previews', () => {
     const material = materialDemo.find((item) => item.kind === 'file');
     render(<MaterialPreviewPage material={material} />);
 
+    expect(screen.getByText('本地上传')).toBeVisible();
+    expect(screen.getByText('PDF')).toBeVisible();
     expect(screen.queryByRole('link', { name: '在原站打开' })).not.toBeInTheDocument();
   });
 });

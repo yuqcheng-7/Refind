@@ -3,7 +3,6 @@ import { ArrowUp, BookOpen, Check, ChevronDown, Globe2, WifiOff } from 'lucide-r
 import { useDismissable } from '../../hooks/useDismissable.js';
 
 const tags = ['增长策略', '用户研究', '产品灵感'];
-const fixedCitations = [{ label: '小红书增长策略' }, { label: 'SaaS 增长复盘' }];
 export const defaultHomeScope = {
   thinkingMode: 'fast',
   online: false,
@@ -76,7 +75,6 @@ export function HomeComposer({ bases, onSubmit, scope: controlledScope, onScopeC
       model: selectedModel,
       selectedBases: [...selectedBases],
       selectedTags: [...selectedTags],
-      citations: hasScope ? fixedCitations : [],
     });
     setPrompt('');
     setTagMenu(false);

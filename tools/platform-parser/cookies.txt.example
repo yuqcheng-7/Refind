@@ -1,0 +1,7 @@
+# Optional Netscape cookies file for Douyin / Zhihu / etc.
+# Export from browser extension (e.g. "Get cookies.txt LOCALLY"),
+# save as this path, then restart:
+#   python3 tools/platform-parser/server.py
+#
+# Or set env instead:
+#   export PLATFORM_COOKIE='z_c0=...; ...'

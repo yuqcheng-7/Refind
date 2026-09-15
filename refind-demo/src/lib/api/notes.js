@@ -1,4 +1,5 @@
 import { supabase } from '../supabaseClient.js';
+import { formatRelativeDateTime } from '../formatTime.js';
 
 const emptyContent = { text: '', blocks: [], sections: [] };
 
@@ -16,9 +17,7 @@ export function normalizeNoteContent(content) {
 }
 
 function formatCardTime(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
+  return formatRelativeDateTime(value);
 }
 
 export function mapNotebook(row) {

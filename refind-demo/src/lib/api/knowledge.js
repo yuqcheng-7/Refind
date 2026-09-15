@@ -6,6 +6,12 @@ export function assertDeletable(knowledgeBase) {
   }
 }
 
+export function filterKnowledgeBaseNames(names, query = '') {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return names;
+  return names.filter((name) => String(name).toLowerCase().includes(needle));
+}
+
 function mapKnowledgeBase(row) {
   return {
     id: row.id,

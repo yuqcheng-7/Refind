@@ -193,7 +193,7 @@ Dashboard → **Authentication → Providers → Email**：
 | --- | --- |
 | 注册 | 有 `profiles` 行 + 一个「默认知识库」 |
 | 双用户 | A 看不到 B 的知识库 / 笔记（RLS） |
-| 上传 / 粘贴链接 | 出现 `processing` → `ready` / `failed` / `link_only` |
+| 上传 / 粘贴链接 | 出现 `processing` → `ready` / `failed` / `link_only`；公开网页可匿名解析；主流平台连接可选 |
 | 笔记 | 刷新后仍在 |
 | 「生成笔记」 | 提示下一阶段，不调 DeepSeek |
 | 「添加至知识库」 | 提示 Phase 3，不假装同步成功 |

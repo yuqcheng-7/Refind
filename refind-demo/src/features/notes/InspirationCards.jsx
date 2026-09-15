@@ -77,7 +77,18 @@ export function InspirationCards({ cards, onCreateOrganizedNote, onDeleteCard, o
             </button>
           </article>
         ))}
-        {!visibleCards.length && <p className="inspiration-cards__empty">没有匹配的灵感卡片。</p>}
+        {!visibleCards.length && (
+          <div className="inspiration-cards__empty">
+            {!cards.length ? (
+              <>
+                <p>暂无灵感卡片</p>
+                <p>可在 AI 回答中收藏内容，保存后将显示于此</p>
+              </>
+            ) : (
+              <p>未找到符合条件的灵感卡片</p>
+            )}
+          </div>
+        )}
       </div>
       <CardDetailDialog card={detailCard} onClose={() => setDetailCard(null)} onAddToNote={onAddToNote} onDelete={deleteCard} />
     </section>

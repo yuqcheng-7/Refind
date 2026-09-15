@@ -268,7 +268,22 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
             <div className="notes-list__groups">
               <section><h2>最近编辑</h2>{recentNotes.map(noteButton)}</section>
               {olderNotes.length > 0 && <section><h2>更早</h2>{olderNotes.map(noteButton)}</section>}
-              {!visibleNotes.length && <p className="notes-list__empty">没有匹配的笔记。</p>}
+              {!visibleNotes.length && (
+                <div className="notes-list__empty">
+                  {!notes.length ? (
+                    <>
+                      <p>暂无笔记</p>
+                      <p>点击右上角「新建笔记」创建</p>
+                    </>
+                  ) : query.trim() ? (
+                    <p>未找到符合条件的笔记</p>
+                  ) : notebookId !== 'all' ? (
+                    <p>该笔记本暂无笔记</p>
+                  ) : (
+                    <p>未找到符合条件的笔记</p>
+                  )}
+                </div>
+              )}
             </div>
           </aside>
           {selectedNote && (

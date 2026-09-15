@@ -9,9 +9,11 @@ afterEach(cleanup);
 const messages = [{
   id: 9,
   question: '你好',
+  answer: '这是知识库 API 返回的回答[1]。',
   mode: 'rag',
   selectedBases: ['默认知识库'],
   selectedTags: [],
+  citations: [{ order: 1, label: '真实资料', materialId: 'material-1', excerpt: '引用摘录' }],
 }];
 
 describe('KbConversation share mode', () => {

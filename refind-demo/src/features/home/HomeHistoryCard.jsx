@@ -1,32 +1,31 @@
-import { MessageSquare, PanelLeft, PanelLeftClose, Plus, Search, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { MessageCircle, PanelLeft, PanelLeftClose, Plus, Search, X } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { groupConversationsByDay } from '../../lib/api/conversations.js';
+import { useDismissable } from '../../hooks/useDismissable.js';
 
-const demoGroups = [
-  {
-    label: '今天',
-    items: [
-      { id: 'home-s1', title: '小红书增长策略', preview: '内容社区的用户增长实践拆解' },
-      { id: 'home-s2', title: '会员活动设计', preview: '降低首次行动门槛的活动结构' },
-    ],
-  },
-  {
-    label: '昨天',
-    items: [
-      { id: 'home-s3', title: 'SaaS 0-1 复盘', preview: '从 PMF 到规模化的关键动作' },
-    ],
-  },
-  {
-    label: '更早',
-    items: [
-      { id: 'home-s4', title: '用户访谈问题', preview: '围绕留存与转化的访谈提纲' },
-    ],
-  },
-];
+function clampMenuCoords(clientX, clientY, width = 128, height = 76) {
+  const left = Math.min(Math.max(8, clientX), window.innerWidth - width - 8);
+  const top = Math.min(Math.max(8, clientY), window.innerHeight - height - 8);
+  return { left, top };
+}
 
-export function HomeHistoryCard({ open = true, onOpenChange, onNewChat, onPickHistory, activeTitle }) {
+export function HomeHistoryCard({
+  open = true,
+  onOpenChange,
+  onNewChat,
+  onPickHistory,
+  onRenameConversation,
+  onDeleteConversation,
+  conversations = [],
+  activeConversationId,
+}) {
   const [expanded, setExpanded] = useState(open);
   const [historyQuery, setHistoryQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [menu, setMenu] = useState(null);
+  const [renameDraft, setRenameDraft] = useState(null);
+  const menuRef = useRef(null);
 
   const isOpen = onOpenChange ? open : expanded;
   const setOpen = (next) => {
@@ -34,16 +33,43 @@ export function HomeHistoryCard({ open = true, onOpenChange, onNewChat, onPickHi
     else setExpanded(next);
   };
 
+  useDismissable({
+    open: Boolean(menu),
+    onClose: () => setMenu(null),
+    rootRef: menuRef,
+  });
+
   const filteredGroups = useMemo(() => {
     const q = historyQuery.trim();
-    if (!q) return demoGroups;
-    return demoGroups
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => item.title.includes(q) || item.preview.includes(q)),
-      }))
-      .filter((group) => group.items.length);
-  }, [historyQuery]);
+    const items = q
+      ? conversations.filter((item) => item.title.includes(q))
+      : conversations;
+    return groupConversationsByDay(items);
+  }, [conversations, historyQuery]);
+
+  const openRename = (item) => {
+    setMenu(null);
+    setRenameDraft({ id: item.id, title: item.title });
+  };
+
+  const cancelRename = () => setRenameDraft(null);
+
+  const commitRename = async () => {
+    if (!renameDraft) return;
+    const draft = renameDraft;
+    const title = draft.title.trim();
+    const original = conversations.find((item) => item.id === draft.id);
+    setRenameDraft(null);
+    if (!title || (original && title === original.title)) return;
+    await onRenameConversation?.(draft.id, title);
+  };
+
+  const confirmDelete = async (item) => {
+    setMenu(null);
+    const ok = window.confirm(`确定删除会话「${item.title}」？删除后无法恢复。`);
+    if (!ok) return;
+    await onDeleteConversation?.(item.id);
+  };
 
   if (!isOpen) {
     return (
@@ -122,21 +148,82 @@ export function HomeHistoryCard({ open = true, onOpenChange, onNewChat, onPickHi
           <section key={group.label} className="home-history-group" aria-label={group.label}>
             <h3>{group.label}</h3>
             {group.items.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                role="listitem"
-                className={`home-history-item ${activeTitle === item.title ? 'is-active' : ''}`}
-                onClick={() => onPickHistory?.(item.title)}
-              >
-                <MessageSquare size={14} strokeWidth={1.7} aria-hidden="true" />
-                <strong>{item.title}</strong>
-              </button>
+              renameDraft?.id === item.id ? (
+                <div
+                  key={item.id}
+                  className={`home-history-item is-renaming ${activeConversationId === item.id ? 'is-active' : ''}`}
+                  role="listitem"
+                >
+                  <MessageCircle size={14} strokeWidth={1.7} aria-hidden="true" />
+                  <input
+                    autoFocus
+                    value={renameDraft.title}
+                    maxLength={80}
+                    aria-label="会话名称"
+                    onChange={(event) => setRenameDraft((current) => (
+                      current ? { ...current, title: event.target.value } : current
+                    ))}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        commitRename();
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        cancelRename();
+                      }
+                    }}
+                    onBlur={() => { commitRename(); }}
+                    onClick={(event) => event.stopPropagation()}
+                  />
+                </div>
+              ) : (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="listitem"
+                  className={`home-history-item ${activeConversationId === item.id ? 'is-active' : ''}`}
+                  onClick={() => onPickHistory?.(item.id)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    const coords = clampMenuCoords(event.clientX, event.clientY);
+                    setMenu({ id: item.id, title: item.title, ...coords });
+                  }}
+                >
+                  <MessageCircle size={14} strokeWidth={1.7} aria-hidden="true" />
+                  <strong>{item.title}</strong>
+                </button>
+              )
             ))}
           </section>
         ))}
-        {!filteredGroups.length && <p className="home-history-empty">没有匹配的会话</p>}
+        {!filteredGroups.length && (
+          <div className="home-history-empty">
+            {historyQuery.trim() ? (
+              <p>未找到符合条件的会话</p>
+            ) : (
+              <>
+                <p>暂无历史会话</p>
+                <p>在首页发起对话后，记录将显示于此</p>
+              </>
+            )}
+          </div>
+        )}
       </div>
+
+      {menu && createPortal(
+        <div
+          className="home-history-context-menu"
+          role="menu"
+          aria-label="会话操作"
+          ref={menuRef}
+          style={{ left: menu.left, top: menu.top }}
+        >
+          <button type="button" role="menuitem" onClick={() => openRename(menu)}>重命名</button>
+          <button type="button" role="menuitem" className="is-danger" onClick={() => confirmDelete(menu)}>删除</button>
+        </div>,
+        document.body,
+      )}
     </aside>
   );
 }
