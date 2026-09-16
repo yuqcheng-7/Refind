@@ -33,6 +33,13 @@ export function mapChatResponseToMessage({
       materialId: citation.materialId,
       excerpt: citation.excerpt,
     })),
+    webSources: (response.webSources || [])
+      .filter((s) => s?.url)
+      .map((s, i) => ({
+        order: Number(s.order) || i + 1,
+        title: String(s.title || s.url),
+        url: String(s.url),
+      })),
   };
 }
 
@@ -52,6 +59,7 @@ export async function sendChatMessage({
   content,
   thinkingMode = 'fast',
   onlineEnabled = false,
+  modelId,
   knowledgeBaseIds = [],
   tagFilters = [],
   surface,
@@ -68,6 +76,7 @@ export async function sendChatMessage({
     surface,
   };
   if (conversationId) body.conversationId = conversationId;
+  if (modelId) body.modelId = modelId;
 
   const { data, error } = await supabase.functions.invoke('chat-message', {
     body,

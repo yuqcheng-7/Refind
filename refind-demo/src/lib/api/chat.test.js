@@ -36,7 +36,22 @@ describe('mapChatResponseToMessage', () => {
       selectedTags: [],
       insufficient: false,
       citations: [{ order: 1, label: '增长笔记', materialId: 'mat1', excerpt: '...' }],
+      webSources: [],
     });
+  });
+
+  it('maps webSources from online answers', () => {
+    expect(mapChatResponseToMessage({
+      question: '天气',
+      response: {
+        assistantMessageId: 'a1',
+        userMessageId: 'u1',
+        conversationId: 'c1',
+        content: '晴',
+        answerMode: 'general',
+        webSources: [{ order: 1, title: '气象台', url: 'https://example.com' }],
+      },
+    }).webSources).toEqual([{ order: 1, title: '气象台', url: 'https://example.com' }]);
   });
 });
 

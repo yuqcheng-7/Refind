@@ -142,7 +142,25 @@ describe('pairChatTurns', () => {
       question: '问题一',
       answer: '回答一[1]',
       citations: [{ order: 1, label: '资料A', materialId: 'mat-1', excerpt: '摘录' }],
+      webSources: [],
     });
+  });
+
+  it('pairs web_sources from assistant messages', () => {
+    const turns = pairChatTurns([
+      { id: 'u1', role: 'user', content: '天气' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '晴',
+        answer_mode: 'general',
+        web_sources: [{ order: 1, title: '气象台', url: 'https://example.com' }],
+      },
+    ], {});
+
+    expect(turns[0].webSources).toEqual([
+      { order: 1, title: '气象台', url: 'https://example.com' },
+    ]);
   });
 });
 

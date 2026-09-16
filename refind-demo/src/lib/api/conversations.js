@@ -50,6 +50,9 @@ export function pairChatTurns(messages = [], citationsByMessageId = {}) {
         materialId: citation.material_id,
         excerpt: citation.excerpt,
       })),
+      webSources: Array.isArray(assistantMessage?.web_sources)
+        ? assistantMessage.web_sources
+        : [],
     });
   }
   return turns;
@@ -124,7 +127,7 @@ export async function loadConversationTurns(conversationId) {
 
   const { data: messages, error: messagesError } = await supabase
     .from('chat_messages')
-    .select('id, role, content, answer_mode, is_insufficient, created_at')
+    .select('id, role, content, answer_mode, is_insufficient, created_at, web_sources')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true });
   if (messagesError) throw messagesError;
