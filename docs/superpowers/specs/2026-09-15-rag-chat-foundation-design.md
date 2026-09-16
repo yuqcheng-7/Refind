@@ -6,6 +6,7 @@
 > 前置：阶段二后端基础（资料解析、`material_chunks`、会话表）已落地  
 > 关联计划：`docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md`（本切片对应 Task 1–2）  
 > 后续准确度：`docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`（多路召回 + Bailian/light rerank + 多轮）  
+> 联网真实搜索：`docs/superpowers/specs/2026-09-17-home-online-qwen-search-design.md`（已落地，替代本切片「联网占位」）
 > 用户确认：2026-09-15「可以」
 
 ## 1. 目标
@@ -31,14 +32,14 @@
 - 笔记 ↔ 知识库同步
 - 真实 DeepSeek 资料摘要/标签（**已另开切片落地**，见 DeepSeek summary/tags 设计）
 - 托管解析 / 生产整站上线
-- 联网搜索的真实实现（本切片：通用模式可保留开关 UI；服务端可先按「不联网」或占位，不伪造网页来源）
+- ~~联网搜索的真实实现~~（已由 `2026-09-17-home-online-qwen-search-design.md` 落地：开联网 → QW + 百炼网页搜索 + 来源 UI；RAG 仍强制不联网）
 - 多路召回 / Bailian rerank（属 A′ 切片，已落地）
 
 ## 3. 模式规则
 
 | 条件 | `answer_mode` | 联网 | 模型 | 引用 |
 | --- | --- | --- | --- | --- |
-| 首页未选 KB 且未选标签 | `general` | 尊重 UI 开关（实现可先弱化） | 用户选快速/深度 | 无 |
+| 首页未选 KB 且未选标签 | `general` | 尊重 UI 开关（开联网 → QW 真搜，见 2026-09-17 切片） | DS快速/深度 或 QW | 无（联网时有 webSources） |
 | 首页选了任一 KB 或标签 | `rag` | 强制关闭 | 用户选快速/深度 | 有真实 `message_citations` |
 | 知识库模块内对话 | `rag` | 强制关闭；范围=当前库 | 用户选快速/深度 | 有 |
 
@@ -108,5 +109,5 @@
 - ~~A′：多路召回 + rerank + 多轮~~（已落地，见 2026-09-16 设计）
 - 笔记生成 + 引用进卡片
 - 笔记 ↔ KB 同步
-- 联网真实检索（若产品仍要）
+- ~~联网真实检索~~（已落地，见 `2026-09-17-home-online-qwen-search-design.md`）
 - 托管上线与生产密钥轮换

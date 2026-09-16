@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { deepseekChat, embedTexts, rerankDocuments } from '../_shared/ai.ts';
-import { parseWebSources, qwenChatWithOptionalSearch } from '../_shared/webSearch.js';
+import { qwenChatWithOptionalSearch } from '../_shared/webSearch.js';
 import { focusExcerpt } from '../_shared/chunkText.js';
 import {
   buildRagSystemPrompt,
@@ -267,10 +267,7 @@ Deno.serve(async (req) => {
           onlineEnabled: body.onlineEnabled === true,
         });
         plainAnswer = stripMarkdownForReading(result.content);
-        webSources = resolveGeneralWebSources(
-          body.onlineEnabled === true,
-          parseWebSources({ search_results: result.webSources }),
-        );
+        webSources = resolveGeneralWebSources(body.onlineEnabled === true, result.webSources);
       } else {
         const answer = await deepseekChat(messages, { model: mapThinkingMode(body.thinkingMode) });
         plainAnswer = stripMarkdownForReading(answer);
