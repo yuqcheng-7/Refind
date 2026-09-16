@@ -1,7 +1,8 @@
 import { focusExcerpt } from '../_shared/chunkText.js';
+import { RAG_INSUFFICIENT_CONTENT } from '../_shared/ragRetrieve.js';
 
 export const SOFT_SIMILARITY_FLOOR = 0.2;
-export const RAG_INSUFFICIENT_CONTENT = '当前范围内资料不足，暂时无法可靠回答。请补充资料或调整知识库与标签范围。';
+export { RAG_INSUFFICIENT_CONTENT };
 
 function uniqueStrings(value) {
   if (!Array.isArray(value)) return [];
@@ -104,18 +105,38 @@ export function sanitizeAnswerCitations(answer, maxOrder) {
 }
 
 export function resolveRagAnswerOutcome({ answer, chunks }) {
-  const sanitized = sanitizeAnswerCitations(answer, chunks.length);
-  if (chunks.length > 0 && sanitized.orders.length === 0) {
+  const list = Array.isArray(chunks) ? chunks : [];
+  const text = String(answer || '').trim();
+  if (list.length === 0) {
     return {
       content: RAG_INSUFFICIENT_CONTENT,
       isInsufficient: true,
       orders: [],
+      reason: '无参考片段',
+    };
+  }
+  if (!text || text === RAG_INSUFFICIENT_CONTENT || text.includes('暂无相关资料')) {
+    return {
+      content: RAG_INSUFFICIENT_CONTENT,
+      isInsufficient: true,
+      orders: [],
+      reason: '没有检测到有效[n]引用',
+    };
+  }
+  const sanitized = sanitizeAnswerCitations(text, list.length);
+  if (sanitized.orders.length === 0) {
+    return {
+      content: RAG_INSUFFICIENT_CONTENT,
+      isInsufficient: true,
+      orders: [],
+      reason: '没有检测到有效[n]引用',
     };
   }
   return {
     content: sanitized.content,
     isInsufficient: false,
     orders: sanitized.orders,
+    reason: 'ok',
   };
 }
 

@@ -323,5 +323,5 @@ npm run build
 - Phase 2 non-goals correctly become Phase 3 goals.
 - Note content shape matches prototype (`sections` + `cardId`) for citation hover.
 - Secrets stay server-side; Vite only gets anon key + URL + parser URL.
-- V1.5 items (rerank, batch tags, MediaCrawler / 匿名网页抽取质量深化) explicitly out of this plan.
+- V1.5 items（批量打标、解析质量深化）仍显式不在本计划；**混合检索 + rerank 已由 A′ 切片落地**（`2026-09-16-ai-accuracy-multi-recall-rerank`），本计划 Task 1–2 的单路 RAG 已被 A′ 管线取代。
 - `*.vercel.app` 国内可达性风险与托管解析已写入 Step 2 / 2b。

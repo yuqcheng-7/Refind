@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { deepseekChat, embedTexts } from '../_shared/ai.ts';
+import { deepseekChat, embedTexts, rerankDocuments } from '../_shared/ai.ts';
 import { focusExcerpt } from '../_shared/chunkText.js';
 import {
   buildRagSystemPrompt,
@@ -7,15 +7,28 @@ import {
   resolveAnswerMode,
 } from '../_shared/rag.ts';
 import {
+  RAG_FINAL_TOP_K,
+  RAG_HISTORY_MESSAGES_FOR_LLM,
+  RAG_INSUFFICIENT_CONTENT,
+  RAG_KEYWORD_RECALL_K,
+  RAG_VECTOR_RECALL_K,
+  buildRetrievalQuery,
+  countByMaterialTitle,
+  diversifyByMaterial,
+  extractQueryTerms,
+  fuseByRrf,
+  explainRetrievalWeakness,
+  logRagDebug,
+  rerankCandidatesWithFallback,
+} from '../_shared/ragRetrieve.js';
+import {
   buildCitationRows,
   buildConversationRebindPatch,
   buildRetrievalSummary,
   canRebindEmptyConversation,
   isPlaceholderTitle,
   normalizeRequestBody,
-  RAG_INSUFFICIENT_CONTENT,
   resolveRagAnswerOutcome,
-  selectUsableChunks,
   shouldReuseConversation,
   stripMarkdownForReading,
 } from './core.js';
@@ -25,9 +38,17 @@ type MatchedChunk = {
   material_id: string;
   knowledge_base_id: string;
   content: string;
-  similarity: number;
+  similarity?: number | null;
+  keyword_rank?: number | null;
+  rrf_score?: number;
+  rerank_score?: number;
   material_title: string;
   knowledge_base_name: string;
+};
+
+type ChatHistoryMessage = {
+  role: 'user' | 'assistant' | string;
+  content: string;
 };
 
 const corsHeaders = {
@@ -51,6 +72,40 @@ function citationResponse(order: number, chunk: MatchedChunk, answer: string) {
     chunkId: chunk.chunk_id,
     excerpt: focusExcerpt(chunk.content, { answer, order, max: 160 }),
   };
+}
+
+function formatFullPrompt(
+  systemPrompt: string,
+  history: ChatHistoryMessage[],
+  userQuestion: string,
+) {
+  const historyBlock = history
+    .map((msg) => `${msg.role}: ${msg.content}`)
+    .join('\n');
+  return [
+    '=== system ===',
+    systemPrompt,
+    '=== history ===',
+    historyBlock || '(none)',
+    '=== user ===',
+    userQuestion,
+  ].join('\n');
+}
+
+async function persistInsufficient(admin: ReturnType<typeof createClient>, messageBase: Record<string, unknown>, retrievalSummary: ReturnType<typeof buildRetrievalSummary>) {
+  const { data: assistantMessage, error } = await admin
+    .from('chat_messages')
+    .insert({
+      ...messageBase,
+      role: 'assistant',
+      content: RAG_INSUFFICIENT_CONTENT,
+      retrieval_summary: retrievalSummary,
+      is_insufficient: true,
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return assistantMessage;
 }
 
 Deno.serve(async (req) => {
@@ -165,6 +220,19 @@ Deno.serve(async (req) => {
       .update({ updated_at: new Date().toISOString() })
       .eq('id', conversationId);
 
+    // Load prior turns before inserting the current user message.
+    const { data: priorMessages, error: priorError } = await admin
+      .from('chat_messages')
+      .select('role, content')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: false })
+      .limit(RAG_HISTORY_MESSAGES_FOR_LLM);
+    if (priorError) throw priorError;
+    const historyAsc = ([...(priorMessages || [])] as ChatHistoryMessage[]).reverse();
+    const recentUserQuestions = historyAsc
+      .filter((msg) => msg.role === 'user')
+      .map((msg) => msg.content);
+
     const messageBase = {
       conversation_id: conversationId,
       user_id: user.id,
@@ -217,32 +285,76 @@ ${onlineNote}`,
       });
     }
 
-    const [queryEmbedding] = await embedTexts([body.content]);
+    const retrievalQuery = buildRetrievalQuery(body.content, recentUserQuestions);
+    const queryTerms = extractQueryTerms(retrievalQuery);
+    const [queryEmbedding] = await embedTexts([retrievalQuery]);
     if (!queryEmbedding) throw new Error('query embedding was not returned');
-    const { data: matchedRows, error: matchError } = await admin.rpc('match_material_chunks', {
-      query_embedding: queryEmbedding,
-      match_count: 8,
-      filter_user: user.id,
-      filter_kb_ids: body.knowledgeBaseIds.length ? body.knowledgeBaseIds : null,
-      filter_tag_ids: body.tagFilters.length ? body.tagFilters : null,
-    });
-    if (matchError) throw matchError;
 
-    const chunks = selectUsableChunks(matchedRows) as MatchedChunk[];
-    const retrievalSummary = buildRetrievalSummary(chunks);
-    if (!chunks.length) {
-      const { data: assistantMessage, error } = await admin
-        .from('chat_messages')
-        .insert({
-          ...messageBase,
-          role: 'assistant',
-          content: RAG_INSUFFICIENT_CONTENT,
-          retrieval_summary: retrievalSummary,
-          is_insufficient: true,
+    const filterKbIds = body.knowledgeBaseIds.length ? body.knowledgeBaseIds : null;
+    const filterTagIds = body.tagFilters.length ? body.tagFilters : null;
+
+    const [vectorResult, keywordResult] = await Promise.all([
+      admin.rpc('match_material_chunks', {
+        query_embedding: queryEmbedding,
+        match_count: RAG_VECTOR_RECALL_K,
+        filter_user: user.id,
+        filter_kb_ids: filterKbIds,
+        filter_tag_ids: filterTagIds,
+      }),
+      queryTerms.length
+        ? admin.rpc('match_material_chunks_keyword', {
+          query_terms: queryTerms,
+          match_count: RAG_KEYWORD_RECALL_K,
+          filter_user: user.id,
+          filter_kb_ids: filterKbIds,
+          filter_tag_ids: filterTagIds,
         })
-        .select('id')
-        .single();
-      if (error) throw error;
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (vectorResult.error) throw vectorResult.error;
+    if (keywordResult.error) throw keywordResult.error;
+
+    const vectorHits = (vectorResult.data || []) as MatchedChunk[];
+    const keywordHits = (keywordResult.data || []) as MatchedChunk[];
+    const rrfFused = fuseByRrf([vectorHits, keywordHits]) as MatchedChunk[];
+    const rrfDiversified = diversifyByMaterial(rrfFused) as MatchedChunk[];
+    const { ranked: reranked, provider: rerankProvider } = await rerankCandidatesWithFallback(
+      rrfDiversified,
+      retrievalQuery,
+      {
+        topK: RAG_FINAL_TOP_K,
+        rerankFn: rerankDocuments,
+      },
+    ) as { ranked: MatchedChunk[]; provider: string };
+    console.log('[rag-debug] rerank_provider=', rerankProvider);
+    const chunks = reranked.slice(0, RAG_FINAL_TOP_K);
+    const retrievalSummary = buildRetrievalSummary(chunks);
+    const rrfByTitle = countByMaterialTitle(rrfFused);
+    const rrfDiversifiedByTitle = countByMaterialTitle(rrfDiversified);
+    const rerankedByTitle = countByMaterialTitle(reranked);
+    const topByTitle = countByMaterialTitle(chunks);
+
+    const tooWeakInfo = explainRetrievalWeakness(chunks, { queryText: retrievalQuery });
+    if (!chunks.length || tooWeakInfo.weak) {
+      const gateReason = !chunks.length ? '无参考片段' : (tooWeakInfo.reason || 'retrieval_too_weak');
+      console.log('[rag-debug] outcome_reason=', gateReason, tooWeakInfo.detail || '');
+      logRagDebug({
+        userQuestion: body.content,
+        retrievalQuery,
+        vectorHits,
+        keywordHits,
+        rrfFused,
+        rrfByTitle,
+        rrfDiversified,
+        rrfDiversifiedByTitle,
+        reranked,
+        rerankedByTitle,
+        topChunks: chunks,
+        topByTitle,
+        fullLlmPrompt: null,
+        llmRaw: null,
+      });
+      const assistantMessage = await persistInsufficient(admin, messageBase, retrievalSummary);
       insertedAssistantMessageId = assistantMessage.id;
       return response({
         conversationId,
@@ -260,11 +372,44 @@ ${onlineNote}`,
       content: chunk.content,
       title: chunk.material_title,
     })));
-    const answer = await deepseekChat([
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: body.content },
-    ], { model: mapThinkingMode(body.thinkingMode) });
+    const llmMessages = [
+      { role: 'system' as const, content: systemPrompt },
+      ...historyAsc.map((msg) => ({
+        role: (msg.role === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
+        content: msg.content,
+      })),
+      { role: 'user' as const, content: body.content },
+    ];
+    const fullLlmPrompt = formatFullPrompt(systemPrompt, historyAsc, body.content);
+    logRagDebug({
+      userQuestion: body.content,
+      retrievalQuery,
+      vectorHits,
+      keywordHits,
+      rrfFused,
+      rrfByTitle,
+      rrfDiversified,
+      rrfDiversifiedByTitle,
+      reranked,
+      rerankedByTitle,
+      topChunks: chunks,
+      topByTitle,
+      fullLlmPrompt,
+      llmRaw: null,
+    });
+
+    const answer = await deepseekChat(llmMessages, { model: mapThinkingMode(body.thinkingMode) });
+    console.log('[rag-debug] llm_raw=\n', answer);
+
     const answerOutcome = resolveRagAnswerOutcome({ answer, chunks });
+    console.log(
+      '[rag-debug] outcome_reason=',
+      answerOutcome.reason,
+      '| isInsufficient=',
+      answerOutcome.isInsufficient,
+      '| orders=',
+      answerOutcome.orders,
+    );
     const { data: assistantMessage, error: assistantError } = await admin
       .from('chat_messages')
       .insert({

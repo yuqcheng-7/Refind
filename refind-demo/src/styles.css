@@ -220,18 +220,15 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
   color:#111923;
 }
 .brand-product{
-  color:transparent!important;
+  color:#111!important;
   font-weight:600;
   font-size:15px;
   line-height:1;
   padding-bottom:0;
   display:block;
-  background-image:linear-gradient(105deg,#111111 0%,#111111 48%,#18141f 58%,#2a2140 66%,#4a3d72 74%,#6b54b0 79%,#8369da 84%,#a78bfa 88%,#e8b088 92%,#ffc078 96%,#ffb45c 100%);
-  -webkit-background-clip:text;
-  background-clip:text;
-}
-@supports not ((-webkit-background-clip:text) or (background-clip:text)){
-  .brand-product{color:#6b5a9e!important;background-image:none}
+  background-image:none;
+  -webkit-background-clip:unset;
+  background-clip:unset;
 }
 .home-sidebar{overflow:visible;height:100vh;min-height:0}
 .sidebar-main{
@@ -618,8 +615,8 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .composer-think-toggle button.is-active{color:#15202c;background:#fff;box-shadow:0 1px 3px rgba(28,40,55,.1)}
 .composer-model{color:#28394d!important}
 .home-canvas{position:relative}
-.home-canvas.has-conversation{display:flex;flex-direction:column;align-items:flex-start;height:100vh;min-height:0;max-height:100vh;padding:28px 32px 0;overflow:hidden;transition:padding-left .22s ease}
-.home-canvas.has-conversation.is-history-open{padding-left:268px}
+.home-canvas.has-conversation{display:flex;flex-direction:column;align-items:center;height:100vh;min-height:0;max-height:100vh;padding:28px 32px 0;overflow:hidden;transition:padding-left .22s ease}
+.home-canvas.has-conversation.is-history-open{padding-left:282px}
 .home-canvas.has-conversation.is-history-collapsed{align-items:center;padding-left:32px;padding-right:32px}
 .home-history-fab{position:absolute;z-index:6;top:22px;left:22px;width:40px;height:40px;display:grid;place-items:center;border:1px solid rgba(158,168,180,.32);border-radius:12px;color:#2a3a4c;background:rgba(255,255,255,.92);box-shadow:0 10px 28px rgba(28,40,55,.12);backdrop-filter:blur(12px)}
 .home-history-fab:hover{background:#fff;color:#111}
@@ -692,7 +689,7 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .knowledge-canvas .history-popover button.is-active{background:#F2F2F2;color:#172432;font-weight:500}
 .knowledge-canvas .ai-empty p{margin:8px 0 0;color:#93a0b0;font-size:13px;line-height:1.5}
 
-.home-thread{display:flex;flex-direction:column;flex:1 1 auto;align-self:stretch;min-width:0;min-height:0;width:100%;max-width:880px;margin-left:12px;overflow:hidden}
+.home-thread{display:flex;flex-direction:column;flex:1 1 auto;align-self:center;min-width:0;min-height:0;width:100%;max-width:880px;margin-left:0;margin-right:0;overflow:hidden}
 .home-canvas.has-conversation.is-history-collapsed .home-thread{margin-left:0;margin-right:0;align-self:center}
 .home-chat-column{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;width:100%;overflow:hidden}
 .home-canvas.has-conversation .home-thread .home-composer{position:relative;left:auto;bottom:auto;z-index:20;flex:0 0 auto;width:100%;max-width:none;margin:12px 0 28px;transform:none}
@@ -739,7 +736,7 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .answer-cite{display:inline;margin:0;padding:0 2px;border:0;border-radius:4px;color:#4f6f9a;background:rgba(79,111,154,.08);font:inherit;font-size:.92em;font-weight:650;line-height:inherit;vertical-align:baseline;cursor:pointer}
 .answer-cite:hover,.answer-cite-wrap.is-open .answer-cite{color:#2f4f78;background:rgba(79,111,154,.16)}
 .answer-cite--missing{color:#9aa6b4}
-.answer-cite-pop{position:fixed;z-index:80;display:grid;gap:8px;max-width:min(320px,calc(100vw - 24px));padding:12px 14px;border:1px solid rgba(151,164,181,.32);border-radius:12px;background:rgba(255,255,255,.99);box-shadow:0 14px 36px rgba(28,39,54,.16);text-align:left;cursor:pointer}
+.answer-cite-pop{position:fixed;z-index:120;display:grid;gap:8px;max-width:min(320px,calc(100vw - 24px));padding:12px 14px;border:1px solid rgba(151,164,181,.32);border-radius:12px;background:rgba(255,255,255,.99);box-shadow:0 14px 36px rgba(28,39,54,.16);text-align:left;cursor:pointer}
 .answer-cite-pop__title{margin:0;color:#1b2735;font-size:13px;font-weight:650;line-height:1.45}
 .answer-cite-pop__excerpt{margin:0;color:#5c6b7c;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow:visible;max-height:none}
 .home-conversation.is-share-mode{padding-left:2px}

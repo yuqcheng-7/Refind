@@ -89,9 +89,22 @@ vi.mock('../../lib/api/conversations.js', () => ({
     }
     return created;
   },
-  loadConversationTurns: async (conversationId) => (
-    conversationId ? [...(conversationStore.turnsById[conversationId] || [])] : []
-  ),
+  loadConversationTurns: async (conversationId) => {
+    if (conversationId === 'kb-conv-1') {
+      return [{
+        id: 'kb-turn-1',
+        conversationId: 'kb-conv-1',
+        question: '会员活动怎么设计',
+        answer: '可以先从目标用户和权益分层开始。',
+        mode: 'rag',
+        online: false,
+        selectedBases: ['默认知识库'],
+        selectedTags: [],
+        citations: [],
+      }];
+    }
+    return conversationId ? [...(conversationStore.turnsById[conversationId] || [])] : [];
+  },
   renameConversation: async (id, title) => ({ id, title, updatedAt: new Date().toISOString() }),
   deleteConversation: async () => {},
   truncateConversationFromTurn: async () => {},
@@ -565,6 +578,18 @@ describe('HomeComposer', () => {
     expect(screen.getByPlaceholderText(homePlaceholder)).toBeVisible();
   });
 
+  it('opens the latest knowledge-base history conversation when entering the page', async () => {
+    render(<App />);
+
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '首页的问题');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+    await userEvent.click(screen.getByRole('button', { name: '知识库' }));
+
+    expect(screen.queryByText('首页的问题')).not.toBeInTheDocument();
+    expect(await screen.findByText('会员活动怎么设计')).toBeVisible();
+    expect(screen.getByText('可以先从目标用户和权益分层开始。')).toBeVisible();
+  });
+
   it('keeps homepage and knowledge-base conversation messages isolated', async () => {
     render(<App />);
 
@@ -573,7 +598,7 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('button', { name: '知识库' }));
 
     expect(screen.queryByText('首页的问题')).not.toBeInTheDocument();
-    expect(screen.getByText('从你的知识库中寻找答案')).toBeVisible();
+    expect(await screen.findByText('会员活动怎么设计')).toBeVisible();
   });
 
   it('clears only the knowledge-base conversation when starting a new KB conversation', async () => {

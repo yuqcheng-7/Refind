@@ -416,7 +416,44 @@ export function App() {
     refreshHomeConversations();
   }, [session]);
   useEffect(() => {
-    refreshKbConversations();
+    let active = true;
+    (async () => {
+      if (!session || !selectedKnowledgeBase) {
+        setKbConversations([]);
+        return;
+      }
+      try {
+        const items = await listConversations({
+          surface: 'knowledge',
+          knowledgeBaseId: selectedKnowledgeBase.id,
+        });
+        if (!active) return;
+        setKbConversations(items);
+        const latest = items[0];
+        if (!latest) {
+          setKbConversationId(null);
+          setKbMessages([]);
+          return;
+        }
+        setKbConversationId(latest.id);
+        setHistoryOpen(false);
+        try {
+          const turns = await loadConversationTurns(latest.id);
+          if (!active) return;
+          setKbMessages(turns);
+        } catch {
+          if (!active) return;
+          say('会话加载失败，请稍后重试。');
+          setKbMessages([]);
+        }
+      } catch {
+        if (!active) return;
+        setKbConversations([]);
+        setKbConversationId(null);
+        setKbMessages([]);
+      }
+    })();
+    return () => { active = false; };
   }, [session, selectedKnowledgeBase?.id]);
   useEffect(() => {
     setKbShareMode(false);
@@ -732,11 +769,6 @@ export function App() {
     || bases[0]
     || ''
   );
-  const openKnowledgeBase = (name) => {
-    const next = name || firstKnowledgeBaseName();
-    if (next) setBase(next);
-    switchNav('知识库');
-  };
   const startNewKbChat = async () => {
     exitKbShare();
     setHistoryOpen(false);
@@ -771,6 +803,23 @@ export function App() {
       say('会话加载失败，请稍后重试。');
       setKbMessages([]);
     }
+  };
+  const openLatestKbConversation = () => {
+    const latest = kbConversations[0];
+    if (!latest) {
+      setKbConversationId(null);
+      setKbMessages([]);
+      return;
+    }
+    void openKbConversation(latest.id);
+  };
+  const openKnowledgeBase = (name) => {
+    const next = name || firstKnowledgeBaseName();
+    const sameBase = Boolean(next) && next === base;
+    if (next) setBase(next);
+    switchNav('知识库');
+    // Switching KB: load effect opens the latest. Same KB re-entry: open now.
+    if (sameBase) openLatestKbConversation();
   };
   const renameHomeConversation = async (conversationId, title) => {
     try {

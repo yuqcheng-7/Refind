@@ -200,9 +200,22 @@ test('treats a retrieved RAG answer without citation markers as insufficient', (
     answer: '这是没有引用标记的回答。',
     chunks: chunks.slice(0, 2),
   }), {
-    content: '当前范围内资料不足，暂时无法可靠回答。请补充资料或调整知识库与标签范围。',
+    content: '暂无相关资料',
     isInsufficient: true,
     orders: [],
+    reason: '没有检测到有效[n]引用',
+  });
+});
+
+test('treats empty chunks as insufficient with empty-snippet reason', () => {
+  assert.deepEqual(core.resolveRagAnswerOutcome?.({
+    answer: '任意内容',
+    chunks: [],
+  }), {
+    content: '暂无相关资料',
+    isInsufficient: true,
+    orders: [],
+    reason: '无参考片段',
   });
 });
 
@@ -214,6 +227,30 @@ test('keeps a retrieved RAG answer with a valid citation as sufficient', () => {
     content: '依据第一段资料可知答案。[1]',
     isInsufficient: false,
     orders: [1],
+    reason: 'ok',
+  });
+});
+
+test('manual case1: grounded answer with valid [n] markers is sufficient', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '资料说明检索应融合多路召回。[1] 最终保留 top 片段。[2]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.deepEqual(outcome?.orders, [1, 2]);
+  assert.match(outcome?.content || '', /\[1\]/);
+  assert.match(outcome?.content || '', /\[2\]/);
+});
+
+test('manual case2: no valid citation forces insufficient fixed copy', () => {
+  assert.deepEqual(core.resolveRagAnswerOutcome?.({
+    answer: '我根据常识编造了一个答案。',
+    chunks: chunks.slice(0, 2),
+  }), {
+    content: '暂无相关资料',
+    isInsufficient: true,
+    orders: [],
+    reason: '没有检测到有效[n]引用',
   });
 });
 

@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   citationByOrder,
   splitAnswerBlocks,
@@ -10,6 +11,9 @@ function clipExcerpt(text = '', max = 220) {
   if (value.length <= max) return value;
   return `${value.slice(0, max).trim()}…`;
 }
+
+/** Keep citation card clear of the sticky composer / bottom chrome. */
+const CITE_POP_BOTTOM_SAFE = 200;
 
 function InlineText({
   text,
@@ -55,6 +59,7 @@ function InlineText({
 
 function CitationChip({ order, citation, open, onShow, onHide, onOpenMaterial }) {
   const wrapRef = useRef(null);
+  const popRef = useRef(null);
   const hideTimer = useRef(null);
   const labelId = useId();
   const [coords, setCoords] = useState(null);
@@ -74,7 +79,7 @@ function CitationChip({ order, citation, open, onShow, onHide, onOpenMaterial })
 
   useEffect(() => () => clearHide(), []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open || !wrapRef.current) {
       setCoords(null);
       return undefined;
@@ -84,22 +89,58 @@ function CitationChip({ order, citation, open, onShow, onHide, onOpenMaterial })
       const width = Math.min(320, window.innerWidth - 24);
       let left = rect.left + rect.width / 2 - width / 2;
       left = Math.max(12, Math.min(left, window.innerWidth - width - 12));
-      let top = rect.bottom + 8;
-      // Keep card on screen; prefer below marker.
-      const estimatedHeight = 160;
-      if (top + estimatedHeight > window.innerHeight - 8) {
-        top = Math.max(8, rect.top - estimatedHeight - 8);
+
+      const measured = popRef.current?.getBoundingClientRect().height;
+      const estimatedHeight = measured && measured > 40 ? measured : 168;
+      const gap = 8;
+      const maxBottom = window.innerHeight - CITE_POP_BOTTOM_SAFE;
+      let top = rect.bottom + gap;
+      const fitsBelow = top + estimatedHeight <= maxBottom;
+      if (!fitsBelow) {
+        top = Math.max(8, rect.top - estimatedHeight - gap);
+      }
+      // Still clamp so the card never sits under the composer band.
+      if (top + estimatedHeight > maxBottom) {
+        top = Math.max(8, maxBottom - estimatedHeight);
       }
       setCoords({ top, left, width });
     };
     place();
+    // Second pass after portal mounts so height is accurate.
+    const raf = window.requestAnimationFrame(place);
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
     return () => {
+      window.cancelAnimationFrame(raf);
       window.removeEventListener('scroll', place, true);
       window.removeEventListener('resize', place);
     };
-  }, [open]);
+  }, [open, excerpt]);
+
+  const pop = open && coords
+    ? createPortal(
+      <button
+        type="button"
+        ref={popRef}
+        className="answer-cite-pop"
+        id={labelId}
+        role="dialog"
+        aria-label={`引用 ${order}：${citation.label || '资料'}`}
+        style={{ top: coords.top, left: coords.left, width: coords.width }}
+        onMouseEnter={clearHide}
+        onMouseLeave={scheduleHide}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (citation.materialId) onOpenMaterial?.(citation.materialId);
+        }}
+      >
+        <span className="answer-cite-pop__title">{citation.label || '资料'}</span>
+        {excerpt ? <span className="answer-cite-pop__excerpt">{excerpt}</span> : null}
+      </button>,
+      document.body,
+    )
+    : null;
 
   return (
     <span
@@ -130,26 +171,7 @@ function CitationChip({ order, citation, open, onShow, onHide, onOpenMaterial })
       >
         [{order}]
       </button>
-      {open && coords && (
-        <button
-          type="button"
-          className="answer-cite-pop"
-          id={labelId}
-          role="dialog"
-          aria-label={`引用 ${order}：${citation.label || '资料'}`}
-          style={{ top: coords.top, left: coords.left, width: coords.width }}
-          onMouseEnter={clearHide}
-          onMouseLeave={scheduleHide}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (citation.materialId) onOpenMaterial?.(citation.materialId);
-          }}
-        >
-          <span className="answer-cite-pop__title">{citation.label || '资料'}</span>
-          {excerpt ? <span className="answer-cite-pop__excerpt">{excerpt}</span> : null}
-        </button>
-      )}
+      {pop}
     </span>
   );
 }
