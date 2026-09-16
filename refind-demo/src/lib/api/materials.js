@@ -1,6 +1,9 @@
 import { supabase } from '../supabaseClient.js';
 import { formatMaterialStatus, formatRelativeDateTime } from '../formatTime.js';
 import { isHttpUrlLike } from '../extractUrlFromPaste.js';
+import { inferPlatformFromUrl } from './platformFromUrl.js';
+
+export { inferPlatformFromUrl };
 
 const platformLabels = {
   web: '链接',
@@ -29,23 +32,6 @@ const fileTypeLabels = {
 };
 
 const materialSelect = '*, material_tag_relations(material_tags(id, name))';
-
-export function inferPlatformFromUrl(sourceUrl) {
-  if (!sourceUrl) return 'web';
-  let hostname = '';
-  try {
-    hostname = new URL(sourceUrl).hostname.toLowerCase();
-  } catch {
-    return 'web';
-  }
-
-  if (/(^|\.)xiaohongshu\.com$|(^|\.)xhslink\.com$/.test(hostname)) return 'xhs';
-  if (/(^|\.)douyin\.com$|(^|\.)iesdouyin\.com$|(^|\.)v\.douyin\.com$/.test(hostname)) return 'douyin';
-  if (/(^|\.)zhihu\.com$/.test(hostname)) return 'zhihu';
-  if (/(^|\.)bilibili\.com$|(^|\.)b23\.tv$/.test(hostname)) return 'bilibili';
-  if (/(^|\.)mp\.weixin\.qq\.com$/.test(hostname)) return 'wechat_mp';
-  return 'web';
-}
 
 function readTags(row) {
   return (row.material_tag_relations || [])
@@ -107,6 +93,11 @@ export function mapMaterial(row) {
     inputType: row.input_type,
     url: row.source_url,
     fileName: row.file_name,
+    storageObjectKey: row.storage_object_key || '',
+    previewStorageObjectKey: row.preview_storage_object_key || '',
+    coverImageUrl: row.cover_image_url || '',
+    coverStorageObjectKey: row.cover_storage_object_key || '',
+    fileMimeType: row.file_mime_type || '',
     title: formatMaterialTitle(row),
     source: typeLabel,
     typeLabel,
@@ -129,6 +120,37 @@ export function mapMaterial(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/** Short-lived signed URL for private materials bucket objects. */
+const signedUrlCache = new Map();
+
+export function clearMaterialSignedUrlCache() {
+  signedUrlCache.clear();
+}
+
+export async function createMaterialSignedUrl(storageObjectKey, { expiresIn = 3600 } = {}) {
+  const key = String(storageObjectKey || '').trim();
+  if (!key) throw new Error('缺少文件存储路径');
+
+  const now = Date.now();
+  const cached = signedUrlCache.get(key);
+  // Reuse while more than 5 minutes remain on the signed URL.
+  if (cached?.url && cached.expiresAt - now > 5 * 60 * 1000) {
+    return cached.url;
+  }
+
+  const { data, error } = await supabase.storage
+    .from('materials')
+    .createSignedUrl(key, expiresIn);
+  if (error) throw error;
+  if (!data?.signedUrl) throw new Error('无法生成文件访问链接');
+
+  signedUrlCache.set(key, {
+    url: data.signedUrl,
+    expiresAt: now + (Number(expiresIn) || 3600) * 1000,
+  });
+  return data.signedUrl;
 }
 
 async function getCurrentUserId() {

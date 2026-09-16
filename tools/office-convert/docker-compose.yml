@@ -1,0 +1,14 @@
+services:
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    command:
+      - gotenberg
+      - --api-timeout=120s
+      - --libreoffice-restart-after=10
+    # Uncomment to restrict who can call convert in production:
+    # environment:
+    #   - GOTENBERG_API_BASIC_AUTH_USERNAME=refind
+    #   - GOTENBERG_API_BASIC_AUTH_PASSWORD=change-me

@@ -18,6 +18,7 @@ export function mapChatResponseToMessage({
   }
   return {
     id: response.assistantMessageId,
+    userMessageId: response.userMessageId,
     conversationId: response.conversationId,
     question,
     answer: response.content,

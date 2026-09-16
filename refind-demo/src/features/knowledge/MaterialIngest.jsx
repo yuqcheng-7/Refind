@@ -3,6 +3,7 @@ import { FileUp, Link2, Plus, RotateCcw, Trash2, X } from 'lucide-react';
 import { useDismissable } from '../../hooks/useDismissable.js';
 import { splitPasteLink } from '../../lib/extractUrlFromPaste.js';
 import { formatMaterialTitle, inferPlatformFromUrl } from '../../lib/api/materials.js';
+import { MATERIAL_UPLOAD_ACCEPT, partitionMaterialUploadFiles } from '../../lib/api/ingest.js';
 
 const isFailureName = (name) => name.toLowerCase().includes('.fail');
 
@@ -191,9 +192,28 @@ export function MaterialIngest({
       {menuOpen && <div className="material-ingest-menu" role="menu">
         <button type="button" role="menuitem" onClick={() => { setLinkOpen(true); setMenuOpen(false); }}><Link2 size={15} />粘贴链接</button>
         <button type="button" role="menuitem" onClick={() => { inputRef.current?.click(); setMenuOpen(false); }}><FileUp size={15} />上传文件</button>
-        <p className="material-ingest-hint">支持链接、图片、PDF、Word、PPT、表格与文本</p>
+        <p className="material-ingest-hint">支持图片、PDF、Word、PPT、表格与文本</p>
       </div>}
-      <input ref={inputRef} className="sr-only" aria-label="选择资料文件" type="file" multiple onChange={(event) => { enqueue([...event.target.files].map((file) => ({ title: file.name, kind: 'file', file }))); event.target.value = ''; }} />
+      <input
+        ref={inputRef}
+        className="sr-only"
+        aria-label="选择资料文件"
+        type="file"
+        multiple
+        accept={MATERIAL_UPLOAD_ACCEPT}
+        onChange={(event) => {
+          const { allowed, rejected } = partitionMaterialUploadFiles(event.target.files);
+          if (rejected.length) {
+            const names = rejected.map((file) => file.name).slice(0, 3).join('、');
+            const more = rejected.length > 3 ? ` 等 ${rejected.length} 个` : '';
+            window.alert(`不支持上传 HTML 或不支持的格式：${names}${more}`);
+          }
+          if (allowed.length) {
+            enqueue(allowed.map((file) => ({ title: file.name, kind: 'file', file })));
+          }
+          event.target.value = '';
+        }}
+      />
       {linkOpen && <form className="material-link-popover" onSubmit={submitLink}><label>粘贴链接<input value={link} autoFocus placeholder="支持整段分享文案，自动提取链接" onChange={(event) => setLink(event.target.value)} /></label><button type="button" aria-label="关闭链接输入" onClick={() => setLinkOpen(false)}><X size={14} /></button><button type="submit">加入队列</button></form>}
     </div>
     {toastItems.length > 0 && <div className="material-queue" aria-label="资料解析提醒">

@@ -94,6 +94,18 @@ function RefindRoot() {
     return () => { active = false; };
   }, [routeId]);
 
+  React.useEffect(() => {
+    if (!routeId) {
+      document.title = 'Refind · 拾藏';
+      return undefined;
+    }
+    const name = previewMaterial?.title || previewMaterial?.fileName || '资料预览';
+    document.title = `${name} · 拾藏`;
+    return () => {
+      document.title = 'Refind · 拾藏';
+    };
+  }, [routeId, previewMaterial?.title, previewMaterial?.fileName]);
+
   if (routeId) {
     return (
       <MaterialPreviewPage

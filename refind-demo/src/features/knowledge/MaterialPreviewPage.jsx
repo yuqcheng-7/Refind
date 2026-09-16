@@ -149,7 +149,7 @@ function OpenOriginalFileButton({ material }) {
     <>
       <button
         type="button"
-        className="material-preview-action"
+        className="material-preview-action is-primary"
         disabled={busy}
         onClick={async () => {
           setBusy(true);
@@ -163,7 +163,8 @@ function OpenOriginalFileButton({ material }) {
           }
         }}
       >
-        <ExternalLink size={14} /> {busy ? '打开中…' : '打开原文件'}
+        <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
+        {busy ? '打开中…' : '打开原文件'}
       </button>
       {error ? <span className="material-preview-tool-error">{error}</span> : null}
     </>
@@ -235,17 +236,19 @@ export function MaterialPreviewPage({
           {typeof onReparse === 'function' ? (
             <button
               type="button"
-              className="material-preview-action"
+              className="material-preview-action is-secondary"
               onClick={onReparse}
               disabled={reparsing}
             >
-              <RefreshCw size={14} /> {reparsing ? '解析中…' : '重新解析'}
+              <RefreshCw size={14} strokeWidth={2} className={reparsing ? 'is-spinning' : undefined} aria-hidden="true" />
+              {reparsing ? '解析中…' : '重新解析'}
             </button>
           ) : null}
           {isFile ? <OpenOriginalFileButton material={material} /> : null}
           {isLink ? (
-            <a className="material-preview-action" href={material.url} target="_blank" rel="noreferrer">
-              <ExternalLink size={14} /> 回到原文
+            <a className="material-preview-action is-primary" href={material.url} target="_blank" rel="noreferrer">
+              <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
+              回到原文
             </a>
           ) : null}
         </div>
@@ -282,8 +285,8 @@ export function MaterialPreviewPage({
         ) : null}
       </header>
 
-      <section className="material-preview-summary" aria-labelledby="preview-summary-title">
-        <p id="preview-summary-title">摘要</p>
+      <section className="material-preview-section" aria-labelledby="preview-summary-title">
+        <h2 id="preview-summary-title">摘要</h2>
         <div className="material-preview-summary-body">{summary}</div>
       </section>
 

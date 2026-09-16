@@ -294,6 +294,8 @@ npm run build
 
 - [ ] **Step 2b: 托管解析服务** — 部署可访问国内平台的 parser（替换本机 `8787`）；前端 `VITE_PLATFORM_PARSER_URL` 指向生产 URL；完成平台连接 B（真实会话）后再对外宣称「连接账号」。
 
+- [ ] **Step 2c: 托管 Office→PDF（Gotenberg）** — 部署 `tools/office-convert`；设置 Edge secrets `OFFICE_CONVERT_URL` + `OFFICE_CONVERT_ENGINE=gotenberg`；对已有 PPT/Excel 重新解析以写入 `preview_storage_object_key`。详见 `tools/office-convert/README.md`。（本地 PowerPoint 转换仅开发用，上线不可依赖。）
+
 - [ ] **Step 3: E2E launch checklist**
 
 | Path | Pass? |

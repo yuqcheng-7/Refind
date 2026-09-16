@@ -23,6 +23,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
+import base64
 
 HOST = "127.0.0.1"
 PORT = 8787
@@ -39,7 +40,7 @@ COOKIES_FILE = os.environ.get("PLATFORM_COOKIES_FILE") or str(
   Path(__file__).with_name("cookies.txt")
 )
 HTTP_PROXY = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("https_proxy") or os.environ.get("http_proxy") or ""
-SESSION_PLATFORMS = {"xhs", "douyin", "zhihu"}
+SESSION_PLATFORMS = {"xhs", "douyin", "zhihu", "bilibili"}
 
 from contextvars import ContextVar
 
@@ -129,6 +130,54 @@ def extract_title(html: str) -> str:
   )
 
 
+def absolutize_cover(value: str, base_url: str = "") -> str:
+  cover = clean_text(value)
+  if not cover:
+    return ""
+  if cover.startswith("//"):
+    return f"https:{cover}"
+  if cover.startswith("http://") or cover.startswith("https://"):
+    return cover
+  if base_url:
+    try:
+      from urllib.parse import urljoin
+      return urljoin(base_url, cover)
+    except Exception:
+      return ""
+  return ""
+
+
+INLINE_IMAGE_LIMIT = 10
+_IMG_ATTR_RE = re.compile(
+  r"""(?is)<img\b[^>]*?\b(?:src|data-src|data-original|data-actualsrc)=["']([^"']+)["']""",
+)
+
+
+def extract_media_urls_from_html(html: str, base_url: str = "", *, limit: int = INLINE_IMAGE_LIMIT) -> list[str]:
+  """Ordered unique image URLs from body HTML (for preview + OCR)."""
+  cap = max(1, int(limit or INLINE_IMAGE_LIMIT))
+  out: list[str] = []
+  seen: set[str] = set()
+  for match in _IMG_ATTR_RE.finditer(str(html or "")):
+    raw = clean_text(match.group(1))
+    if not raw or raw.startswith("data:"):
+      continue
+    url = absolutize_cover(raw, base_url)
+    if not url.startswith("http"):
+      continue
+    if url in seen:
+      continue
+    seen.add(url)
+    out.append(url)
+    if len(out) >= cap:
+      break
+  return out
+
+
+def extract_og_cover(html: str, base_url: str = "") -> str:
+  return absolutize_cover(meta_content(html, ["og:image", "twitter:image"]), base_url)
+
+
 def build_opener_with_proxy():
   if HTTP_PROXY:
     return build_opener(ProxyHandler({"http": HTTP_PROXY, "https": HTTP_PROXY}))
@@ -187,10 +236,12 @@ def result(
   caption_text: str = "",
   subtitle_text: str = "",
   summary: str = "",
+  cover_image_url: str = "",
   playback_mode: str | None = None,
   playback_url: str = "",
   quality: str = "partial",
   canonical_url: str = "",
+  media_urls: list[str] | None = None,
 ) -> dict:
   content_text = clean_text(content_text)
   caption_text = clean_text(caption_text)
@@ -199,6 +250,19 @@ def result(
     content_text = caption_text or title
   if not summary:
     summary = summarize(content_text, title)
+  cover = clean_text(cover_image_url)
+  if cover.startswith("//"):
+    cover = f"https:{cover}"
+  urls: list[str] = []
+  seen: set[str] = set()
+  for item in media_urls or []:
+    url = clean_text(item)
+    if not url or url in seen:
+      continue
+    seen.add(url)
+    urls.append(url)
+    if len(urls) >= INLINE_IMAGE_LIMIT:
+      break
   return {
     "platform": platform,
     "title": title,
@@ -207,10 +271,12 @@ def result(
     "content_text": content_text,
     "summary": summary,
     "subtitle_text": clean_text(subtitle_text),
+    "cover_image_url": cover,
     "playback_mode": playback_mode,
     "playback_url": playback_url,
     "quality": quality,
     "canonical_url": canonical_url,
+    "media_urls": urls,
   }
 
 
@@ -265,6 +331,9 @@ def parse_bilibili(url: str) -> dict | None:
     desc = ""
   author = clean_text(((data.get("owner") or {}).get("name")) or "")
   body = desc or f"已收藏视频「{title}」。源站未提供简介。"
+  cover = clean_text(data.get("pic") or data.get("cover") or "")
+  if cover.startswith("//"):
+    cover = f"https:{cover}"
   return result(
     platform="bilibili",
     title=title,
@@ -272,6 +341,7 @@ def parse_bilibili(url: str) -> dict | None:
     caption_text=desc,
     content_text=body,
     summary=summarize(desc, title) if desc else f"视频「{title}」已入库。源站未提供简介，可先播放观看。",
+    cover_image_url=cover,
     playback_mode="embed",
     playback_url=embed,
     quality="full" if desc else "partial",
@@ -318,7 +388,7 @@ def run_ytdlp(url: str, *, session_cookie: str = "", platform: str = "") -> dict
         url,
       ]
       try:
-        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=45, check=False)
+        completed = subprocess.run(cmd, capture_output=True, text=True, timeout=18, check=False)
       except (OSError, subprocess.TimeoutExpired) as exc:
         last_error = str(exc)
         continue
@@ -335,6 +405,14 @@ def run_ytdlp(url: str, *, session_cookie: str = "", platform: str = "") -> dict
       title = clean_text(data.get("title") or "")
       description = clean_text(data.get("description") or "")
       uploader = clean_text(data.get("uploader") or data.get("creator") or "")
+      cover = clean_text(data.get("thumbnail") or "")
+      if not cover:
+        thumbs = data.get("thumbnails") or []
+        if isinstance(thumbs, list) and thumbs:
+          last = thumbs[-1] if isinstance(thumbs[-1], dict) else {}
+          cover = clean_text(last.get("url") or "")
+      if cover.startswith("//"):
+        cover = f"https:{cover}"
       playback_mode = None
       playback_url = ""
       if detected == "bilibili":
@@ -353,6 +431,7 @@ def run_ytdlp(url: str, *, session_cookie: str = "", platform: str = "") -> dict
         caption_text=description,
         content_text=description or title,
         summary=summarize(description, title),
+        cover_image_url=cover,
         playback_mode=playback_mode,
         playback_url=playback_url,
         quality="full" if len(description) >= 40 else "partial",
@@ -378,8 +457,8 @@ def _looks_like_douyin_placeholder(title: str, desc: str) -> bool:
 
 
 def extract_douyin_embedded(html: str) -> dict[str, str]:
-  """Pull title/desc/author from Douyin SSR JSON blobs when present."""
-  out = {"title": "", "desc": "", "author": ""}
+  """Pull title/desc/author/cover from Douyin SSR JSON blobs when present."""
+  out = {"title": "", "desc": "", "author": "", "cover": ""}
   if not html:
     return out
 
@@ -415,12 +494,25 @@ def extract_douyin_embedded(html: str) -> dict[str, str]:
     author_obj = node.get("author") or node.get("authorInfo") or {}
     if isinstance(author_obj, dict):
       author = author_obj.get("nickname") or author_obj.get("nickName") or ""
+    cover = (
+      node.get("origin_cover")
+      or node.get("originCover")
+      or node.get("cover")
+      or node.get("dynamic_cover")
+      or node.get("dynamicCover")
+      or ""
+    )
+    if isinstance(cover, dict):
+      url_list = cover.get("url_list") or cover.get("urlList") or []
+      cover = url_list[0] if isinstance(url_list, list) and url_list else (cover.get("url") or "")
     if desc and len(str(desc)) > len(out["desc"]):
       out["desc"] = clean_text(str(desc))
     if title and len(str(title)) > len(out["title"]):
       out["title"] = clean_text(str(title))
     if author and not out["author"]:
       out["author"] = clean_text(str(author))
+    if cover and not out["cover"]:
+      out["cover"] = clean_text(str(cover))
     for value in node.values():
       if isinstance(value, (dict, list)):
         walk(value, depth + 1)
@@ -433,6 +525,7 @@ def extract_douyin_embedded(html: str) -> dict[str, str]:
 def parse_douyin(url: str) -> dict | None:
   final = url
   html = ""
+  share_html = ""
   try:
     final, html = fetch_html(url, user_agent=MOBILE_UA)
   except Exception:
@@ -443,6 +536,10 @@ def parse_douyin(url: str) -> dict | None:
   title = embedded.get("title") or (extract_title(html) if html else "")
   desc = embedded.get("desc") or (meta_content(html, ["og:description", "description"]) if html else "")
   author = embedded.get("author") or ""
+  cover = (
+    absolutize_cover(embedded.get("cover") or "", final or url)
+    or extract_og_cover(html, final or url)
+  )
 
   if video_id and (not title or _looks_like_douyin_placeholder(title, desc)):
     try:
@@ -452,6 +549,11 @@ def parse_douyin(url: str) -> dict | None:
       title = share_embedded.get("title") or extract_title(share_html) or title
       desc = share_embedded.get("desc") or meta_content(share_html, ["og:description", "description"]) or desc
       author = share_embedded.get("author") or author
+      cover = (
+        cover
+        or absolutize_cover(share_embedded.get("cover") or "", final or url)
+        or extract_og_cover(share_html, final or url)
+      )
     except Exception:
       pass
 
@@ -459,11 +561,15 @@ def parse_douyin(url: str) -> dict | None:
   ytdlp = run_ytdlp(final or url, session_cookie=session_cookie, platform="douyin")
   if ytdlp and (ytdlp.get("content_text") or ytdlp.get("title")):
     if not _looks_like_douyin_placeholder(ytdlp.get("title") or "", ytdlp.get("content_text") or ""):
+      if cover and not ytdlp.get("cover_image_url"):
+        ytdlp = {**ytdlp, "cover_image_url": cover}
       return ytdlp
 
   if session_cookie:
     browser_parsed = parse_douyin_with_playwright(final or url)
     if browser_parsed:
+      if cover and not browser_parsed.get("cover_image_url"):
+        browser_parsed = {**browser_parsed, "cover_image_url": cover}
       return browser_parsed
 
   if title or desc:
@@ -478,6 +584,7 @@ def parse_douyin(url: str) -> dict | None:
       caption_text=desc,
       content_text=body,
       summary=summarize(desc, title),
+      cover_image_url=cover or extract_og_cover(html, final or url) or extract_og_cover(share_html, final or url),
       playback_mode="external_url",
       playback_url=final or url,
       quality="full" if len(body) >= 40 and not _looks_like_douyin_placeholder(title, desc) else "partial",
@@ -513,8 +620,8 @@ def parse_douyin_with_playwright(url: str) -> dict | None:
       context = browser.new_context(locale="zh-CN", user_agent=MOBILE_UA)
       context.add_cookies(seeded)
       page = context.new_page()
-      page.goto(url, wait_until="domcontentloaded", timeout=45_000)
-      page.wait_for_timeout(2500)
+      page.goto(url, wait_until="domcontentloaded", timeout=18_000)
+      page.wait_for_timeout(1200)
       html = page.content()
       final = page.url
       browser.close()
@@ -537,6 +644,10 @@ def parse_douyin_with_playwright(url: str) -> dict | None:
     caption_text=desc,
     content_text=body,
     summary=summarize(desc, title),
+    cover_image_url=(
+      absolutize_cover(embedded.get("cover") or "", final or url)
+      or extract_og_cover(html, final or url)
+    ),
     playback_mode="external_url",
     playback_url=final or url,
     quality="full" if len(body) >= 40 else "partial",
@@ -554,11 +665,236 @@ def fetch_html(url: str, user_agent: str = UA) -> tuple[str, str]:
   return final, raw.decode("utf-8", "ignore")
 
 
+def zhihu_article_id(url: str) -> str:
+  """Extract Zhihu column article id from common share URLs."""
+  text = str(url or "").strip()
+  for pattern in (
+    r"zhuanlan\.zhihu\.com/p/(\d+)",
+    r"(?:www\.)?zhihu\.com/p/(\d+)",
+  ):
+    match = re.search(pattern, text)
+    if match:
+      return match.group(1)
+  return ""
+
+
+def zhihu_question_id(url: str) -> str:
+  match = re.search(r"(?:www\.)?zhihu\.com/question/(\d+)", str(url or ""))
+  return match.group(1) if match else ""
+
+
+def zhihu_answer_id(url: str) -> str:
+  text = str(url or "")
+  match = re.search(r"(?:www\.)?zhihu\.com/question/\d+/answer/(\d+)", text)
+  if match:
+    return match.group(1)
+  match = re.search(r"(?:www\.)?zhihu\.com/answer/(\d+)", text)
+  return match.group(1) if match else ""
+
+
+def _zhihu_api_json(
+  api_url: str,
+  *,
+  cookie: str,
+  user_agent: str,
+  referer: str,
+) -> dict | None:
+  req = Request(
+    api_url,
+    headers={
+      "User-Agent": user_agent,
+      "Cookie": cookie,
+      "Accept": "application/json, text/plain, */*",
+      "Referer": referer,
+      "x-requested-with": "fetch",
+    },
+  )
+  try:
+    with OPENER.open(req, timeout=20) as response:
+      raw = response.read().decode("utf-8", errors="replace")
+    body = json.loads(raw)
+  except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError):
+    return None
+  return body if isinstance(body, dict) else None
+
+
+def _zhihu_author_name(payload: dict | None) -> str:
+  if not isinstance(payload, dict):
+    return ""
+  author = payload.get("author")
+  if isinstance(author, dict):
+    return clean_text(str(author.get("name") or ""))
+  return ""
+
+
+def _zhihu_result_from_html_fields(
+  *,
+  title: str,
+  html_content: str,
+  excerpt: str = "",
+  author: str = "",
+  canonical: str = "",
+  cover: str = "",
+) -> dict | None:
+  text_body = html_to_text(html_content) if html_content else clean_text(excerpt)
+  title = clean_text(title)
+  if not title and not text_body:
+    return None
+  if title in {"知乎", "安全验证", "请先登录", "404 - 知乎"} and len(text_body) < 20:
+    return None
+  return result(
+    platform="zhihu",
+    title=title or "知乎内容",
+    author_name=author,
+    content_text=text_body,
+    summary=summarize(text_body or excerpt, title),
+    cover_image_url=absolutize_cover(cover, canonical) if cover else "",
+    quality="full" if len(text_body) >= 80 else "partial",
+    canonical_url=canonical or "",
+    media_urls=extract_media_urls_from_html(html_content, canonical),
+  )
+
+
+def parse_zhihu_article_api(article_id: str, *, cookie: str, user_agent: str) -> dict | None:
+  body = _zhihu_api_json(
+    f"https://zhuanlan.zhihu.com/api/articles/{article_id}",
+    cookie=cookie,
+    user_agent=user_agent,
+    referer=f"https://zhuanlan.zhihu.com/p/{article_id}",
+  )
+  if not body:
+    return None
+  return _zhihu_result_from_html_fields(
+    title=str(body.get("title") or ""),
+    html_content=str(body.get("content") or ""),
+    excerpt=str(body.get("excerpt") or ""),
+    author=_zhihu_author_name(body),
+    canonical=str(body.get("url") or f"https://zhuanlan.zhihu.com/p/{article_id}").strip(),
+    cover=str(body.get("image_url") or body.get("title_image") or "").strip(),
+  )
+
+
+def parse_zhihu_answer_api(answer_id: str, *, cookie: str, user_agent: str, question_id: str = "") -> dict | None:
+  referer = (
+    f"https://www.zhihu.com/question/{question_id}/answer/{answer_id}"
+    if question_id
+    else f"https://www.zhihu.com/answer/{answer_id}"
+  )
+  body = _zhihu_api_json(
+    f"https://www.zhihu.com/api/v4/answers/{answer_id}?include=content,author,question,question.title,excerpt",
+    cookie=cookie,
+    user_agent=user_agent,
+    referer=referer,
+  )
+  if not body:
+    return None
+  question = body.get("question") if isinstance(body.get("question"), dict) else {}
+  title = clean_text(str(question.get("title") or "")) or f"知乎回答 {answer_id}"
+  qid = str(question.get("id") or question_id or "").strip()
+  canonical = (
+    f"https://www.zhihu.com/question/{qid}/answer/{answer_id}"
+    if qid
+    else f"https://www.zhihu.com/answer/{answer_id}"
+  )
+  return _zhihu_result_from_html_fields(
+    title=title,
+    html_content=str(body.get("content") or ""),
+    excerpt=str(body.get("excerpt") or ""),
+    author=_zhihu_author_name(body),
+    canonical=canonical,
+  )
+
+
+def parse_zhihu_question_api(question_id: str, *, cookie: str, user_agent: str) -> dict | None:
+  """Question detail API is often 403; answers list still works and carries question title."""
+  body = _zhihu_api_json(
+    (
+      f"https://www.zhihu.com/api/v4/questions/{question_id}/answers"
+      "?include=data[*].is_normal,content,excerpt,author,question,question.title,voteup_count"
+      "&limit=5&offset=0&sort_by=default"
+    ),
+    cookie=cookie,
+    user_agent=user_agent,
+    referer=f"https://www.zhihu.com/question/{question_id}",
+  )
+  if not body:
+    return None
+  answers = body.get("data")
+  if not isinstance(answers, list) or not answers:
+    return None
+
+  title = ""
+  chunks: list[str] = []
+  authors: list[str] = []
+  for idx, item in enumerate(answers[:5], start=1):
+    if not isinstance(item, dict):
+      continue
+    if not title:
+      question = item.get("question") if isinstance(item.get("question"), dict) else {}
+      title = clean_text(str(question.get("title") or ""))
+    author = _zhihu_author_name(item) or f"回答{idx}"
+    authors.append(author)
+    text = html_to_text(str(item.get("content") or "")) or clean_text(str(item.get("excerpt") or ""))
+    if not text:
+      continue
+    chunks.append(f"【{author}】\n{text}")
+
+  if not chunks:
+    return None
+  combined = "\n\n".join(chunks)
+  author = authors[0] if len(authors) == 1 else ""
+  return result(
+    platform="zhihu",
+    title=title or f"知乎问题 {question_id}",
+    author_name=author,
+    content_text=combined,
+    summary=summarize(combined, title),
+    cover_image_url="",
+    quality="full" if len(combined) >= 80 else "partial",
+    canonical_url=f"https://www.zhihu.com/question/{question_id}",
+  )
+
+
+def parse_zhihu_via_api(url: str, *, cookie: str = "", user_agent: str = UA) -> dict | None:
+  """Fetch Zhihu content through first-party JSON APIs (works with saved session cookies)."""
+  header = str(cookie or "").strip()
+  if not header:
+    return None
+
+  article_id = zhihu_article_id(url)
+  if article_id:
+    return parse_zhihu_article_api(article_id, cookie=header, user_agent=user_agent)
+
+  answer_id = zhihu_answer_id(url)
+  question_id = zhihu_question_id(url)
+  if answer_id:
+    return parse_zhihu_answer_api(
+      answer_id,
+      cookie=header,
+      user_agent=user_agent,
+      question_id=question_id,
+    )
+  if question_id:
+    return parse_zhihu_question_api(question_id, cookie=header, user_agent=user_agent)
+  return None
+
+
 def parse_zhihu(url: str) -> dict | None:
+  cookie = _active_cookie.get() or COOKIE_ENV.strip()
+  session = load_platform_session("zhihu") if cookie else None
+  user_agent = UA
+  if isinstance(session, dict) and str(session.get("ua") or "").strip():
+    user_agent = str(session["ua"]).strip()
+
+  if cookie:
+    api_parsed = parse_zhihu_via_api(url, cookie=cookie, user_agent=user_agent)
+    if api_parsed:
+      return api_parsed
+
   html = ""
   final = url
   try:
-    final, html = fetch_html(url, user_agent=UA)
+    final, html = fetch_html(url, user_agent=user_agent)
   except Exception:
     try:
       final, html = fetch_html(url, user_agent=MOBILE_UA)
@@ -591,8 +927,10 @@ def parse_zhihu(url: str) -> dict | None:
     title=title or "知乎内容",
     content_text=body,
     summary=summarize(body or desc, title),
+    cover_image_url=extract_og_cover(html, final),
     quality="full" if len(body) >= 80 else "partial",
     canonical_url=final,
+    media_urls=extract_media_urls_from_html(html, final),
   )
 
 
@@ -605,9 +943,11 @@ def parse_wechat(url: str) -> dict | None:
   author = meta_content(html, ["author", "og:article:author"])
   desc = meta_content(html, ["og:description", "description"])
   body = ""
+  body_html = ""
   match = re.search(r'(?is)id=["\']js_content["\'][^>]*>(.*?)</div>', html)
   if match:
-    body = html_to_text(match.group(1))
+    body_html = match.group(1)
+    body = html_to_text(body_html)
   if not body:
     body = desc
   if not (title or body):
@@ -619,8 +959,10 @@ def parse_wechat(url: str) -> dict | None:
     content_text=body,
     caption_text="",
     summary=summarize(body or desc, title),
+    cover_image_url=extract_og_cover(html, final),
     quality="full" if len(body) >= 80 else "partial",
     canonical_url=final,
+    media_urls=extract_media_urls_from_html(body_html or html, final),
   )
 
 
@@ -632,6 +974,7 @@ def parse_xhs(url: str) -> dict | None:
   title = extract_title(html)
   desc = meta_content(html, ["og:description", "description"])
   body = desc
+  cover = extract_og_cover(html, final)
   # Best-effort parse of embedded state for note pages.
   state_match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(\{.+?\})</script>", html, re.S)
   if state_match:
@@ -654,6 +997,18 @@ def parse_xhs(url: str) -> dict | None:
             continue
           title = clean_text(note.get("title") or title)
           body = clean_text(note.get("desc") or note.get("description") or body)
+          if not cover:
+            image_list = note.get("imageList") or note.get("image_list") or []
+            if isinstance(image_list, list) and image_list:
+              first = image_list[0] if isinstance(image_list[0], dict) else {}
+              info_list = first.get("infoList") if isinstance(first, dict) else None
+              info_url = ""
+              if isinstance(info_list, list) and info_list and isinstance(info_list[0], dict):
+                info_url = info_list[0].get("url") or ""
+              cover = absolutize_cover(
+                first.get("urlDefault") or first.get("url") or info_url or "",
+                final,
+              )
           break
   if not (title or body):
     return None
@@ -662,6 +1017,7 @@ def parse_xhs(url: str) -> dict | None:
     title=title or "小红书笔记",
     content_text=body or title,
     summary=summarize(body, title),
+    cover_image_url=cover,
     quality="full" if len(body or "") >= 40 else "partial",
     canonical_url=final,
   )
@@ -693,6 +1049,7 @@ def parse_generic(url: str, platform: str) -> dict | None:
     title=title or final,
     content_text=body,
     summary=summarize(body, title),
+    cover_image_url=extract_og_cover(html, final),
     quality="full" if len(body) >= 80 else "partial",
     canonical_url=final,
   )
@@ -705,6 +1062,18 @@ def parse_url(url: str, *, prefer_session: bool = False) -> dict:
   session_mode = "saved" if prefer_session else "anonymous"
   cookie = resolve_request_cookie(platform, prefer_session=prefer_session)
   token = _active_cookie.set(cookie) if cookie else None
+
+  try:
+    from medicrawler_adapter import try_medicrawler_parse
+
+    mc_parsed = try_medicrawler_parse(url, platform, cookie=cookie)
+    if mc_parsed and (mc_parsed.get("content_text") or mc_parsed.get("title")):
+      used_saved = bool(prefer_session and bool(cookie or has_saved_session(platform)))
+      mc_parsed["session_mode"] = session_mode
+      mc_parsed["used_saved_session"] = used_saved
+      return mc_parsed
+  except Exception as exc:  # noqa: BLE001
+    errors.append(f"mediacrawler: {exc}")
 
   try:
     if platform == "bilibili":
@@ -740,10 +1109,17 @@ def parse_url(url: str, *, prefer_session: bool = False) -> dict:
       "请在设置页对该平台重新「连接」完成扫码，或把 Cookie 放到 tools/platform-parser/cookies.txt。"
     )
   elif platform == "zhihu":
-    detail = (
-      "知乎需要登录态才能抓取。请在本机设置 PLATFORM_COOKIE（浏览器里复制 Cookie），"
-      "或把 Netscape 格式 cookies 放到 tools/platform-parser/cookies.txt 后重启解析器。"
-    )
+    if used_saved:
+      detail = (
+        "已使用本机知乎登录会话，但仍未能解析该链接。"
+        "请确认链接为专栏（zhuanlan.zhihu.com/p/…）、问题或回答（zhihu.com/question/…），"
+        "或在设置页「重新连接」知乎后再试。"
+      )
+    else:
+      detail = (
+        "知乎需要登录态才能抓取。请在设置页连接知乎完成本机扫码登录后重试；"
+        "也可临时设置 PLATFORM_COOKIE 或把 Netscape cookies 放到 tools/platform-parser/cookies.txt。"
+      )
   elif platform == "douyin":
     if used_saved:
       detail = (
@@ -792,7 +1168,18 @@ class Handler(BaseHTTPRequestHandler):
   def do_GET(self) -> None:  # noqa: N802
     path = self.path.split("?", 1)[0].rstrip("/") or "/"
     if path == "/health":
-      self._json(200, {"ok": True})
+      from office_convert import resolve_soffice
+      ppt = Path("/Applications/Microsoft PowerPoint.app").is_dir()
+      excel = Path("/Applications/Microsoft Excel.app").is_dir()
+      from medicrawler_adapter import medicrawler_status
+      self._json(200, {
+        "ok": True,
+        "office_convert": bool(resolve_soffice() or ppt or excel),
+        "powerpoint": ppt,
+        "excel": excel,
+        "libreoffice": bool(resolve_soffice()),
+        "mediacrawler": medicrawler_status(),
+      })
       return
     if path == "/sessions":
       from session_store import (
@@ -800,11 +1187,31 @@ class Handler(BaseHTTPRequestHandler):
         cookie_header_from_session,
         load_platform_session,
       )
+      from session_verify import verify_saved_session
       sessions = {
         code: bool(cookie_header_from_session(load_platform_session(code)))
         for code in sorted(SUPPORTED_LOGIN_PLATFORMS)
       }
-      self._json(200, {"ok": True, "sessions": sessions})
+      verified: dict[str, bool] = {}
+      accounts: dict[str, str] = {}
+      details: dict[str, str] = {}
+      for code, present in sessions.items():
+        if not present:
+          verified[code] = False
+          accounts[code] = ""
+          details[code] = "no_local_session"
+          continue
+        result = verify_saved_session(code)
+        verified[code] = bool(result.get("ok"))
+        accounts[code] = str(result.get("account_display_name") or "")
+        details[code] = str(result.get("detail") or "")
+      self._json(200, {
+        "ok": True,
+        "sessions": sessions,
+        "verified": verified,
+        "accounts": accounts,
+        "details": details,
+      })
       return
     if path.startswith("/login/"):
       login_id = path.split("/login/", 1)[1].strip()
@@ -850,6 +1257,65 @@ class Handler(BaseHTTPRequestHandler):
       self._json(200, {"ok": True, "platform": platform})
       return
 
+    if path == "/sessions/import":
+      from session_store import clear_platform_session, import_platform_cookies, save_platform_session
+      from session_verify import verify_saved_session
+      platform = (payload.get("platform") or "").strip().lower()
+      cookies = str(payload.get("cookies") or payload.get("cookie") or "").strip()
+      account = str(payload.get("account_display_name") or "").strip()
+      try:
+        saved = import_platform_cookies(platform, cookies, account_display_name=account)
+      except ValueError as exc:
+        self._json(400, {"error": str(exc)})
+        return
+      check = verify_saved_session(platform)
+      if not check.get("ok"):
+        clear_platform_session(platform)
+        detail = check.get("detail") or "session_invalid"
+        self._json(400, {
+          "error": "Cookie 无效或已过期，请重新从已登录的浏览器复制",
+          "detail": detail,
+        })
+        return
+      name = check.get("account_display_name") or saved.get("account_display_name") or ""
+      if name and name != saved.get("account_display_name"):
+        saved["account_display_name"] = name
+        save_platform_session(platform, saved)
+      self._json(200, {
+        "ok": True,
+        "platform": platform,
+        "account_display_name": name,
+        "verified": True,
+      })
+      return
+
+    if path == "/convert-office":
+      from office_convert import convert_office_to_pdf
+      filename = str(payload.get("filename") or payload.get("file_name") or "document.bin")
+      b64 = str(payload.get("content_base64") or "").strip()
+      if not b64:
+        self._json(400, {"error": "content_base64 required"})
+        return
+      try:
+        raw = base64.b64decode(b64, validate=False)
+        pdf = convert_office_to_pdf(filename, raw)
+      except ValueError as exc:
+        self._json(400, {"error": str(exc)})
+        return
+      except RuntimeError as exc:
+        self._json(503, {"error": str(exc)})
+        return
+      except Exception as exc:  # noqa: BLE001
+        self._json(500, {"error": str(exc)})
+        return
+      self._json(200, {
+        "ok": True,
+        "filename": Path(filename).with_suffix(".pdf").name,
+        "content_base64": base64.b64encode(pdf).decode("ascii"),
+        "byte_length": len(pdf),
+      })
+      return
+
     if path != "/parse":
       self._json(404, {"error": "not found"})
       return
@@ -871,7 +1337,8 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
   server = ThreadingHTTPServer((HOST, PORT), Handler)
   print(f"platform-parser listening on http://{HOST}:{PORT}", flush=True)
-  print("login: POST /login {platform:xhs|douyin} ; GET /login/:id ; POST /logout", flush=True)
+  print("login: POST /login {platform:xhs|douyin|zhihu|bilibili} ; GET /login/:id ; POST /logout", flush=True)
+  print("office: POST /convert-office {filename, content_base64}", flush=True)
   server.serve_forever()
 
 

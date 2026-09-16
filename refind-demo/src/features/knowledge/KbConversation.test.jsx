@@ -30,7 +30,7 @@ describe('KbConversation share mode', () => {
     render(
       <KbConversation
         messages={messages}
-        shareMode
+        selectMode="share"
         selectedBubbleIds={['kb-9-answer']}
         onToggleBubble={onToggleBubble}
       />,
@@ -39,5 +39,32 @@ describe('KbConversation share mode', () => {
     expect(screen.queryByRole('button', { name: '分享回答' })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: '选择提问：你好' }));
     expect(onToggleBubble).toHaveBeenCalledWith('kb-9-user');
+  });
+});
+
+describe('KbConversation edit resend', () => {
+  it('edits a user bubble and resends the revised question', async () => {
+    const onResend = vi.fn();
+    render(<KbConversation messages={messages} onResend={onResend} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑提问' }));
+    const editor = screen.getByRole('textbox', { name: '编辑提问内容' });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, '改写后的提问');
+    await userEvent.click(screen.getByRole('button', { name: '重新发送' }));
+
+    expect(onResend).toHaveBeenCalledWith({
+      messageId: 9,
+      prompt: '改写后的提问',
+      mode: 'rag',
+      selectedBases: ['默认知识库'],
+      selectedTags: [],
+      online: false,
+    });
+  });
+
+  it('hides edit control while sharing', () => {
+    render(<KbConversation messages={messages} selectMode="share" onResend={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '编辑提问' })).not.toBeInTheDocument();
   });
 });

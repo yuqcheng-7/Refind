@@ -54,7 +54,18 @@ function metaContent(html, names) {
   return '';
 }
 
-export function extractOpenGraph(html) {
+export function absolutizeUrl(value, baseUrl = '') {
+  const raw = cleanText(value);
+  if (!raw) return '';
+  if (raw.startsWith('//')) return `https:${raw}`;
+  try {
+    return new URL(raw, baseUrl || undefined).href;
+  } catch {
+    return /^https?:\/\//i.test(raw) ? raw : '';
+  }
+}
+
+export function extractOpenGraph(html, baseUrl = '') {
   const title = metaContent(html, ['og:title', 'twitter:title'])
     || (() => {
       const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
@@ -62,7 +73,7 @@ export function extractOpenGraph(html) {
     })();
   const description = metaContent(html, ['og:description', 'twitter:description', 'description']);
   const siteName = metaContent(html, ['og:site_name']);
-  const image = metaContent(html, ['og:image', 'twitter:image']);
+  const image = absolutizeUrl(metaContent(html, ['og:image', 'twitter:image']), baseUrl);
   return { title, description, siteName, image };
 }
 
@@ -233,6 +244,7 @@ export async function fetchBilibiliMeta(sourceUrl, fetchFn = fetch) {
       caption_text: description,
       content_text: description,
       summary_seed: description,
+      cover_image_url: absolutizeUrl(data.pic || data.cover || ''),
       tags,
       playback_mode: 'embed',
       playback_url: bilibiliEmbedUrl(sourceUrl, id),
@@ -267,10 +279,15 @@ async function tryExternalParser(sourceUrl, env = {}, fetchFn = fetch) {
       subtitle_text: cleanText(data.subtitle_text || data.subtitles || ''),
       content_text: cleanText(data.content_text || data.description || ''),
       summary_seed: cleanText(data.summary || data.description || data.content_text || ''),
+      cover_image_url: absolutizeUrl(
+        data.cover_image_url || data.cover || data.thumbnail || data.image || '',
+        sourceUrl,
+      ),
       playback_mode: data.playback_mode || null,
       playback_url: cleanText(data.playback_url || ''),
       playback_embed_html: cleanText(data.playback_embed_html || ''),
       quality: data.quality || (data.content_text ? 'full' : 'partial'),
+      media_urls: uniqueMediaUrls(Array.isArray(data.media_urls) ? data.media_urls : []),
     };
   } catch {
     return null;
@@ -281,6 +298,55 @@ function preferLonger(current, next) {
   const a = cleanText(current);
   const b = cleanText(next);
   return b.length > a.length ? b : a;
+}
+
+function preferCover(current, next) {
+  return cleanText(current) || cleanText(next);
+}
+
+const INLINE_IMAGE_LIMIT = 10;
+
+export function extractMediaUrlsFromHtml(html = '', baseUrl = '', limit = INLINE_IMAGE_LIMIT) {
+  const cap = Math.max(1, Number(limit) || INLINE_IMAGE_LIMIT);
+  const source = String(html || '');
+  const re = /<img\b[^>]*?\b(?:src|data-src|data-original|data-actualsrc)=["']([^"']+)["']/gi;
+  const out = [];
+  const seen = new Set();
+  let match = re.exec(source);
+  while (match) {
+    const raw = cleanText(match[1]);
+    if (raw && !raw.startsWith('data:')) {
+      const url = absolutizeUrl(raw, baseUrl);
+      if (url.startsWith('http') && !seen.has(url)) {
+        seen.add(url);
+        out.push(url);
+        if (out.length >= cap) break;
+      }
+    }
+    match = re.exec(source);
+  }
+  return out;
+}
+
+function uniqueMediaUrls(values, limit = INLINE_IMAGE_LIMIT) {
+  const out = [];
+  const seen = new Set();
+  for (const value of values || []) {
+    const url = cleanText(value);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function preferMediaUrls(current, next) {
+  const a = Array.isArray(current) ? current : [];
+  const b = Array.isArray(next) ? next : [];
+  if (!b.length) return uniqueMediaUrls(a);
+  if (!a.length) return uniqueMediaUrls(b);
+  return uniqueMediaUrls([...a, ...b]);
 }
 
 function mergeResult(base, patch) {
@@ -294,12 +360,14 @@ function mergeResult(base, patch) {
     subtitle_text: preferLonger(base.subtitle_text, patch.subtitle_text),
     content_text: preferLonger(base.content_text, patch.content_text),
     summary_seed: preferLonger(base.summary_seed, patch.summary_seed),
+    cover_image_url: preferCover(base.cover_image_url, patch.cover_image_url),
     playback_mode: patch.playback_mode || base.playback_mode,
     playback_url: preferLonger(base.playback_url, patch.playback_url),
     playback_embed_html: preferLonger(base.playback_embed_html, patch.playback_embed_html),
     quality: patch.quality === 'full' || base.quality === 'full'
       ? 'full'
       : (patch.quality || base.quality),
+    media_urls: preferMediaUrls(base.media_urls, patch.media_urls),
   };
 }
 
@@ -338,11 +406,13 @@ export async function extractLinkContent({
     subtitle_text: '',
     content_text: '',
     summary_seed: '',
+    cover_image_url: '',
     playback_mode: null,
     playback_url: '',
     playback_embed_html: '',
     quality: 'none',
     canonical_url: workingUrl,
+    media_urls: [],
   };
 
   if (platform === 'bilibili') {
@@ -367,14 +437,17 @@ export async function extractLinkContent({
 
   result = mergeResult(result, await tryExternalParser(workingUrl || sourceUrl, env, fetchFn));
 
-  const og = extractOpenGraph(html);
+  const og = extractOpenGraph(html, workingUrl || sourceUrl);
   const body = extractReadableBody(html);
+  const mediaFromHtml = extractMediaUrlsFromHtml(html, workingUrl || sourceUrl);
   const ogPatch = {
     title: og.title,
     caption_text: platform === 'douyin' || platform === 'bilibili' ? og.description : '',
     content_text: preferLonger(body, og.description),
     summary_seed: preferLonger(og.description, body.slice(0, 240)),
+    cover_image_url: og.image,
     quality: qualityFromText(preferLonger(body, og.description), og.title),
+    media_urls: mediaFromHtml,
   };
   if (platform === 'bilibili' || platform === 'douyin') {
     const biliId = extractBilibiliId(workingUrl)

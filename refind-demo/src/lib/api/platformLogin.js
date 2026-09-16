@@ -27,7 +27,7 @@ export async function fetchLocalSessionPresence({ parserBaseUrl } = {}) {
   const base = readParserBase(parserBaseUrl);
   try {
     const response = await fetch(buildParserUrl(base, '/sessions'), {
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(8000),
     });
     const data = await readJson(response);
     if (!response.ok || !data?.sessions || typeof data.sessions !== 'object') {
@@ -36,6 +36,28 @@ export async function fetchLocalSessionPresence({ parserBaseUrl } = {}) {
     return data.sessions;
   } catch {
     // Parser offline: do not treat as "sessions cleared".
+    return null;
+  }
+}
+
+/** Live-check saved cookies against platform APIs. null = parser offline. */
+export async function fetchLocalSessionHealth({ parserBaseUrl } = {}) {
+  const base = readParserBase(parserBaseUrl);
+  try {
+    const response = await fetch(buildParserUrl(base, '/sessions'), {
+      signal: AbortSignal.timeout(12_000),
+    });
+    const data = await readJson(response);
+    if (!response.ok || !data?.sessions || typeof data.sessions !== 'object') {
+      return null;
+    }
+    return {
+      sessions: data.sessions,
+      verified: data.verified && typeof data.verified === 'object' ? data.verified : {},
+      accounts: data.accounts && typeof data.accounts === 'object' ? data.accounts : {},
+      details: data.details && typeof data.details === 'object' ? data.details : {},
+    };
+  } catch {
     return null;
   }
 }
@@ -85,6 +107,20 @@ export async function pollPlatformLogin(loginId, { parserBaseUrl } = {}) {
   };
 }
 
+export async function assertLocalParserSession(platformCode, { parserBaseUrl } = {}) {
+  const presence = await fetchLocalSessionPresence({ parserBaseUrl });
+  if (presence === null) {
+    throw new Error(
+      '无法连接本机解析器。请先运行 python3 tools/platform-parser/server.py，并在登录窗口自动关闭后再返回拾藏。',
+    );
+  }
+  if (!presence[platformCode]) {
+    throw new Error(
+      '本机未保存该平台登录会话。若已扫码，请勿手动关闭登录窗口，请重新点击「连接」并等待窗口自动关闭。',
+    );
+  }
+}
+
 export async function logoutPlatformParser(platformCode, { parserBaseUrl } = {}) {
   const base = readParserBase(parserBaseUrl);
   try {
@@ -96,6 +132,36 @@ export async function logoutPlatformParser(platformCode, { parserBaseUrl } = {})
   } catch {
     // Best-effort local cleanup; DB disconnect still proceeds.
   }
+}
+
+/** Manually import a Cookie header into the local parser (Zhihu fallback). */
+export async function importPlatformCookies(platformCode, cookieHeader, {
+  parserBaseUrl,
+  accountDisplayName = '',
+} = {}) {
+  const base = readParserBase(parserBaseUrl);
+  let response;
+  try {
+    response = await fetch(buildParserUrl(base, '/sessions/import'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        platform: platformCode,
+        cookies: cookieHeader,
+        account_display_name: accountDisplayName,
+      }),
+    });
+  } catch {
+    throw parserUnreachableError();
+  }
+  const data = await readJson(response);
+  if (!response.ok) {
+    throw new Error(data?.error || '导入 Cookie 失败');
+  }
+  return {
+    accountDisplayName: data?.account_display_name || '',
+    verified: Boolean(data?.verified),
+  };
 }
 
 export async function waitForPlatformLogin(platformCode, {
@@ -110,6 +176,12 @@ export async function waitForPlatformLogin(platformCode, {
     const snap = await pollPlatformLogin(loginId, { parserBaseUrl: base });
     if (snap.status === 'success') {
       if (!snap.sessionPayload) throw new Error('登录成功但未返回会话，请重试');
+      const sessions = await fetchLocalSessionPresence({ parserBaseUrl: base });
+      if (sessions && !sessions[platformCode]) {
+        throw new Error(
+          '登录未完成：本机未保存有效会话。请在弹出窗口中用 App 扫码或手机验证码完成登录后再试。',
+        );
+      }
       return snap;
     }
     if (snap.status === 'failed' || snap.status === 'expired') {

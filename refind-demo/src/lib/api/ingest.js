@@ -5,6 +5,7 @@ import {
   listPlatformConnections,
   markPlatformSessionInvalid,
 } from './platformConnections.js';
+import { fetchLocalSessionHealth, fetchLocalSessionPresence } from './platformLogin.js';
 
 const terminalStatuses = new Set(['ready', 'failed', 'link_only']);
 
@@ -17,14 +18,55 @@ const mimeByType = {
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   csv: 'text/csv',
-  image: 'application/octet-stream',
+  image: 'image/png',
 };
+
+/** File picker accept list — HTML/HTM intentionally excluded. */
+export const MATERIAL_UPLOAD_ACCEPT = [
+  '.pdf',
+  '.doc',
+  '.docx',
+  '.md',
+  '.markdown',
+  '.txt',
+  '.pptx',
+  '.ppt',
+  '.xlsx',
+  '.xls',
+  '.csv',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.webp',
+  '.gif',
+  '.heic',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/markdown',
+  'text/plain',
+  'text/csv',
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'image/heic',
+].join(',');
+
+const blockedExtensions = new Set(['html', 'htm', 'xhtml', 'shtml']);
+const blockedMimeTypes = new Set(['text/html', 'application/xhtml+xml', 'application/html']);
 
 const defaultPlatformParserUrl = 'http://127.0.0.1:8787';
 const sessionPlatforms = new Set(['xhs', 'douyin', 'zhihu', 'bilibili', 'wechat_mp']);
 
 export function inferMaterialInputType(file) {
-  const extension = file.name.split('.').pop()?.toLowerCase();
+  const extension = String(file?.name || '').split('.').pop()?.toLowerCase() || '';
+  if (blockedExtensions.has(extension) || blockedMimeTypes.has(String(file?.type || '').toLowerCase())) {
+    return null;
+  }
+
   const byExtension = {
     pdf: 'pdf',
     doc: 'doc',
@@ -61,7 +103,22 @@ export function inferMaterialInputType(file) {
     'image/gif': 'image',
     'image/heic': 'image',
   };
-  return byMimeType[file.type] || 'txt';
+  return byMimeType[file?.type] || null;
+}
+
+export function isAllowedMaterialUploadFile(file) {
+  return Boolean(inferMaterialInputType(file));
+}
+
+export function partitionMaterialUploadFiles(fileList) {
+  const files = [...(fileList || [])];
+  const allowed = [];
+  const rejected = [];
+  for (const file of files) {
+    if (isAllowedMaterialUploadFile(file)) allowed.push(file);
+    else rejected.push(file);
+  }
+  return { allowed, rejected };
 }
 
 export function buildMaterialStorageKey(userId, fileName) {
@@ -101,12 +158,24 @@ export function buildPlatformParsePayload(sourceUrl, { useSavedSession = false }
 
 export async function shouldUseSavedSession(
   sourceUrl,
-  { listConnections = listPlatformConnections } = {},
+  {
+    listConnections = listPlatformConnections,
+    fetchPresence = fetchLocalSessionPresence,
+    fetchHealth = fetchLocalSessionHealth,
+  } = {},
 ) {
   const platform = inferPlatformFromUrl(sourceUrl);
   if (!sessionPlatforms.has(platform)) return false;
   const rows = await listConnections();
-  return rows.some((row) => row.code === platform && row.connection?.status === 'connected');
+  const connected = rows.some((row) => row.code === platform && row.connection?.status === 'connected');
+  if (!connected) return false;
+  const health = await fetchHealth();
+  if (health?.verified && Object.prototype.hasOwnProperty.call(health.verified, platform)) {
+    return health.verified[platform] === true;
+  }
+  const presence = await fetchPresence();
+  if (presence && !presence[platform]) return false;
+  return true;
 }
 
 /** Browser-side parse on the user's network (CN platforms reachable). */
@@ -118,7 +187,7 @@ export async function prefetchLinkContent(sourceUrl, { useSavedSession = false }
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(buildPlatformParsePayload(sourceUrl, { useSavedSession })),
-      signal: AbortSignal.timeout(45000),
+      signal: AbortSignal.timeout(18_000),
     });
     const data = await response.json().catch(() => null);
     if (!response.ok) {
@@ -163,7 +232,7 @@ export async function invokeMaterialParse(materialId, { force = false, prefetche
   return { error: null, data };
 }
 
-export async function pollMaterialStatus(materialId, { intervalMs = 1000, timeoutMs = 120000 } = {}) {
+export async function pollMaterialStatus(materialId, { intervalMs = 800, timeoutMs = 90_000 } = {}) {
   const startedAt = Date.now();
   while (true) {
     const { data, error } = await supabase

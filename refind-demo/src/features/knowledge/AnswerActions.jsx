@@ -114,7 +114,7 @@ export function AnswerActions({ answer, children, onSaveCard, onAddToNote, onDel
           role="menu"
           aria-label="更多回答操作"
         >
-          <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); onDelete?.(answer); }}><Trash2 size={14} />删除回答</button>
+          <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); onDelete?.(answer); }}><Trash2 size={14} />删除</button>
           <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); onFeedback?.(answer); }}><ThumbsDown size={14} />反馈</button>
         </FloatingMenu>
       </div>

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ArrowUp, BookOpen, Check, ChevronDown, Globe2, WifiOff } from 'lucide-react';
+import { ArrowRight, ArrowUp, BookOpen, Check, ChevronDown, Globe2, WifiOff } from 'lucide-react';
 import { useDismissable } from '../../hooks/useDismissable.js';
 
 export const defaultHomeScope = {
@@ -13,7 +13,22 @@ export function modelLabel(thinkingMode) {
   return thinkingMode === 'deep' ? 'DS深度' : 'DS快速';
 }
 
-export function HomeComposer({ bases, availableTags = [], onSubmit, scope: controlledScope, onScopeChange }) {
+let composerIntroBeamPlayed = false;
+
+function prefersReducedMotion() {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+export function HomeComposer({
+  bases,
+  availableTags = [],
+  onSubmit,
+  scope: controlledScope,
+  onScopeChange,
+  sendArrow = 'up',
+  introBeam = false,
+}) {
   const [prompt, setPrompt] = useState('');
   const [localScope, setLocalScope] = useState(defaultHomeScope);
   const [baseMenu, setBaseMenu] = useState(false);
@@ -23,6 +38,21 @@ export function HomeComposer({ bases, availableTags = [], onSubmit, scope: contr
   const baseMenuRef = useRef(null);
   const modelMenuRef = useRef(null);
   const tagMenuRef = useRef(null);
+  const playIntroBeamRef = useRef(null);
+  if (playIntroBeamRef.current === null) {
+    playIntroBeamRef.current = Boolean(introBeam) && !composerIntroBeamPlayed && !prefersReducedMotion();
+    if (playIntroBeamRef.current) composerIntroBeamPlayed = true;
+  }
+  const [orbitToken, setOrbitToken] = useState(() => (playIntroBeamRef.current ? 1 : 0));
+  const [orbitActive, setOrbitActive] = useState(() => Boolean(playIntroBeamRef.current));
+  const startOrbitBeam = () => {
+    if (prefersReducedMotion()) return;
+    setOrbitActive(true);
+    setOrbitToken((token) => token + 1);
+  };
+  const endOrbitBeam = () => {
+    setOrbitActive(false);
+  };
   const scope = controlledScope || localScope;
   const setScope = onScopeChange || setLocalScope;
   const { thinkingMode = 'fast', online, selectedBases, selectedTags } = scope;
@@ -101,7 +131,18 @@ export function HomeComposer({ bases, availableTags = [], onSubmit, scope: contr
   const baseLabel = selectedBases.length === 0 ? '知识库' : selectedBases.length === 1 ? selectedBases[0] : `${selectedBases.length} 个知识库`;
 
   return (
-    <form className={`question-composer home-composer ${hasScope ? 'is-rag' : ''}`} onSubmit={send}>
+    <form
+      className={`question-composer home-composer ${hasScope ? 'is-rag' : ''}${orbitActive ? ' has-intro-beam' : ''}`}
+      onSubmit={send}
+    >
+      {orbitActive && (
+        <span
+          key={orbitToken}
+          className="beam-intro"
+          aria-hidden="true"
+          onAnimationEnd={endOrbitBeam}
+        />
+      )}
       <div className="composer-input-wrap" ref={tagMenuRef}>
         <textarea
           value={prompt}
@@ -110,6 +151,7 @@ export function HomeComposer({ bases, availableTags = [], onSubmit, scope: contr
             setPrompt(value);
             syncHashMenu(value);
           }}
+          onFocus={startOrbitBeam}
           onKeyDown={onPromptKeyDown}
           placeholder="请输入内容进行提问，输入 # 可选择标签"
         />
@@ -117,7 +159,10 @@ export function HomeComposer({ bases, availableTags = [], onSubmit, scope: contr
           <div className="composer-menu composer-tag-suggest" role="listbox" aria-label="选择标签">
             {filteredTags.length ? filteredTags.map((item) => (
               <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
-                <span>#{item}</span>
+                <span className="tag-text">
+                  <span className="tag-hash" aria-hidden="true">#</span>
+                  <span className="tag-label">{item}</span>
+                </span>
                 {selectedTags.includes(item) && <Check size={14} />}
               </button>
             )) : (
@@ -201,7 +246,9 @@ export function HomeComposer({ bases, availableTags = [], onSubmit, scope: contr
           </div>
         </div>
         <button className="send-button" type="submit" aria-label="发送提问">
-          <ArrowUp size={18} strokeWidth={2.1} />
+          {sendArrow === 'right'
+            ? <ArrowRight size={18} strokeWidth={2.1} />
+            : <ArrowUp size={18} strokeWidth={2.1} />}
         </button>
       </div>
     </form>

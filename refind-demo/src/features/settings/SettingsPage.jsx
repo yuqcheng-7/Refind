@@ -7,7 +7,7 @@ import {
   listPlatformConnections,
 } from '../../lib/api/platformConnections.js';
 import { logoutPlatformParser, waitForPlatformLogin } from '../../lib/api/platformLogin.js';
-import { supportsRealLogin } from '../../lib/api/platformSession.js';
+import { isNoLoginPlatform, supportsRealLogin } from '../../lib/api/platformSession.js';
 import { updateMyDisplayName } from '../../lib/api/profiles.js';
 
 const TABS = [
@@ -23,6 +23,12 @@ const EMPTY_PASSWORD_FORM = {
 
 function statusClass(status) {
   return status === 'connected' ? 'is-connected' : 'is-disconnected';
+}
+
+function platformStatusLabel(item, { realLogin, noLogin }) {
+  if (noLogin) return '无需登录';
+  if (realLogin) return item.connection.statusLabel;
+  return '即将支持';
 }
 
 function displayAccountName(name, { connected = false } = {}) {
@@ -93,7 +99,11 @@ export function SettingsPage({
     setError('');
     try {
       if (action === 'connect' || action === 'reconnect') {
-        setNotice('请在弹出的浏览器窗口中完成登录（扫码或账号密码）。完成后会自动保存。');
+        setNotice(
+          platformCode === 'zhihu'
+            ? '将弹出独立浏览器（知乎专用配置，可复用上次登录）。请扫码或验证码登录；成功后窗口会自动关闭，Cookie 会写入本机供解析使用。'
+            : '将弹出独立浏览器窗口。请用 App 扫码或手机验证码完成登录；未登录前请勿关闭窗口。成功后窗口会自动关闭。',
+        );
         const login = await waitForPlatformLogin(platformCode);
         await connectPlatform(platformCode, {
           sessionPayload: login.sessionPayload,
@@ -219,7 +229,8 @@ export function SettingsPage({
       {tab === 'platforms' ? (
         <div className="settings-panel">
           <p className="settings-hint">
-            小红书、抖音支持本机扫码登录；连接后解析对应链接时会优先使用本机会话。知乎 / B 站 / 微信公众号真实登录即将支持。
+            小红书、抖音、B 站、知乎登录成功后窗口会自动关闭。知乎会复用本机专用浏览器配置：关窗 ≠ 退出拾藏登录态；再点「连接」应仍显示已登录。Cookie 不会同步到日常 Chrome。
+            登录窗口里点开文章常被反爬拦截，请把链接粘贴到知识库导入。微信公众号无需登录。
           </p>
 
           {loading ? (
@@ -230,6 +241,7 @@ export function SettingsPage({
                 const status = item.connection.status;
                 const focused = focusPlatform && focusPlatform === item.code;
                 const realLogin = supportsRealLogin(item.code);
+                const noLogin = isNoLoginPlatform(item.code);
                 const busy = busyCode === item.code;
                 return (
                   <li
@@ -238,9 +250,9 @@ export function SettingsPage({
                   >
                     <div className="platform-connection-body">
                       <span className="platform-connection-name">{item.name}</span>
-                      <span className={`platform-connection-status ${statusClass(status)}`}>
+                      <span className={`platform-connection-status ${noLogin ? 'is-connected' : statusClass(status)}`}>
                         <i aria-hidden="true" />
-                        {realLogin ? item.connection.statusLabel : '即将支持'}
+                        {platformStatusLabel(item, { realLogin, noLogin })}
                       </span>
                       <dl className="platform-connection-meta">
                         <div>
@@ -253,7 +265,11 @@ export function SettingsPage({
                         </div>
                       </dl>
                       <div className="platform-connection-actions">
-                        {!realLogin ? (
+                        {noLogin ? (
+                          <button type="button" disabled title="公开文章无需登录即可解析">
+                            无需登录
+                          </button>
+                        ) : !realLogin ? (
                           status === 'connected' ? (
                             <button
                               type="button"

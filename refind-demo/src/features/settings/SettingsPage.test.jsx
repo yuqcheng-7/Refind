@@ -37,6 +37,17 @@ vi.mock('../../lib/api/platformConnections.js', () => ({
         lastVerifiedLabel: '',
       },
     },
+    {
+      code: 'wechat_mp',
+      name: '微信公众号',
+      connection: {
+        platform: 'wechat_mp',
+        accountName: '',
+        status: 'disconnected',
+        statusLabel: '未连接',
+        lastVerifiedLabel: '',
+      },
+    },
   ]),
   connectPlatform: (...args) => connectPlatform(...args),
   reconnectPlatform: async () => ({}),
@@ -66,7 +77,7 @@ afterEach(() => {
 });
 
 describe('SettingsPage', () => {
-  it('shows real-login connect for xhs and upcoming for zhihu', async () => {
+  it('shows real-login connect for xhs/zhihu and 无需登录 for wechat', async () => {
     const onBack = vi.fn();
     render(
       <SettingsPage
@@ -82,10 +93,12 @@ describe('SettingsPage', () => {
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible();
     expect(screen.getByText('小红书')).toBeVisible();
     expect(screen.getByText('知乎')).toBeVisible();
-    expect(screen.getByRole('button', { name: '连接' })).toBeVisible();
-    expect(screen.getByRole('button', { name: '即将支持' })).toBeDisabled();
+    expect(screen.getByText('微信公众号')).toBeVisible();
+    expect(screen.getAllByRole('button', { name: '连接' })).toHaveLength(2);
+    expect(screen.getByRole('button', { name: '无需登录' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '粘贴 Cookie' })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: '连接' }));
+    await userEvent.click(screen.getAllByRole('button', { name: '连接' })[0]);
     expect(await screen.findByText(/已连接。解析该平台链接时会优先使用本机会话/)).toBeVisible();
     expect(waitForPlatformLogin).toHaveBeenCalledWith('xhs');
     expect(connectPlatform).toHaveBeenCalledWith(

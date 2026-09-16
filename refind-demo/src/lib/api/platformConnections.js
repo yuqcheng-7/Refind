@@ -1,7 +1,12 @@
 import { supabase } from '../supabaseClient.js';
 import { formatRelativeDateTime } from '../formatTime.js';
-import { logoutPlatformParser, fetchLocalSessionPresence } from './platformLogin.js';
-import { encodeDevSession, supportsRealLogin } from './platformSession.js';
+import { assertLocalParserSession, logoutPlatformParser, fetchLocalSessionHealth } from './platformLogin.js';
+import {
+  encodeDevSession,
+  hasValidStoredSession,
+  sessionPayloadHasAuthCookies,
+  supportsRealLogin,
+} from './platformSession.js';
 
 export const PLATFORM_CONNECTION_OPTIONS = [
   { code: 'xhs', name: '小红书' },
@@ -111,39 +116,65 @@ async function migrateExpiredConnections(rows) {
   ));
 }
 
-async function reconcileMissingLocalSessions(rows) {
-  const presence = await fetchLocalSessionPresence();
-  if (!presence) return rows || [];
-
-  const missing = (rows || []).filter((row) => (
-    row.status === 'connected'
-    && supportsRealLogin(row.platform_code)
-    && presence[row.platform_code] !== true
-  ));
-  if (!missing.length) return rows || [];
-
-  const expiredIds = missing.map((row) => row.id).filter(Boolean);
-  if (expiredIds.length) {
+async function disconnectConnectionRows(rows) {
+  if (!rows?.length) return rows || [];
+  const ids = rows.map((row) => row.id).filter(Boolean);
+  if (ids.length) {
     const { error } = await supabase
       .from('platform_connections')
       .update(DISCONNECTED_PATCH)
-      .in('id', expiredIds);
+      .in('id', ids);
     if (error) throw error;
   }
-
-  const idSet = new Set(expiredIds);
+  const idSet = new Set(ids);
   return (rows || []).map((row) => (idSet.has(row.id) ? toDisconnectedRow(row) : row));
+}
+
+async function reconcileInvalidStoredSessions(rows) {
+  const invalid = (rows || []).filter((row) => (
+    row.status === 'connected'
+    && supportsRealLogin(row.platform_code)
+    && !hasValidStoredSession(row)
+  ));
+  if (!invalid.length) return rows || [];
+  return disconnectConnectionRows(invalid);
+}
+
+async function reconcileMissingLocalSessions(rows) {
+  const health = await fetchLocalSessionHealth();
+  if (!health?.sessions) return rows || [];
+
+  const presence = health.sessions;
+  const verified = health.verified || {};
+  const details = health.details || {};
+
+  const missing = (rows || []).filter((row) => {
+    if (row.status !== 'connected' || !supportsRealLogin(row.platform_code) || !hasValidStoredSession(row)) {
+      return false;
+    }
+    const code = row.platform_code;
+    if (presence[code] !== true) return true;
+    // Only drop when the platform explicitly rejects the cookie — not on transient network errors.
+    if (verified[code] === false && details[code] === 'session_invalid') return true;
+    return false;
+  });
+  if (!missing.length) return rows || [];
+
+  const codes = [...new Set(missing.map((row) => row.platform_code).filter(Boolean))];
+  await Promise.all(codes.map((code) => logoutPlatformParser(code)));
+  return disconnectConnectionRows(missing);
 }
 
 export async function listPlatformConnections({ reconcileLocal = true } = {}) {
   const { data, error } = await supabase
     .from('platform_connections')
-    .select('id, platform_code, account_display_name, status, last_verified_at, expires_at, updated_at')
+    .select('id, platform_code, account_display_name, status, last_verified_at, expires_at, updated_at, encrypted_session')
     .order('platform_code', { ascending: true });
   if (error) throw error;
 
   let rows = await migrateExpiredConnections(data);
   if (reconcileLocal) {
+    rows = await reconcileInvalidStoredSessions(rows);
     rows = await reconcileMissingLocalSessions(rows);
   }
   const byCode = new Map(rows.map((row) => [row.platform_code, mapConnection(row)]));
@@ -199,6 +230,12 @@ export async function connectPlatform(platformCode, { accountDisplayName, sessio
   if (!parsed) {
     throw new Error('缺少有效登录会话，请先完成扫码登录');
   }
+  if (!sessionPayloadHasAuthCookies(platformCode, parsed)) {
+    throw new Error(
+      '登录会话无效（可能提前关闭了登录窗口）。请重新连接，扫码后等待窗口自动关闭。',
+    );
+  }
+  await assertLocalParserSession(platformCode);
 
   const userId = await getCurrentUserId();
   const fromPayload = typeof parsed.account_display_name === 'string'

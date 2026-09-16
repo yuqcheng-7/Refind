@@ -48,7 +48,28 @@ vi.mock('../supabaseClient.js', () => ({
 
 vi.mock('./platformLogin.js', () => ({
   logoutPlatformParser: vi.fn(async () => {}),
-  fetchLocalSessionPresence: vi.fn(async () => null),
+  fetchLocalSessionPresence: vi.fn(async () => ({
+    xhs: true,
+    douyin: true,
+    zhihu: true,
+    bilibili: true,
+  })),
+  fetchLocalSessionHealth: vi.fn(async () => ({
+    sessions: {
+      xhs: true,
+      douyin: true,
+      zhihu: true,
+      bilibili: true,
+    },
+    verified: {
+      xhs: true,
+      douyin: true,
+      zhihu: true,
+      bilibili: true,
+    },
+    accounts: {},
+  })),
+  assertLocalParserSession: vi.fn(async () => {}),
 }));
 
 import {
@@ -129,6 +150,7 @@ describe('platform connection expiry', () => {
         last_verified_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + PLATFORM_SESSION_TTL_MS).toISOString(),
+        encrypted_session: encodeDevSession({ cookies: 'web_session=guest-only', platform: 'xhs' }),
       }],
       error: null,
     });
@@ -138,8 +160,45 @@ describe('platform connection expiry', () => {
     expect(update).toHaveBeenCalled();
   });
 
+  it('disconnects legacy demo zhihu/bilibili rows even when parser is offline', async () => {
+    fetchLocalSessionPresence.mockResolvedValueOnce(null);
+    selectOrder.mockResolvedValue({
+      data: [
+        {
+          id: 'row-zh',
+          platform_code: 'zhihu',
+          account_display_name: '演示账号',
+          status: 'connected',
+          last_verified_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + PLATFORM_SESSION_TTL_MS).toISOString(),
+          encrypted_session: 'refind-demo-session-pending',
+        },
+        {
+          id: 'row-bili',
+          platform_code: 'bilibili',
+          account_display_name: '',
+          status: 'connected',
+          last_verified_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + PLATFORM_SESSION_TTL_MS).toISOString(),
+          encrypted_session: 'refind-demo-session-pending',
+        },
+      ],
+      error: null,
+    });
+
+    const rows = await listPlatformConnections();
+    expect(rows.find((row) => row.code === 'zhihu').connection.status).toBe('disconnected');
+    expect(rows.find((row) => row.code === 'bilibili').connection.status).toBe('disconnected');
+    expect(update).toHaveBeenCalled();
+  });
+
   it('sets expires_at when connecting', async () => {
-    const sessionPayload = JSON.stringify({ cookies: 'a=1', platform: 'xhs' });
+    const sessionPayload = JSON.stringify({
+      cookies: `a1=${'x'.repeat(24)}; web_session=abc`,
+      platform: 'xhs',
+    });
     await connectPlatform('xhs', {
       sessionPayload,
       accountDisplayName: '知夏',

@@ -464,8 +464,8 @@ Expected: PASS.
 
 #### 8B. 图片 OCR — **待做**
 
-- [ ] **Step 1:** 选定 OCR 提供方（云端 API 可接受）；密钥仅存 Edge secrets
-- [ ] **Step 2:** `input_type=image` 下载 Storage 对象 → OCR 文字 + 简短视觉描述 → `ready`；失败计入 `parse_attempt_count`
+- [x] **Step 1:** 选定 OCR 提供方（云端 API 可接受）；密钥仅存 Edge secrets — **百炼 Qwen VL / OCR（`DASHSCOPE_API_KEY`）**
+- [x] **Step 2:** `input_type=image` 下载 Storage 对象 → OCR 文字 + 简短视觉描述 → `ready`；失败计入 `parse_attempt_count`
 - [ ] **Step 3:** 手工验证中英文截图各一张进入 `ready` 并可被关键词搜到（Phase 3 前可仅 body 可搜）
 
 #### 8C. 链接双路径加强 — **待做**

@@ -87,7 +87,84 @@ class LoginFlowTests(unittest.TestCase):
 
   def test_start_login_rejects_unsupported_platform(self) -> None:
     with self.assertRaises(ValueError):
-      login_flow.start_login("zhihu")
+      login_flow.start_login("wechat_mp")
+
+  def test_zhihu_and_bilibili_success_cookies(self) -> None:
+    self.assertTrue(login_flow.has_success_cookies("zhihu", [{"name": "z_c0", "value": "tok"}]))
+    self.assertTrue(login_flow.has_success_cookies("bilibili", [{"name": "SESSDATA", "value": "s"}]))
+    self.assertTrue(login_flow.has_success_cookies("bilibili", [{"name": "DedeUserID", "value": "1"}]))
+    self.assertFalse(login_flow.has_success_cookies("zhihu", [{"name": "SESSDATA", "value": "s"}]))
+
+  def test_platform_login_ready_rejects_guest_xhs_dom(self) -> None:
+    page = mock.Mock()
+    cookies = [{"name": "web_session", "value": "guest-session-token"}]
+    captured: dict = {}
+    with mock.patch.object(login_flow, "fetch_xhs_me", return_value={"guest": True}):
+      with mock.patch.object(login_flow, "xhs_state_logged_in", return_value=False):
+        with mock.patch.object(login_flow, "login_page_visible", return_value=False):
+          self.assertFalse(login_flow.platform_login_ready(page, "xhs", cookies, captured))
+
+  def test_platform_login_ready_accepts_xhs_user_me(self) -> None:
+    page = mock.Mock()
+    cookies = [{"name": "web_session", "value": "real-session-token"}]
+    captured: dict = {}
+    with mock.patch.object(
+      login_flow,
+      "fetch_xhs_me",
+      return_value={"guest": False, "nickname": "拾藏", "user_id": "1"},
+    ):
+      with mock.patch.object(login_flow, "login_page_visible", return_value=False):
+        self.assertTrue(login_flow.platform_login_ready(page, "xhs", cookies, captured))
+    self.assertTrue(captured.get("login_verified"))
+
+  def test_platform_login_ready_rejects_zhihu_cookie_without_verified_flag(self) -> None:
+    page = mock.Mock()
+    cookies = [{"name": "z_c0", "value": "0123456789abcdef0123456789abcdef"}]
+    with mock.patch.object(login_flow, "probe_browser_session", return_value=False):
+      with mock.patch.object(login_flow, "login_page_visible", return_value=False):
+        self.assertFalse(login_flow.platform_login_ready(page, "zhihu", cookies, {}))
+
+  def test_platform_login_ready_accepts_zhihu_via_probe(self) -> None:
+    page = mock.Mock()
+    cookies = [{"name": "z_c0", "value": "0123456789abcdef0123456789abcdef"}]
+    captured: dict = {}
+    with mock.patch.object(login_flow, "probe_browser_session", return_value=True) as probe:
+      self.assertTrue(login_flow.platform_login_ready(page, "zhihu", cookies, captured))
+    probe.assert_called()
+
+  def test_zhihu_weak_account_label_allowed(self) -> None:
+    self.assertFalse(login_flow.weak_account_label("zhihu", "会话 abcdefghij"))
+    self.assertTrue(login_flow.weak_account_label("zhihu", ""))
+    self.assertTrue(login_flow.weak_account_label("xhs", "会话 abcdefghij"))
+
+  def test_start_login_accepts_zhihu_with_fake_runner(self) -> None:
+    def fake_runner(platform: str, timeout_sec: float, on_authenticated=None):
+      self.assertEqual(platform, "zhihu")
+      result = {
+        "cookies": "z_c0=ok",
+        "account_display_name": "知乎用户",
+        "ua": "UA",
+      }
+      if on_authenticated:
+        on_authenticated(result)
+      return result
+
+    with mock.patch("login_flow.save_platform_session") as save:
+      login_id = login_flow.start_login("zhihu", runner=fake_runner, timeout_sec=5)
+      for _ in range(50):
+        snap = login_flow.snapshot_job(login_id)
+        if snap and snap["status"] != "pending":
+          break
+        time.sleep(0.05)
+      snap = login_flow.snapshot_job(login_id)
+      self.assertEqual(snap["status"], "success")
+      self.assertEqual(snap["account_display_name"], "知乎用户")
+      save.assert_called()
+
+  def test_zhihu_uses_persistent_browser_profile(self) -> None:
+    self.assertIn("zhihu", login_flow.PERSISTENT_BROWSER_PLATFORMS)
+    self.assertNotIn("zhihu", login_flow.KEEP_BROWSER_OPEN_AFTER_LOGIN)
+    self.assertNotIn("xhs", login_flow.PERSISTENT_BROWSER_PLATFORMS)
 
 
 if __name__ == "__main__":

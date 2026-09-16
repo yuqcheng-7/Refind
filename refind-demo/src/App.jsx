@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowUp, BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Hash, Link2, LogOut, Menu, MessageSquare, NotebookText, Plus, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react';
-import refindLogo from '/Users/zoecheng/Downloads/ChatGPT Image Sep 12, 2026, 10_56_22 AM.png';
+import { ArrowUp, BookOpen, BookSearch, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Hash, Link2, LogOut, Menu, MessageSquare, NotebookText, Plus, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import './styles.css';
 import { NotesWorkspace } from './features/notes/NotesWorkspace.jsx';
 import { HomeComposer, defaultHomeScope } from './features/home/HomeComposer.jsx';
@@ -9,6 +8,7 @@ import { HomeConversation, HomeShareBar } from './features/home/HomeConversation
 import { KbConversation } from './features/knowledge/KbConversation.jsx';
 import { HomeHistoryCard } from './features/home/HomeHistoryCard.jsx';
 import { MaterialIngest } from './features/knowledge/MaterialIngest.jsx';
+import { MaterialListCover } from './features/knowledge/MaterialListCover.jsx';
 import { EditMaterialTagsDialog } from './features/knowledge/EditMaterialTagsDialog.jsx';
 import { MoveMaterialDialog } from './features/knowledge/MoveMaterialDialog.jsx';
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
@@ -35,17 +35,19 @@ import { sendChatMessage } from './lib/api/chat.js';
 import { resolveChatSurface } from './lib/api/ragMode.js';
 import {
   createConversation,
+  deleteChatMessages,
   deleteConversation,
   groupConversationsByDay,
   listConversations,
   loadConversationTurns,
   renameConversation,
+  truncateConversationFromTurn,
 } from './lib/api/conversations.js';
+import { applyBubbleDeletes } from './features/chat/chatBubbles.js';
 import { supabase } from './lib/supabaseClient.js';
 
 const homeChatEmptyPrompt = '有什么想聊的？直接提问，或在输入框里选择知识库。';
-const kbChatEmptyTitle = '从你的资料里找答案';
-const kbChatEmptyHint = '输入问题后，回答会引用知识库里的具体片段。';
+const kbChatEmptyTitle = '从你的知识库中寻找答案';
 
 const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎', 'B 站', '其他'];
 const sortOptions = ['从新到旧', '从旧到新', 'A-Z', 'Z-A'];
@@ -108,7 +110,7 @@ function Citation({ label }) {
   return <span className="citation" tabIndex="0">引用<span>{label}</span></span>;
 }
 function KnowledgeAnswerMark() {
-  return <svg className="knowledge-answer-mark" viewBox="0 0 48 48" aria-hidden="true"><defs><linearGradient id="mark-light" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#e2e5e9" /><stop offset="1" stopColor="#c8cdd4" /></linearGradient><linearGradient id="mark-dark" x1="0" y1="0" x2="1" y2="1"><stop stopColor="#9ca4ae" /><stop offset="1" stopColor="#707985" /></linearGradient></defs><path d="M8.1 5.4c4.4-1.1 12.1-2.1 16.1 1.2 4.2 3.4 2.9 10.2-.8 14.5L15 30.6c-3.8 4.2-11.2 2-12.2-3.5C1.7 21.5 3.6 7.9 8.1 5.4Z" fill="url(#mark-light)" /><path d="M34.4 18.7c4.5-.8 9.4 3 10 7.7.6 4.6-1.1 11.4-4.2 14.5-3.1 3.2-12.9 3.1-17.1 2.2-4.2-.9-6.1-6.6-3.4-10.2l8.9-11.6c1.4-1.8 3.5-2.3 5.8-2.6Z" fill="url(#mark-dark)" /></svg>;
+  return <BookSearch className="knowledge-answer-mark" size={24} strokeWidth={1.5} aria-hidden="true" />;
 }
 function Composer({ base, bases, availableTags = [], onBase, onSubmit, compact = false }) {
   const [prompt, setPrompt] = useState('');
@@ -190,7 +192,10 @@ function Composer({ base, bases, availableTags = [], onBase, onSubmit, compact =
         <div className="composer-menu composer-tag-suggest" role="listbox" aria-label="选择标签">
           {filteredTags.length ? filteredTags.map((item) => (
             <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
-              <span>#{item}</span>
+              <span className="tag-text">
+                <span className="tag-hash" aria-hidden="true">#</span>
+                <span className="tag-label">{item}</span>
+              </span>
               {selectedTags.includes(item) && <Check size={15} />}
             </button>
           )) : (
@@ -276,8 +281,12 @@ export function App() {
   const [homeNavUnlocked, setHomeNavUnlocked] = useState(false);
   const [homeShareMode, setHomeShareMode] = useState(false);
   const [homeShareSelected, setHomeShareSelected] = useState([]);
+  const [homeDeleteMode, setHomeDeleteMode] = useState(false);
+  const [homeDeleteSelected, setHomeDeleteSelected] = useState([]);
   const [kbShareMode, setKbShareMode] = useState(false);
   const [kbShareSelected, setKbShareSelected] = useState([]);
+  const [kbDeleteMode, setKbDeleteMode] = useState(false);
+  const [kbDeleteSelected, setKbDeleteSelected] = useState([]);
   const [kbMessages, setKbMessages] = useState([]);
   const [kbConversationId, setKbConversationId] = useState(null);
   const [kbConversations, setKbConversations] = useState([]);
@@ -289,6 +298,7 @@ export function App() {
     }
   }, [homeScope.selectedBases, homeScope.selectedTags]);
   const [knowledgeMaterials, setKnowledgeMaterials] = useState([]);
+  const materialsListFetchGenRef = useRef(0);
   const [homeTagOptions, setHomeTagOptions] = useState([]);
   const [kbTagOptions, setKbTagOptions] = useState([]);
   const [hoveredMaterialId, setHoveredMaterialId] = useState(null);
@@ -411,6 +421,8 @@ export function App() {
   useEffect(() => {
     setKbShareMode(false);
     setKbShareSelected([]);
+    setKbDeleteMode(false);
+    setKbDeleteSelected([]);
     setKbConversationId(null);
     setKbMessages([]);
     setHistoryOpen(false);
@@ -423,16 +435,27 @@ export function App() {
       return undefined;
     }
     let active = true;
+    const fetchGen = ++materialsListFetchGenRef.current;
     listMaterials(selectedKnowledgeBase.id, {
       query,
       platform: platformCodes[source] || 'all',
     })
-      .then((items) => { if (active) setKnowledgeMaterials(items); })
+      .then((items) => {
+        if (!active || fetchGen !== materialsListFetchGenRef.current) return;
+        setKnowledgeMaterials((prev) => {
+          const nextIds = new Set(items.map((item) => item.id));
+          // Keep in-flight optimistic/processing rows that a stale fetch would otherwise erase.
+          const localOnly = prev.filter((item) => (
+            !nextIds.has(item.id)
+            && (item.status === 'processing' || String(item.id).startsWith('pending-'))
+          ));
+          return localOnly.length ? [...localOnly, ...items] : items;
+        });
+      })
       .catch(() => {
-        if (active) {
-          setKnowledgeMaterials([]);
-          say('资料暂时无法加载，请稍后重试。');
-        }
+        if (!active || fetchGen !== materialsListFetchGenRef.current) return;
+        setKnowledgeMaterials([]);
+        say('资料暂时无法加载，请稍后重试。');
       });
     return () => { active = false; };
   }, [session, selectedKnowledgeBase, query, source]);
@@ -500,12 +523,33 @@ export function App() {
     setHomeShareMode(false);
     setHomeShareSelected([]);
   };
+  const exitHomeDelete = () => {
+    setHomeDeleteMode(false);
+    setHomeDeleteSelected([]);
+  };
+  const exitHomeBubbleSelect = () => {
+    exitHomeShare();
+    exitHomeDelete();
+  };
   const startHomeShare = (answerId) => {
+    exitHomeDelete();
     setHomeShareMode(true);
     setHomeShareSelected([answerId]);
   };
+  const startHomeDelete = (answerId) => {
+    exitHomeShare();
+    setHomeDeleteMode(true);
+    setHomeDeleteSelected([answerId]);
+  };
   const toggleHomeShareBubble = (bubbleId) => {
     setHomeShareSelected((current) => (
+      current.includes(bubbleId)
+        ? current.filter((id) => id !== bubbleId)
+        : [...current, bubbleId]
+    ));
+  };
+  const toggleHomeDeleteBubble = (bubbleId) => {
+    setHomeDeleteSelected((current) => (
       current.includes(bubbleId)
         ? current.filter((id) => id !== bubbleId)
         : [...current, bubbleId]
@@ -517,16 +561,59 @@ export function App() {
     say('对话链接已复制。');
     exitHomeShare();
   };
+  const confirmHomeDelete = async () => {
+    if (!homeDeleteSelected.length) return;
+    const { messages: next, removedMessageIds } = applyBubbleDeletes(
+      homeMessages,
+      homeDeleteSelected,
+      {
+        userId: (message) => `${message.id}-user`,
+        answerId: (message) => `${message.id}-answer`,
+      },
+    );
+    setHomeMessages(next);
+    exitHomeDelete();
+    if (removedMessageIds.length) {
+      try {
+        await deleteChatMessages(removedMessageIds);
+      } catch {
+        say('部分气泡未能同步删除，请刷新后重试。');
+        return;
+      }
+    }
+    say(next.length ? '已删除所选气泡。' : '已删除所选气泡。');
+  };
   const exitKbShare = () => {
     setKbShareMode(false);
     setKbShareSelected([]);
   };
+  const exitKbDelete = () => {
+    setKbDeleteMode(false);
+    setKbDeleteSelected([]);
+  };
+  const exitKbBubbleSelect = () => {
+    exitKbShare();
+    exitKbDelete();
+  };
   const startKbShare = (answerId) => {
+    exitKbDelete();
     setKbShareMode(true);
     setKbShareSelected([answerId]);
   };
+  const startKbDelete = (answerId) => {
+    exitKbShare();
+    setKbDeleteMode(true);
+    setKbDeleteSelected([answerId]);
+  };
   const toggleKbShareBubble = (bubbleId) => {
     setKbShareSelected((current) => (
+      current.includes(bubbleId)
+        ? current.filter((id) => id !== bubbleId)
+        : [...current, bubbleId]
+    ));
+  };
+  const toggleKbDeleteBubble = (bubbleId) => {
+    setKbDeleteSelected((current) => (
       current.includes(bubbleId)
         ? current.filter((id) => id !== bubbleId)
         : [...current, bubbleId]
@@ -538,31 +625,96 @@ export function App() {
     say('对话链接已复制。');
     exitKbShare();
   };
+  const confirmKbDelete = async () => {
+    if (!kbDeleteSelected.length) return;
+    const { messages: next, removedMessageIds } = applyBubbleDeletes(
+      kbMessages,
+      kbDeleteSelected,
+      {
+        userId: (message) => `kb-${message.id}-user`,
+        answerId: (message) => `kb-${message.id}-answer`,
+      },
+    );
+    setKbMessages(next);
+    exitKbDelete();
+    if (removedMessageIds.length) {
+      try {
+        await deleteChatMessages(removedMessageIds);
+      } catch {
+        say('部分气泡未能同步删除，请刷新后重试。');
+        return;
+      }
+    }
+    say('已删除所选气泡。');
+  };
   const showHomeChat = homeSurface === 'chat';
   // History list is the source of truth for “有历史会话”.
   const hasHomeChatHistory = homeConversations.length > 0;
   const homeNavHoverReady = homeNavUnlocked;
   const homeNavActive = activeNav === '首页' && homeNavUnlocked && homeSurface === 'chat';
   const suppressHomeNavHoverRef = useRef(false);
+  // Enter the AI chat shell with a local empty thread. Do NOT persist a
+  // "新会话" row until the user clicks「新增会话」or sends the first message —
+  // otherwise every hero→chat visit (and leftover drafts on refresh) pollutes history.
+  const enterFreshHomeChatShell = () => {
+    exitHomeShare();
+    setHomeScope(initialHomeScope);
+    setConversationScope(null);
+    setHomeThreadSurface('home');
+    setHomeThreadKnowledgeBaseId(null);
+    setHomeChatOpened(true);
+    setHomeNavUnlocked(true);
+    setHomeSurface('chat');
+    setHomeHistoryOpen(true);
+    setHomeMessages([]);
+    setHomeConversationId(null);
+  };
+  const openHomeConversation = async (conversationId) => {
+    exitHomeShare();
+    setHomeConversationId(conversationId);
+    setHomeThreadSurface('home');
+    setHomeThreadKnowledgeBaseId(null);
+    setHomeChatOpened(true);
+    setHomeNavUnlocked(true);
+    setHomeSurface('chat');
+    setConversationScope(null);
+    try {
+      const turns = await loadConversationTurns(conversationId);
+      setHomeMessages(turns);
+    } catch {
+      say('会话加载失败，请稍后重试。');
+      setHomeMessages([]);
+    }
+  };
+  const openLatestHomeConversation = () => {
+    const latest = homeConversations[0];
+    if (!latest) {
+      enterFreshHomeChatShell();
+      return;
+    }
+    setHomeHistoryOpen(true);
+    void openHomeConversation(latest.id);
+  };
+  const startNewHomeChat = async () => {
+    enterFreshHomeChatShell();
+    try {
+      const created = await createConversation({ surface: 'home' });
+      setHomeConversationId(created.id);
+      setHomeConversations((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+    } catch {
+      setHomeConversationId(null);
+      say('创建会话失败，请稍后重试。');
+    }
+  };
   const openHomeChatSurface = () => {
     if (!homeNavHoverReady || !hasHomeChatHistory) return;
     if (suppressHomeNavHoverRef.current) return;
-    setHomeSurface('chat');
-    setHomeHistoryOpen(true);
-  };
-  const restoreLatestHomeConversation = async () => {
-    if (homeMessages.length > 0) return;
-    const latestId = homeConversationId || homeConversations[0]?.id;
-    if (!latestId) return;
-    setHomeConversationId(latestId);
-    setHomeThreadSurface('home');
-    setHomeThreadKnowledgeBaseId(null);
-    try {
-      const turns = await loadConversationTurns(latestId);
-      setHomeMessages(turns);
-    } catch {
-      // Keep empty chat shell; user can pick a history item.
+    // Already viewing a conversation in the chat shell — just keep history open.
+    if (homeSurface === 'chat' && homeConversationId) {
+      setHomeHistoryOpen(true);
+      return;
     }
+    openLatestHomeConversation();
   };
   const switchNav = (view) => {
     if (view !== '首页') exitHomeShare();
@@ -584,43 +736,6 @@ export function App() {
     const next = name || firstKnowledgeBaseName();
     if (next) setBase(next);
     switchNav('知识库');
-  };
-  const startNewHomeChat = async () => {
-    exitHomeShare();
-    setHomeScope(initialHomeScope);
-    setConversationScope(null);
-    setHomeThreadSurface('home');
-    setHomeThreadKnowledgeBaseId(null);
-    setHomeChatOpened(true);
-    setHomeNavUnlocked(true);
-    setHomeSurface('chat');
-    setHomeHistoryOpen(true);
-    setHomeMessages([]);
-    try {
-      const created = await createConversation({ surface: 'home' });
-      setHomeConversationId(created.id);
-      setHomeConversations((items) => [created, ...items.filter((item) => item.id !== created.id)]);
-    } catch {
-      setHomeConversationId(null);
-      say('创建会话失败，请稍后重试。');
-    }
-  };
-  const openHomeConversation = async (conversationId) => {
-    exitHomeShare();
-    setHomeConversationId(conversationId);
-    setHomeThreadSurface('home');
-    setHomeThreadKnowledgeBaseId(null);
-    setHomeChatOpened(true);
-    setHomeNavUnlocked(true);
-    setHomeSurface('chat');
-    setConversationScope(null);
-    try {
-      const turns = await loadConversationTurns(conversationId);
-      setHomeMessages(turns);
-    } catch {
-      say('会话加载失败，请稍后重试。');
-      setHomeMessages([]);
-    }
   };
   const startNewKbChat = async () => {
     exitKbShare();
@@ -646,7 +761,7 @@ export function App() {
     }
   };
   const openKbConversation = async (conversationId) => {
-    exitKbShare();
+    exitKbBubbleSelect();
     setKbConversationId(conversationId);
     setHistoryOpen(false);
     try {
@@ -672,7 +787,7 @@ export function App() {
     try {
       await deleteConversation(conversationId);
       setHomeConversations((items) => items.filter((item) => item.id !== conversationId));
-      if (homeConversationId === conversationId) startNewHomeChat();
+      if (homeConversationId === conversationId) enterFreshHomeChatShell();
       say('会话已删除。');
     } catch {
       say('删除失败，请稍后重试。');
@@ -709,24 +824,45 @@ export function App() {
     await renameKbConversation(draft.id, title);
   };
   const goHomeHero = () => {
-    exitHomeShare();
+    exitHomeBubbleSelect();
     // Keep Home hover suppressed so moving off the logo onto「首页」
     // doesn't immediately bounce back into the AI chat shell.
     suppressHomeNavHoverRef.current = true;
     switchNav('首页');
     setHomeSurface('hero');
     setHomeHistoryOpen(true);
+    // Detach from the previous thread so hero compose / next chat entry
+    // starts fresh; old conversations remain in the history list.
+    setHomeMessages([]);
+    setHomeConversationId(null);
+    setConversationScope(null);
+    setHomeScope(initialHomeScope);
+    setHomeThreadSurface('home');
+    setHomeThreadKnowledgeBaseId(null);
   };
   const goHomeNav = () => {
     switchNav('首页');
     setHomeNavUnlocked(true);
     // Suppress the hover that accompanies this click so the AI shell doesn't flash.
     suppressHomeNavHoverRef.current = true;
-    // Click「首页」: history → AI area; no history → stay on hero.
+    // Entering chat from hero (or with no active thread): open the latest history
+    // conversation. After a hero send that item is the newest, so it surfaces naturally.
+    if (homeSurface === 'hero') {
+      if (hasHomeChatHistory) {
+        openLatestHomeConversation();
+      } else {
+        setHomeSurface('hero');
+        setHomeHistoryOpen(true);
+      }
+      return;
+    }
     if (hasHomeChatHistory) {
-      setHomeSurface('chat');
-      setHomeHistoryOpen(true);
-      restoreLatestHomeConversation();
+      if (!homeConversationId) {
+        openLatestHomeConversation();
+      } else {
+        setHomeSurface('chat');
+        setHomeHistoryOpen(true);
+      }
     } else {
       setHomeSurface('hero');
       setHomeHistoryOpen(true);
@@ -749,12 +885,29 @@ export function App() {
     }
   };
   const submitHomeQuestion = async (request) => {
-    const scope = conversationScope || {
-      bases: request.selectedBases,
-      tags: request.selectedTags,
-      mode: request.mode,
-      online: request.online,
-    };
+    let priorCount = homeMessages.length;
+    if (request.replaceMessageId) {
+      const index = homeMessages.findIndex((item) => item.id === request.replaceMessageId);
+      if (index < 0) return;
+      priorCount = index;
+      setHomeMessages((all) => all.slice(0, index));
+      if (homeConversationId) {
+        try {
+          await truncateConversationFromTurn(homeConversationId, request.replaceMessageId);
+        } catch {
+          say('同步会话失败，请稍后重试。');
+          return;
+        }
+      }
+    }
+    const scope = request.replaceMessageId || !conversationScope
+      ? {
+        bases: request.selectedBases || [],
+        tags: request.selectedTags || [],
+        mode: request.mode,
+        online: request.online,
+      }
+      : conversationScope;
     const pendingId = `pending-home-${Date.now()}-${crypto.randomUUID()}`;
     const pendingMessage = {
       id: pendingId,
@@ -777,7 +930,7 @@ export function App() {
         .map((item) => item.id);
       const surface = resolveChatSurface({
         knowledgeBaseIds,
-        preferredSurface: homeConversationId && homeMessages.length > 0
+        preferredSurface: homeConversationId && priorCount > 0
           ? homeThreadSurface
           : undefined,
       });
@@ -811,10 +964,36 @@ export function App() {
       say(detail);
     }
   };
+  const resendHomeQuestion = async (payload) => {
+    if (!payload?.prompt?.trim() || !payload.messageId) return;
+    await submitHomeQuestion({
+      prompt: payload.prompt.trim(),
+      mode: payload.mode || 'general',
+      online: Boolean(payload.online),
+      selectedBases: payload.selectedBases || [],
+      selectedTags: payload.selectedTags || [],
+      thinkingMode: 'fast',
+      replaceMessageId: payload.messageId,
+    });
+  };
   const submitKbQuestion = async (request) => {
     const question = typeof request === 'string' ? request : request.prompt;
     const thinkingMode = typeof request === 'string' ? 'fast' : request.thinkingMode;
     const selectedTags = typeof request === 'string' ? [] : (request.selectedTags || []);
+    const replaceMessageId = typeof request === 'string' ? undefined : request.replaceMessageId;
+    if (replaceMessageId) {
+      const index = kbMessages.findIndex((item) => item.id === replaceMessageId);
+      if (index < 0) return;
+      setKbMessages((all) => all.slice(0, index));
+      if (kbConversationId) {
+        try {
+          await truncateConversationFromTurn(kbConversationId, replaceMessageId);
+        } catch {
+          say('同步会话失败，请稍后重试。');
+          return;
+        }
+      }
+    }
     const scope = { bases: [base], tags: selectedTags, mode: 'rag', online: false };
     const pendingId = `pending-kb-${Date.now()}-${crypto.randomUUID()}`;
     const pendingMessage = {
@@ -852,6 +1031,15 @@ export function App() {
       say(detail);
     }
   };
+  const resendKbQuestion = async (payload) => {
+    if (!payload?.prompt?.trim() || !payload.messageId) return;
+    await submitKbQuestion({
+      prompt: payload.prompt.trim(),
+      selectedTags: payload.selectedTags || [],
+      thinkingMode: 'fast',
+      replaceMessageId: payload.messageId,
+    });
+  };
   const saveAnswerCard = async (payload) => {
     try {
       const card = await createInspirationCard(payload);
@@ -873,10 +1061,12 @@ export function App() {
   };
   const refreshMaterials = async () => {
     if (!selectedKnowledgeBase) return [];
+    const fetchGen = ++materialsListFetchGenRef.current;
     const refreshed = await listMaterials(selectedKnowledgeBase.id, {
       query,
       platform: platformCodes[source] || 'all',
     });
+    if (fetchGen !== materialsListFetchGenRef.current) return refreshed;
     setKnowledgeMaterials(refreshed);
     return refreshed;
   };
@@ -890,6 +1080,11 @@ export function App() {
     const tempId = materialId || `pending-${crypto.randomUUID()}`;
     if (!materialId) {
       const inputType = item.kind === 'link' ? 'link' : inferMaterialInputType(item.file);
+      if (item.kind !== 'link' && !inputType) {
+        const error = new Error('不支持该文件类型（如 HTML）。请上传图片、PDF、Office 或文本。');
+        say(error.message);
+        throw error;
+      }
       const platformCode = item.kind === 'link' ? inferPlatformFromUrl(item.url) : 'web';
       const displayTitle = item.kind === 'link'
         ? formatMaterialTitle({
@@ -918,13 +1113,29 @@ export function App() {
         statusLabel: '处理中',
         lastParseError: '',
       };
+      // Invalidate in-flight list fetches so they cannot wipe the optimistic row.
+      materialsListFetchGenRef.current += 1;
       setKnowledgeMaterials((items) => [optimistic, ...items.filter((entry) => entry.id !== tempId)]);
     }
     try {
       if (materialId) {
-        await parseAndPollMaterial(materialId, { force: true, sourceUrl: item.url });
-        const refreshed = await refreshMaterials();
-        return refreshed.find((material) => material.id === materialId) || { id: materialId, status: 'failed' };
+        void parseAndPollMaterial(materialId, { force: true, sourceUrl: item.url })
+          .then(async () => {
+            try {
+              await refreshMaterials();
+            } catch {
+              // Next normal list refresh will reconcile.
+            }
+          })
+          .catch(async (parseError) => {
+            say(parseError?.message || '解析失败，可稍后重试。');
+            try {
+              await refreshMaterials();
+            } catch {
+              // Next normal list refresh will reconcile.
+            }
+          });
+        return { id: materialId, status: 'processing' };
       }
       const inputType = item.kind === 'link' ? 'link' : inferMaterialInputType(item.file);
       const storageObjectKey = item.file
@@ -940,10 +1151,26 @@ export function App() {
         fileSizeBytes: item.file?.size,
       });
       materialId = created.id;
+      materialsListFetchGenRef.current += 1;
       setKnowledgeMaterials((items) => [created, ...items.filter((entry) => entry.id !== tempId && entry.id !== created.id)]);
-      await parseAndPollMaterial(materialId, { sourceUrl: item.url });
-      const refreshed = await refreshMaterials();
-      return refreshed.find((material) => material.id === materialId) || created;
+      // Do not block the UI on platform prefetch + AI enrichment; refresh when done.
+      void parseAndPollMaterial(materialId, { sourceUrl: item.url })
+        .then(async () => {
+          try {
+            await refreshMaterials();
+          } catch {
+            // Next normal list refresh will reconcile.
+          }
+        })
+        .catch(async (parseError) => {
+          say(parseError?.message || '解析失败，可稍后重试。');
+          try {
+            await refreshMaterials();
+          } catch {
+            // Next normal list refresh will reconcile.
+          }
+        });
+      return created;
     } catch (error) {
       say(error?.message || '添加资料失败，请稍后重试。');
       if (materialId) {
@@ -987,15 +1214,27 @@ export function App() {
     }
   };
   const reparseMaterial = async (material) => {
+    if (!material?.id) return;
     setMaterialMenu(null);
+    say('正在重新解析…');
+    setKnowledgeMaterials((items) => items.map((item) => (
+      item.id === material.id
+        ? { ...item, status: 'processing', statusLabel: '处理中', lastParseError: '' }
+        : item
+    )));
     try {
       await parseAndPollMaterial(material.id, {
         force: true,
-        sourceUrl: material.url || '',
+        sourceUrl: material.url || material.sourceUrl || '',
       });
       await refreshMaterials();
       say('已重新解析。');
     } catch (error) {
+      try {
+        await refreshMaterials();
+      } catch {
+        // Keep optimistic processing state until next list refresh.
+      }
       say(error instanceof Error ? error.message : '重新解析失败，请稍后重试。');
     }
   };
@@ -1109,7 +1348,7 @@ export function App() {
             suppressHomeNavHoverRef.current = false;
           }}
         >
-          <img className="brand-logo" src={refindLogo} alt="" />
+          <span className="brand-logo" role="img" aria-label="Refind" />
           <strong>Refind</strong>
           <span className="brand-product">· 拾藏</span>
         </button>
@@ -1259,18 +1498,22 @@ export function App() {
               onSaveCard={saveAnswerCard}
               onAddToNote={addAnswerToNote}
               onOpenMaterial={(materialId) => window.open(getMaterialPreviewUrl(materialId), '_blank', 'noopener,noreferrer')}
-              shareMode={homeShareMode}
-              selectedBubbleIds={homeShareSelected}
+              onResend={resendHomeQuestion}
+              selectMode={homeDeleteMode ? 'delete' : (homeShareMode ? 'share' : null)}
+              selectedBubbleIds={homeDeleteMode ? homeDeleteSelected : homeShareSelected}
               onShareStart={startHomeShare}
-              onToggleBubble={toggleHomeShareBubble}
+              onDeleteStart={startHomeDelete}
+              onToggleBubble={homeDeleteMode ? toggleHomeDeleteBubble : toggleHomeShareBubble}
             />
-            {homeShareMode
-              ? <HomeShareBar selectedCount={homeShareSelected.length} onCopyLink={copyHomeShareLink} onCancel={exitHomeShare} />
-              : <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
+            {homeDeleteMode
+              ? <HomeShareBar mode="delete" selectedCount={homeDeleteSelected.length} onConfirm={confirmHomeDelete} onCancel={exitHomeDelete} />
+              : homeShareMode
+                ? <HomeShareBar selectedCount={homeShareSelected.length} onCopyLink={copyHomeShareLink} onCancel={exitHomeShare} />
+                : <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
           </div>
         </>
       )}
-      {!showHomeChat && <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} />}
+      {!showHomeChat && <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} sendArrow="right" introBeam />}
       {notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
     {!settingsOpen && activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} notice={say} onDeleteCard={async (cardId) => {
@@ -1291,7 +1534,7 @@ export function App() {
         <div className="materials-column">
           <header className="workspace-header">
             <div><h1>{base}</h1></div>
-            <button className="ai-panel-trigger" type="button" onClick={() => setAiPanelOpen(true)}><MessageSquare size={15} strokeWidth={1.6} />AI 对话</button>
+            <button className="ai-panel-trigger" type="button" onClick={() => setAiPanelOpen(true)}><MessageSquare size={15} strokeWidth={1.6} />知识库问答</button>
           </header>
           <section className="materials-panel">
             <div className={`material-tools ${isMaterialSearching ? 'is-searching' : ''}`}>
@@ -1323,7 +1566,7 @@ export function App() {
                 onFocus={() => setHoveredMaterialId(item.id)}
                 onBlur={() => setHoveredMaterialId(null)}
               >
-                <div className="material-mark"><IconMaterial /></div><div><h3>{item.title}</h3><p><span>{item.source}</span>{item.tag ? <> · #{item.tag}</> : null}{item.statusLabel && <><span> · </span><span className={`material-status is-${item.status}`}>{item.statusLabel}</span></>}</p></div><time>{item.time}</time>
+                <MaterialListCover material={item} fallback={<IconMaterial />} /><div><h3>{item.title}</h3><p><span>{item.source}</span>{item.tag ? <> · #{item.tag}</> : null}{item.statusLabel && <><span> · </span><span className={`material-status is-${item.status}`}>{item.statusLabel}</span></>}</p></div><time>{item.time}</time>
               </button>
               {hoveredMaterialId === item.id && materialMenu?.id !== item.id && <aside className="material-hover-card" role="tooltip">
                 <strong>{item.fileName || item.title}</strong>
@@ -1359,19 +1602,20 @@ export function App() {
                   ref={materialMenuRef}
                   style={{ left: materialMenu.x, top: materialMenu.y }}
                 >
-                  <button type="button" role="menuitem" onClick={() => { reparseMaterial(menuMaterial); }}>重新解析</button>
-                  <button type="button" role="menuitem" onClick={() => { setMaterialMenu(null); setEditTagsMaterial(menuMaterial); }}>编辑标签</button>
-                  <button type="button" role="menuitem" onClick={() => { setMaterialMenu(null); setMoveMaterialTarget(menuMaterial); }}>移动到</button>
-                  <button type="button" role="menuitem" className="is-danger" onClick={() => { deleteListedMaterial(menuMaterial); }}>删除资料</button>
+                  <button type="button" role="menuitem" onClick={(event) => { event.preventDefault(); event.stopPropagation(); reparseMaterial(menuMaterial); }}>重新解析</button>
+                  <button type="button" role="menuitem" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setMaterialMenu(null); setEditTagsMaterial(menuMaterial); }}>编辑标签</button>
+                  <button type="button" role="menuitem" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setMaterialMenu(null); setMoveMaterialTarget(menuMaterial); }}>移动到</button>
+                  <button type="button" role="menuitem" className="is-danger" onClick={(event) => { event.preventDefault(); event.stopPropagation(); deleteListedMaterial(menuMaterial); }}>删除资料</button>
                 </div>
               );
             })()}
           </section>
         </div>
-        {aiPanelOpen && <button className="ai-panel-scrim" type="button" aria-label="关闭 AI 对话遮罩" onClick={() => { setAiPanelOpen(false); setHistoryOpen(false); }} />}
+        {aiPanelOpen && <button className="ai-panel-scrim" type="button" aria-label="关闭知识库问答遮罩" onClick={() => { setAiPanelOpen(false); setHistoryOpen(false); }} />}
         <aside className={`ai-panel ${aiPanelOpen ? 'is-open' : ''} ${kbShareMode ? 'is-share-mode' : ''}`} data-open={aiPanelOpen ? 'true' : 'false'}>
+          <div className="ai-watermark" aria-hidden="true">R</div>
           <div className="ai-panel-head" ref={historyRef}>
-            <h2>AI 对话</h2>
+            <h2>知识库问答</h2>
             <div>
               <button type="button" title="新建会话" aria-label="新建会话" onClick={startNewKbChat}><Plus size={15} strokeWidth={1.5} /></button>
               <div className="ai-history-anchor">
@@ -1433,7 +1677,7 @@ export function App() {
                   </div>
                 )}
               </div>
-              <button className="ai-panel-close" type="button" aria-label="关闭 AI 对话" onClick={() => { exitKbShare(); setAiPanelOpen(false); setHistoryOpen(false); }}><X size={15} strokeWidth={1.5} /></button>
+              <button className="ai-panel-close" type="button" aria-label="关闭知识库问答" onClick={() => { exitKbBubbleSelect(); setAiPanelOpen(false); setHistoryOpen(false); }}><X size={15} strokeWidth={1.5} /></button>
             </div>
           </div>
           {kbHistoryMenu && createPortal(
@@ -1477,7 +1721,6 @@ export function App() {
                 <div className="ai-empty">
                   <KnowledgeAnswerMark />
                   <h3>{kbChatEmptyTitle}</h3>
-                  <p>{kbChatEmptyHint}</p>
                 </div>
               )
               : (
@@ -1486,16 +1729,20 @@ export function App() {
                   onSaveCard={saveAnswerCard}
                   onAddToNote={addAnswerToNote}
                   onOpenMaterial={(materialId) => window.open(getMaterialPreviewUrl(materialId), '_blank', 'noopener,noreferrer')}
-                  shareMode={kbShareMode}
-                  selectedBubbleIds={kbShareSelected}
+                  onResend={resendKbQuestion}
+                  selectMode={kbDeleteMode ? 'delete' : (kbShareMode ? 'share' : null)}
+                  selectedBubbleIds={kbDeleteMode ? kbDeleteSelected : kbShareSelected}
                   onShareStart={startKbShare}
-                  onToggleBubble={toggleKbShareBubble}
+                  onDeleteStart={startKbDelete}
+                  onToggleBubble={kbDeleteMode ? toggleKbDeleteBubble : toggleKbShareBubble}
                 />
               )}
           </div>
-          {kbShareMode
-            ? <HomeShareBar selectedCount={kbShareSelected.length} onCopyLink={copyKbShareLink} onCancel={exitKbShare} />
-            : <Composer key={selectedKnowledgeBase?.id || 'kb'} compact base={base} bases={bases} availableTags={kbTagOptions} onBase={setBase} onSubmit={submitKbQuestion} />}
+          {kbDeleteMode
+            ? <HomeShareBar mode="delete" selectedCount={kbDeleteSelected.length} onConfirm={confirmKbDelete} onCancel={exitKbDelete} />
+            : kbShareMode
+              ? <HomeShareBar selectedCount={kbShareSelected.length} onCopyLink={copyKbShareLink} onCancel={exitKbShare} />
+              : <Composer key={selectedKnowledgeBase?.id || 'kb'} compact base={base} bases={bases} availableTags={kbTagOptions} onBase={setBase} onSubmit={submitKbQuestion} />}
         </aside>
       </div>{notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}

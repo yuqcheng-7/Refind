@@ -107,7 +107,7 @@ describe('NotesWorkspace', () => {
     try {
       render(<App />);
       await userEvent.click(screen.getByRole('button', { name: '知识库' }));
-      await userEvent.click(screen.getByRole('button', { name: 'AI 对话', hidden: true }));
+      await userEvent.click(screen.getByRole('button', { name: '知识库问答', hidden: true }));
       expect(document.querySelector('.ai-panel')).toHaveClass('is-open');
       await userEvent.click(document.querySelector('.ai-panel-close'));
       expect(document.querySelector('.ai-panel')).not.toHaveClass('is-open');
@@ -190,10 +190,10 @@ describe('NotesWorkspace', () => {
     expect(screen.getByRole('menuitem', { name: '加入笔记' })).toBeVisible();
 
     await userEvent.click(screen.getByRole('button', { name: '更多操作' }));
-    expect(screen.getByRole('menuitem', { name: '删除回答' })).toBeVisible();
+    expect(screen.getByRole('menuitem', { name: '删除' })).toBeVisible();
     expect(screen.getByRole('menuitem', { name: '反馈' })).toBeVisible();
     fireEvent.pointerDown(screen.getByRole('button', { name: '页面其他位置' }));
-    expect(screen.queryByRole('menuitem', { name: '删除回答' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '删除' })).not.toBeInTheDocument();
   });
 
   it('opens the capture menu when text in the answer body is selected', () => {

@@ -44,6 +44,58 @@ describe('mapMaterial', () => {
       source: 'PDF',
       tag: '',
       statusLabel: '处理中',
+      storageObjectKey: '',
+    });
+  });
+
+  it('maps storage object key for uploaded files', () => {
+    expect(mapMaterial({
+      id: 'm1',
+      knowledge_base_id: 'kb1',
+      input_type: 'docx',
+      platform_code: 'web',
+      title: '笔记.docx',
+      storage_object_key: 'user-1/kb/file.docx',
+      file_mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      created_at: '2026-09-14T00:00:00Z',
+      status: 'ready',
+      material_tag_relations: [],
+    })).toMatchObject({
+      storageObjectKey: 'user-1/kb/file.docx',
+      fileMimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      inputType: 'docx',
+    });
+  });
+
+  it('maps cover_image_url for list thumbnails', () => {
+    expect(mapMaterial({
+      id: 'm3',
+      knowledge_base_id: 'kb1',
+      input_type: 'link',
+      platform_code: 'bilibili',
+      title: '演示视频',
+      cover_image_url: 'https://i0.hdslb.com/bfs/cover/demo.jpg',
+      created_at: '2026-09-14T00:00:00Z',
+      status: 'ready',
+      material_tag_relations: [],
+    })).toMatchObject({
+      coverImageUrl: 'https://i0.hdslb.com/bfs/cover/demo.jpg',
+    });
+  });
+
+  it('maps cover_storage_object_key for uploaded file covers', () => {
+    expect(mapMaterial({
+      id: 'm4',
+      knowledge_base_id: 'kb1',
+      input_type: 'docx',
+      platform_code: 'web',
+      title: '笔记.docx',
+      cover_storage_object_key: 'user/kb/note.docx.cover.jpg',
+      created_at: '2026-09-14T00:00:00Z',
+      status: 'ready',
+      material_tag_relations: [],
+    })).toMatchObject({
+      coverStorageObjectKey: 'user/kb/note.docx.cover.jpg',
     });
   });
 

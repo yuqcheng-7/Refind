@@ -8,6 +8,7 @@ import {
   detectPlatform,
   extractBilibiliId,
   extractLinkContent,
+  extractMediaUrlsFromHtml,
   extractOpenGraph,
   extractReadableBody,
 } from './extractLinkContent.js';
@@ -36,6 +37,16 @@ test('extractOpenGraph reads title and description', () => {
   assert.match(og.description, /验收的简介/);
 });
 
+test('extractOpenGraph absolutizes cover image', () => {
+  const html = `
+    <html><head>
+      <meta property="og:image" content="//cdn.example.com/cover.jpg" />
+    </head></html>
+  `;
+  const og = extractOpenGraph(html, 'https://www.example.com/post');
+  assert.equal(og.image, 'https://cdn.example.com/cover.jpg');
+});
+
 test('extractReadableBody prefers WeChat js_content', () => {
   const html = `
     <body>
@@ -46,6 +57,51 @@ test('extractReadableBody prefers WeChat js_content', () => {
   const body = extractReadableBody(html);
   assert.match(body, /第一段正文/);
   assert.match(body, /第二段正文/);
+});
+
+test('extractMediaUrlsFromHtml keeps order, dedupes, skips data URI, respects limit', () => {
+  const html = `
+    <div>
+      <img src="data:image/png;base64,aaa" />
+      <img src="https://cdn.example.com/a.jpg" />
+      <img data-src="//cdn.example.com/b.jpg" />
+      <img src="https://cdn.example.com/a.jpg" />
+      <img data-original="https://cdn.example.com/c.png" />
+      <img src="https://cdn.example.com/d.jpg" />
+    </div>
+  `;
+  assert.deepEqual(
+    extractMediaUrlsFromHtml(html, 'https://mp.weixin.qq.com/s/x', 3),
+    [
+      'https://cdn.example.com/a.jpg',
+      'https://cdn.example.com/b.jpg',
+      'https://cdn.example.com/c.png',
+    ],
+  );
+});
+
+test('extractLinkContent attaches media_urls from HTML body', async () => {
+  const html = `
+    <html><head>
+      <meta property="og:title" content="带图文章" />
+      <meta property="og:description" content="简介文字需要足够长才能通过质量门槛。" />
+    </head><body>
+      <div id="js_content">
+        <p>正文段落足够长用来验收正文抽取与图片提取是否一起可用。</p>
+        <img src="https://mmbiz.qpic.cn/inline-1.jpg" />
+        <img data-src="https://mmbiz.qpic.cn/inline-2.jpg" />
+      </div>
+    </body></html>
+  `;
+  const result = await extractLinkContent({
+    sourceUrl: 'https://mp.weixin.qq.com/s/demo',
+    html,
+  });
+  assert.equal(result.platform, 'wechat_mp');
+  assert.deepEqual(result.media_urls, [
+    'https://mmbiz.qpic.cn/inline-1.jpg',
+    'https://mmbiz.qpic.cn/inline-2.jpg',
+  ]);
 });
 
 test('bilibili helpers parse BV and build embed', () => {
@@ -80,6 +136,7 @@ test('extractLinkContent merges Bilibili API + HTML', async () => {
               title: '【官方 MV】Never Gonna Give You Up',
               desc: 'Rick Astley 官方 MV 简介，足够作为视频文案展示。',
               owner: { name: 'RickAstleyVEVO' },
+              pic: '//i0.hdslb.com/bfs/cover/rick.jpg',
             },
           };
         },
@@ -95,6 +152,7 @@ test('extractLinkContent merges Bilibili API + HTML', async () => {
   assert.match(result.content_text, /官方 MV 简介/);
   assert.equal(result.playback_mode, 'embed');
   assert.match(result.playback_url, /bvid=BV1GJ411x7h7/);
+  assert.equal(result.cover_image_url, 'https://i0.hdslb.com/bfs/cover/rick.jpg');
   assert.ok(['full', 'partial'].includes(result.quality));
 });
 

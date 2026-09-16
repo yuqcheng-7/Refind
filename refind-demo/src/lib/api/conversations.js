@@ -37,6 +37,7 @@ export function pairChatTurns(messages = [], citationsByMessageId = {}) {
       : [];
     turns.push({
       id: assistantMessage?.id || userMessage.id,
+      userMessageId: userMessage.id,
       question: userMessage.content,
       answer: assistantMessage?.content || '',
       mode: assistantMessage?.answer_mode || userMessage.answer_mode,
@@ -175,5 +176,46 @@ export async function deleteConversation(conversationId) {
     .from('chat_conversations')
     .delete()
     .eq('id', conversationId);
+  if (error) throw error;
+}
+
+export async function truncateConversationFromTurn(conversationId, turnId) {
+  if (!conversationId || !turnId) return;
+
+  const { data: messages, error: messagesError } = await supabase
+    .from('chat_messages')
+    .select('id, role, created_at')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true });
+  if (messagesError) throw messagesError;
+  if (!messages?.length) return;
+
+  let startIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index].id !== turnId) continue;
+    startIndex = messages[index].role === 'assistant'
+      && index > 0
+      && messages[index - 1].role === 'user'
+      ? index - 1
+      : index;
+    break;
+  }
+  if (startIndex < 0) return;
+
+  const ids = messages.slice(startIndex).map((message) => message.id);
+  const { error } = await supabase
+    .from('chat_messages')
+    .delete()
+    .in('id', ids);
+  if (error) throw error;
+}
+
+export async function deleteChatMessages(messageIds = []) {
+  const ids = [...new Set((messageIds || []).filter(Boolean))];
+  if (!ids.length) return;
+  const { error } = await supabase
+    .from('chat_messages')
+    .delete()
+    .in('id', ids);
   if (error) throw error;
 }

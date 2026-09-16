@@ -19,6 +19,7 @@ import {
   isPlaceholderTitle,
   NEW_CONVERSATION_TITLE,
   pairChatTurns,
+  truncateConversationFromTurn,
 } from './conversations.js';
 
 describe('groupLabelForDate', () => {
@@ -142,5 +143,45 @@ describe('pairChatTurns', () => {
       answer: '回答一[1]',
       citations: [{ order: 1, label: '资料A', materialId: 'mat-1', excerpt: '摘录' }],
     });
+  });
+});
+
+describe('truncateConversationFromTurn', () => {
+  beforeEach(() => {
+    from.mockReset();
+  });
+
+  it('deletes the edited turn and every later message', async () => {
+    const order = vi.fn().mockResolvedValue({
+      data: [
+        { id: 'u1', role: 'user', created_at: '2026-09-16T01:00:00Z' },
+        { id: 'a1', role: 'assistant', created_at: '2026-09-16T01:00:01Z' },
+        { id: 'u2', role: 'user', created_at: '2026-09-16T01:01:00Z' },
+        { id: 'a2', role: 'assistant', created_at: '2026-09-16T01:01:01Z' },
+      ],
+      error: null,
+    });
+    const select = vi.fn(() => ({ eq: vi.fn(() => ({ order })) }));
+    const delIn = vi.fn().mockResolvedValue({ error: null });
+    const del = vi.fn(() => ({ in: delIn }));
+    from.mockImplementation((table) => {
+      if (table === 'chat_messages') return { select, delete: del };
+      return {};
+    });
+
+    await truncateConversationFromTurn('conv-1', 'a1');
+
+    expect(delIn).toHaveBeenCalledWith('id', ['u1', 'a1', 'u2', 'a2']);
+  });
+
+  it('no-ops when the turn is not persisted yet', async () => {
+    const order = vi.fn().mockResolvedValue({ data: [], error: null });
+    const select = vi.fn(() => ({ eq: vi.fn(() => ({ order })) }));
+    const del = vi.fn();
+    from.mockReturnValue({ select, delete: del });
+
+    await truncateConversationFromTurn('conv-1', 'pending-1');
+
+    expect(del).not.toHaveBeenCalled();
   });
 });

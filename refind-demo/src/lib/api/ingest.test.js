@@ -3,6 +3,8 @@ import {
   buildMaterialStorageKey,
   buildPlatformParsePayload,
   inferMaterialInputType,
+  isAllowedMaterialUploadFile,
+  partitionMaterialUploadFiles,
   shouldUseSavedSession,
 } from './ingest.js';
 
@@ -13,6 +15,23 @@ describe('inferMaterialInputType', () => {
     expect(inferMaterialInputType(new File(['pdf'], 'report', { type: 'application/pdf' }))).toBe('pdf');
     expect(inferMaterialInputType(new File(['csv'], 'data.csv', { type: 'text/csv' }))).toBe('csv');
     expect(inferMaterialInputType(new File(['img'], 'photo.JPG', { type: 'image/jpeg' }))).toBe('image');
+  });
+
+  it('rejects HTML uploads', () => {
+    expect(inferMaterialInputType(new File(['<html></html>'], 'page.html', { type: 'text/html' }))).toBeNull();
+    expect(inferMaterialInputType(new File(['<html></html>'], 'page.HTM', { type: '' }))).toBeNull();
+    expect(isAllowedMaterialUploadFile(new File(['x'], 'a.html', { type: 'text/html' }))).toBe(false);
+  });
+});
+
+describe('partitionMaterialUploadFiles', () => {
+  it('keeps supported files and drops html', () => {
+    const pdf = new File(['pdf'], 'a.pdf', { type: 'application/pdf' });
+    const html = new File(['<p>'], 'b.html', { type: 'text/html' });
+    expect(partitionMaterialUploadFiles([pdf, html])).toEqual({
+      allowed: [pdf],
+      rejected: [html],
+    });
   });
 });
 
@@ -41,12 +60,33 @@ describe('shouldUseSavedSession', () => {
       { code: 'zhihu', connection: { status: 'connected' } },
       { code: 'xhs', connection: { status: 'disconnected' } },
     ]));
+    const fetchPresence = vi.fn(async () => ({ zhihu: true, xhs: false }));
+    const fetchHealth = vi.fn(async () => ({
+      sessions: { zhihu: true, xhs: false },
+      verified: { zhihu: true, xhs: false },
+      details: { zhihu: '', xhs: 'no_local_session' },
+    }));
 
-    await expect(shouldUseSavedSession('https://www.zhihu.com/question/1', { listConnections }))
+    await expect(shouldUseSavedSession('https://www.zhihu.com/question/1', { listConnections, fetchPresence, fetchHealth }))
       .resolves.toBe(true);
-    await expect(shouldUseSavedSession('https://www.xiaohongshu.com/explore/1', { listConnections }))
+    await expect(shouldUseSavedSession('https://www.xiaohongshu.com/explore/1', { listConnections, fetchPresence, fetchHealth }))
       .resolves.toBe(false);
-    await expect(shouldUseSavedSession('https://example.com/a', { listConnections }))
+    await expect(shouldUseSavedSession('https://example.com/a', { listConnections, fetchPresence, fetchHealth }))
+      .resolves.toBe(false);
+  });
+
+  it('is false when DB is connected but local parser session is missing', async () => {
+    const listConnections = vi.fn(async () => ([
+      { code: 'xhs', connection: { status: 'connected' } },
+    ]));
+    const fetchPresence = vi.fn(async () => ({ xhs: false }));
+    const fetchHealth = vi.fn(async () => ({
+      sessions: { xhs: false },
+      verified: { xhs: false },
+      details: { xhs: 'no_local_session' },
+    }));
+
+    await expect(shouldUseSavedSession('https://www.xiaohongshu.com/explore/1', { listConnections, fetchPresence, fetchHealth }))
       .resolves.toBe(false);
   });
 });

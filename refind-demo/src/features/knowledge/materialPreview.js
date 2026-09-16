@@ -92,21 +92,83 @@ function normalizePreviewText(text) {
 function insertSectionBreaks(text) {
   return String(text || '')
     .replace(/(?<=[。！？；.!?\n]|^)\s*(?=[一二三四五六七八九十百千]+[、.．])/g, '\n\n')
-    .replace(/(?<=[。！？；.!?\n\s]|^)(?=\d{1,2}[\.、．]\s*[^\s\d])/g, '\n\n');
+    .replace(/(?<=[。！？；.!?\n]|^)\s*(?=[（(][一二三四五六七八九十百千]+[）)])/g, '\n\n')
+    .replace(/(?<=[。！？；.!?\n\s]|^)(?=\d{1,2}[\.、．]\s*[^\s\d])/g, '\n\n')
+    .replace(/(?<=[。！？；.!?:\n]|^)\s*(?=(?:[•●○◆■▪▫·‧∙]|[-–—*＋+])\s+\S)/g, '\n\n')
+    .replace(/(?<=[。！？；.!?:\n]|^)\s*(?=[（(]\d{1,2}[）)]\s*\S)/g, '\n\n')
+    .replace(/(?<=[。！？；.!?:\n]|^)\s*(?=\d{1,2}[）)]\s*\S)/g, '\n\n')
+    .replace(/(?<=[。！？；.!?:\n]|^)\s*(?=[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮]\s*\S)/g, '\n\n');
+}
+
+export function isPreviewListItem(line) {
+  const text = String(line || '').trim();
+  if (!text || text.length > 200) return false;
+  if (/^(?:[•●○◆■▪▫·‧∙]|[-–—*＋+])\s+\S/.test(text)) return true;
+  if (/^[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮]\s*\S/.test(text)) return true;
+  if (/^[（(]\d{1,2}[）)]\s*\S/.test(text)) return true;
+  if (/^\d{1,2}[）)]\s*\S/.test(text)) return true;
+  return false;
 }
 
 export function isPreviewHeading(line) {
   const text = String(line || '').trim();
   if (!text || text.length > 48) return false;
   if (/^[一二三四五六七八九十百千]+[、.．]/.test(text)) return true;
+  if (/^[（(][一二三四五六七八九十百千]+[）)]/.test(text)) return true;
   if (/^\d{1,2}[\.、．]\s*\S/.test(text)) return true;
   return false;
+}
+
+function expandStructuralLines(chunk) {
+  const lines = String(chunk || '')
+    .split('\n')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (lines.length <= 1) return lines;
+
+  const parts = [];
+  let buffer = [];
+  const flush = () => {
+    if (!buffer.length) return;
+    parts.push(buffer.join('\n'));
+    buffer = [];
+  };
+
+  for (const line of lines) {
+    if (isPreviewHeading(line) || isPreviewListItem(line)) {
+      flush();
+      parts.push(line);
+      continue;
+    }
+    buffer.push(line);
+  }
+  flush();
+  return parts;
 }
 
 export function splitReadableParagraphs(text) {
   const value = normalizePreviewText(insertSectionBreaks(text));
   if (!value) return [];
-  return value.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+
+  const expandChunks = (chunks) => chunks.flatMap((chunk) => expandStructuralLines(chunk));
+
+  const byBlank = value.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const expandedBlank = expandChunks(byBlank);
+  if (expandedBlank.length >= 2) return expandedBlank;
+
+  // Scraped bodies often keep only single newlines between paragraphs.
+  const bySentenceBreak = value
+    .replace(/([。！？；.!?;」』）\]])\s*\n(?!\n)/g, '$1\n\n')
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const expandedSentence = expandChunks(bySentenceBreak);
+  if (expandedSentence.length >= 2) return expandedSentence;
+
+  const lines = value.split('\n').map((part) => part.trim()).filter(Boolean);
+  if (lines.length >= 3) return expandChunks(lines);
+
+  return expandedBlank.length ? expandedBlank : [value];
 }
 
 const IMAGE_APPENDIX_HEADER = '【文内图片识别】';

@@ -10,11 +10,23 @@ import { deepseekChat } from '../_shared/ai.ts';
 import { enrichMaterialSummaryAndTags } from './enrichMaterial.js';
 import { shouldReplaceTags } from './enrichment.js';
 import { replaceMaterialTagRelations } from './applyTags.js';
+import { buildPreviewObjectKey, convertOfficeToPdf } from './convertOffice.js';
+import { extractImageContent } from './extractImageContent.js';
+import { buildEmbeddedImagesAppendix, buildMarkdownDataImageAppendix } from './extractEmbeddedImages.js';
+import {
+  buildOcrBlocksFromPersisted,
+  enrichContentWithInlineImages,
+} from './inlineImageContent.js';
+import { buildCoverObjectKey, pickOfficeCoverImage } from './materialCover.js';
+import { persistRemoteCoverImage } from './persistRemoteCover.js';
+import { persistRemoteInlineImages } from './persistRemoteInlineImages.js';
 
 const documentDeps = {
   JSZip,
   unpdf: { extractText, getDocumentProxy },
 };
+const officePreviewTypes = new Set(['pptx', 'xlsx', 'docx']);
+
 
 const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -33,6 +45,17 @@ function response(body: unknown, status = 200) {
 
 function cleanText(value: string) {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function cleanMultiline(value: string) {
+  return String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 async function assertSafePublicUrl(value: string) {
@@ -116,6 +139,34 @@ function asCleanString(value: unknown) {
   return typeof value === 'string' ? cleanText(value) : '';
 }
 
+function appendSubtitleForRag(text: string, subtitle: string) {
+  const body = cleanText(text);
+  const comments = cleanText(subtitle);
+  if (!comments) return body;
+  if (body.includes('【评论摘录】')) return body;
+  return `${body}\n\n【评论摘录】\n${comments}`.trim();
+}
+
+function mediaUrlsFromList(values: unknown) {
+  if (!Array.isArray(values)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const url = cleanText(value);
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+    if (out.length >= 10) break;
+  }
+  return out;
+}
+
+function mediaUrlsFromPrefetched(prefetched: Record<string, unknown> | null) {
+  if (!prefetched) return [];
+  return mediaUrlsFromList(prefetched.media_urls);
+}
+
 function fromPrefetched(prefetched: Record<string, unknown> | null) {
   if (!prefetched) return null;
   const content = asCleanString(prefetched.content_text)
@@ -130,6 +181,9 @@ function fromPrefetched(prefetched: Record<string, unknown> | null) {
     subtitle_text: asCleanString(prefetched.subtitle_text),
     content_text: content,
     summary_seed: asCleanString(prefetched.summary) || content,
+    cover_image_url: asCleanString(
+      prefetched.cover_image_url || prefetched.cover || prefetched.thumbnail || prefetched.image,
+    ),
     playback_mode: asCleanString(prefetched.playback_mode) || null,
     playback_url: asCleanString(prefetched.playback_url),
     playback_embed_html: asCleanString(prefetched.playback_embed_html),
@@ -211,16 +265,20 @@ Deno.serve(async (req) => {
     let text = '';
     let title = material.title;
     let linkFields: Record<string, unknown> = {};
+    let deferredImageOcr: null | (() => Promise<string>) = null;
+    let deferredInlineImages: null | (() => Promise<string>) = null;
+    let pendingMediaUrls: string[] = [];
     if (material.source_url) {
       const local = fromPrefetched(prefetched);
       if (local) {
-        text = local.content_text || '';
+        text = appendSubtitleForRag(local.content_text || '', local.subtitle_text || '');
         title = title || local.title || material.source_url;
         linkFields = {
           platform_code: local.platform || material.platform_code,
           author_name: local.author_name || material.author_name,
           caption_text: local.caption_text || null,
           subtitle_text: local.subtitle_text || null,
+          cover_image_url: local.cover_image_url || null,
           playback_mode: local.playback_mode,
           playback_url: local.playback_url || null,
           playback_embed_html: local.playback_embed_html || null,
@@ -228,6 +286,49 @@ Deno.serve(async (req) => {
           quality: local.quality,
           canonical_url: local.canonical_url || material.source_url,
         };
+        pendingMediaUrls = mediaUrlsFromPrefetched(prefetched);
+        // Prefetch often returns text without cover / media_urls; fill from OG / APIs.
+        if (!linkFields.cover_image_url || !pendingMediaUrls.length) {
+          try {
+            let html = '';
+            let resolvedUrl = material.source_url;
+            try {
+              const { response: fetched, finalUrl } = await fetchSafeUrl(material.source_url);
+              resolvedUrl = finalUrl || material.source_url;
+              if (fetched.ok) {
+                try {
+                  assertAllowedUrlContentType(fetched.headers.get('content-type'));
+                  html = await readLimitedText(fetched);
+                } catch {
+                  // Platform APIs may still return cover without HTML.
+                }
+              }
+            } catch {
+              // continue with URL-only extract
+            }
+            const extracted = await extractLinkContent({
+              sourceUrl: material.source_url,
+              resolvedUrl,
+              html,
+              env: {
+                PLATFORM_PARSER_URL: Deno.env.get('PLATFORM_PARSER_URL') || '',
+              },
+            });
+            if (!linkFields.cover_image_url && extracted.cover_image_url) {
+              linkFields.cover_image_url = extracted.cover_image_url;
+            }
+            if (!pendingMediaUrls.length) {
+              pendingMediaUrls = mediaUrlsFromList(extracted.media_urls);
+            }
+          } catch (coverError) {
+            console.error('cover supplement failed', coverError);
+          }
+        }
+        if (pendingMediaUrls.length) {
+          if (!text || text.length < 40) {
+            text = text || '【笔记说明】正文主要为图片，文内图片识别将在后台补充。';
+          }
+        }
       } else {
         let html = '';
         let resolvedUrl = material.source_url;
@@ -262,12 +363,47 @@ Deno.serve(async (req) => {
           author_name: extracted.author_name || material.author_name,
           caption_text: extracted.caption_text || null,
           subtitle_text: extracted.subtitle_text || null,
+          cover_image_url: extracted.cover_image_url || null,
           playback_mode: extracted.playback_mode,
           playback_url: extracted.playback_url || null,
           playback_embed_html: extracted.playback_embed_html || null,
           summary_seed: extracted.summary_seed,
           quality: extracted.quality,
           canonical_url: extracted.canonical_url || resolvedUrl,
+        };
+        pendingMediaUrls = mediaUrlsFromList(extracted.media_urls);
+      }
+
+      if (pendingMediaUrls.length) {
+        const mediaUrls = pendingMediaUrls;
+        deferredInlineImages = async () => {
+          const persisted = await persistRemoteInlineImages({
+            admin,
+            userId: material.user_id,
+            materialId: material.id,
+            mediaUrls,
+            referer: material.source_url || '',
+            userAgent: LINK_BROWSER_UA,
+          });
+          const ocrBlocks = await buildOcrBlocksFromPersisted({
+            persisted,
+            extractImageContent,
+            dashscopeKey: Deno.env.get('DASHSCOPE_API_KEY') || '',
+          });
+          const { data: latest, error: latestError } = await admin
+            .from('materials')
+            .select('content_text')
+            .eq('id', material.id)
+            .maybeSingle();
+          if (latestError) throw latestError;
+          const base = String(latest?.content_text || text || '').trim();
+          if (!base || base.includes('【文内图片识别】')) return '';
+          if (!persisted.length && !ocrBlocks.length) return '';
+          return enrichContentWithInlineImages({
+            baseText: base,
+            persisted,
+            ocrBlocks,
+          });
         };
       }
     } else if (material.storage_object_key) {
@@ -277,15 +413,104 @@ Deno.serve(async (req) => {
       if (bytes.byteLength > maxFileBytes) throw new Error('文件超过 15MB 限制');
 
       if (textFileTypes.has(material.input_type)) {
-        text = cleanText(new TextDecoder().decode(bytes));
+        text = cleanMultiline(new TextDecoder().decode(bytes));
+        // Defer markdown data-URI OCR so parse returns quickly.
+        deferredImageOcr = async () => buildMarkdownDataImageAppendix({
+          text,
+          extractImageContent,
+          dashscopeKey: Deno.env.get('DASHSCOPE_API_KEY') || '',
+        });
       } else if (OFFICE_PARSEABLE_TYPES.has(material.input_type)) {
         text = await extractDocumentText(material.input_type, bytes, documentDeps);
+        if (material.input_type === 'docx' || material.input_type === 'pptx' || material.input_type === 'xlsx') {
+          // Defer embedded-image OCR; main text path should stay fast.
+          deferredImageOcr = async () => buildEmbeddedImagesAppendix({
+            inputType: material.input_type,
+            bytes,
+            JSZip,
+            extractImageContent,
+            dashscopeKey: Deno.env.get('DASHSCOPE_API_KEY') || '',
+          });
+        }
+        if (!text) {
+          if (deferredImageOcr) {
+            text = '【文档说明】正文主要为图片，文内图片识别将在后台补充。';
+          } else {
+            throw new Error('未提取到可用正文');
+          }
+        }
       } else if (material.input_type === 'doc') {
         text = await extractDocumentText('doc', bytes, documentDeps);
       } else if (material.input_type === 'image') {
-        throw new Error('图片 OCR 即将支持，请稍后再试');
+        const extracted = await extractImageContent({
+          bytes,
+          fileName: material.file_name || '',
+          mimeType: material.file_mime_type || '',
+          dashscopeKey: Deno.env.get('DASHSCOPE_API_KEY') || '',
+        });
+        text = extracted.content_text || '';
+        if (extracted.description) {
+          linkFields.summary_seed = extracted.description;
+        }
+        if (material.storage_object_key) {
+          linkFields.cover_storage_object_key = material.storage_object_key;
+        }
       } else {
         throw new Error(`暂不支持解析 ${material.input_type} 文件`);
+      }
+
+      if (
+        !linkFields.cover_storage_object_key
+        && (material.input_type === 'docx' || material.input_type === 'pptx' || material.input_type === 'xlsx')
+        && material.storage_object_key
+      ) {
+        try {
+          const cover = await pickOfficeCoverImage(material.input_type, bytes, JSZip);
+          if (cover?.bytes?.byteLength) {
+            const coverKey = buildCoverObjectKey(material.storage_object_key, cover.ext);
+            const { error: coverUploadError } = await admin.storage.from('materials').upload(
+              coverKey,
+              cover.bytes,
+              { contentType: cover.mimeType, upsert: true },
+            );
+            if (!coverUploadError) {
+              linkFields.cover_storage_object_key = coverKey;
+            }
+          }
+        } catch (coverError) {
+          console.error('office cover extract failed', coverError);
+        }
+      }
+
+      if (officePreviewTypes.has(material.input_type)) {
+        const convertBase = Deno.env.get('OFFICE_CONVERT_URL')
+          || Deno.env.get('PLATFORM_PARSER_URL')
+          || '';
+        // Skip unreachable localhost from Edge; only call hosted convertors.
+        const looksLocal = /^(https?:\/\/)?(127\.0\.0\.1|localhost)(:|\/|$)/i.test(convertBase.trim());
+        if (convertBase && !looksLocal) {
+          try {
+            const converted = await convertOfficeToPdf({
+              convertUrl: convertBase,
+              engine: Deno.env.get('OFFICE_CONVERT_ENGINE') || '',
+              filename: material.file_name || `${material.id}.${material.input_type}`,
+              bytes,
+            });
+            if (converted?.bytes?.byteLength) {
+              const previewKey = buildPreviewObjectKey(material.storage_object_key);
+              const { error: uploadError } = await admin.storage.from('materials').upload(
+                previewKey,
+                converted.bytes,
+                { contentType: 'application/pdf', upsert: true },
+              );
+              if (!uploadError) {
+                linkFields.preview_storage_object_key = previewKey;
+              }
+            }
+          } catch (convertError) {
+            console.error('office preview convert failed', convertError);
+          }
+        }
       }
     } else {
       throw new Error('资料没有可解析的链接或文件');
@@ -315,6 +540,7 @@ Deno.serve(async (req) => {
           last_parse_error: '未提取到可用正文',
           platform_code: (linkFields.platform_code as string) || material.platform_code,
           author_name: (linkFields.author_name as string) || material.author_name,
+          cover_image_url: (linkFields.cover_image_url as string) || material.cover_image_url || null,
           playback_mode: (linkFields.playback_mode as string) || null,
           playback_url: (linkFields.playback_url as string) || null,
           playback_embed_html: (linkFields.playback_embed_html as string) || null,
@@ -339,26 +565,11 @@ Deno.serve(async (req) => {
 
     const summarySeed = typeof linkFields.summary_seed === 'string' ? linkFields.summary_seed : '';
     const stubSummary = buildSummary(summarySeed, text, typeof title === 'string' ? title : '');
-    let enrichment: { summary: string | null; tags: string[] | null; usedAi: boolean } = {
-      summary: null,
-      tags: null,
-      usedAi: false,
-    };
-    try {
-      enrichment = await enrichMaterialSummaryAndTags({
-        deepseekChat,
-        title: typeof title === 'string' ? title : '',
-        platform: (linkFields.platform_code as string) || material.platform_code || 'web',
-        contentText: text,
-      });
-    } catch (aiError) {
-      console.error('enrichment failed', aiError);
-    }
     const readyPatch: Record<string, unknown> = {
       title: title || material.file_name || material.source_url,
       content_text: text,
       content_excerpt: text.slice(0, 240),
-      summary: enrichment.summary || stubSummary,
+      summary: stubSummary,
       status: 'ready',
       last_parse_error: null,
       parse_attempt_count: 0,
@@ -366,6 +577,9 @@ Deno.serve(async (req) => {
       author_name: (linkFields.author_name as string) || material.author_name,
       caption_text: (linkFields.caption_text as string) || null,
       subtitle_text: (linkFields.subtitle_text as string) || null,
+      cover_image_url: (linkFields.cover_image_url as string)
+        || material.cover_image_url
+        || null,
       playback_mode: (linkFields.playback_mode as string) || null,
       playback_url: (linkFields.playback_url as string) || null,
       playback_embed_html: (linkFields.playback_embed_html as string) || null,
@@ -373,35 +587,167 @@ Deno.serve(async (req) => {
     if (!material.canonical_url && linkFields.canonical_url) {
       readyPatch.canonical_url = linkFields.canonical_url;
     }
+    if (typeof linkFields.preview_storage_object_key === 'string' && linkFields.preview_storage_object_key) {
+      readyPatch.preview_storage_object_key = linkFields.preview_storage_object_key;
+    }
+    if (typeof linkFields.cover_storage_object_key === 'string' && linkFields.cover_storage_object_key) {
+      readyPatch.cover_storage_object_key = linkFields.cover_storage_object_key;
+    } else if (
+      typeof linkFields.cover_image_url === 'string'
+      && linkFields.cover_image_url
+      && material.source_url
+    ) {
+      const persistedCover = await persistRemoteCoverImage({
+        admin,
+        userId: material.user_id,
+        materialId: material.id,
+        coverUrl: linkFields.cover_image_url as string,
+        referer: material.source_url,
+      });
+      if (persistedCover) {
+        readyPatch.cover_storage_object_key = persistedCover;
+      }
+    }
     const { error: updateError } = await admin.from('materials').update(readyPatch).eq('id', material.id);
     if (updateError) throw updateError;
 
-    if (
-      shouldReplaceTags({ tagsUserEdited: Boolean(material.tags_user_edited) })
-      && enrichment.tags
-      && enrichment.tags.length > 0
-    ) {
-      try {
-        await replaceMaterialTagRelations(admin, {
-          userId: material.user_id,
-          materialId: material.id,
-          tagNames: enrichment.tags,
-        });
-      } catch (tagError) {
-        console.error('apply tags failed', tagError);
-      }
-    }
     const embedPromise = invokeEmbedMaterial({
       supabaseUrl: Deno.env.get('SUPABASE_URL') || '',
       serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
       materialId: material.id,
     });
+
+    const backgroundEnrichment = (async () => {
+      await embedPromise.catch((error) => {
+        console.error('embed after parse failed', error);
+      });
+
+      try {
+        const enrichment = await enrichMaterialSummaryAndTags({
+          deepseekChat,
+          title: typeof title === 'string' ? title : '',
+          platform: (linkFields.platform_code as string) || material.platform_code || 'web',
+          contentText: text,
+        });
+        if (enrichment.summary) {
+          const { error: summaryError } = await admin.from('materials').update({
+            summary: enrichment.summary,
+          }).eq('id', material.id);
+          if (summaryError) console.error('summary patch failed', summaryError);
+        }
+        if (
+          shouldReplaceTags({ tagsUserEdited: Boolean(material.tags_user_edited) })
+          && enrichment.tags
+          && enrichment.tags.length > 0
+        ) {
+          try {
+            await replaceMaterialTagRelations(admin, {
+              userId: material.user_id,
+              materialId: material.id,
+              tagNames: enrichment.tags,
+            });
+          } catch (tagError) {
+            console.error('apply tags failed', tagError);
+          }
+        }
+      } catch (aiError) {
+        console.error('deferred enrichment failed', aiError);
+      }
+
+      if (deferredInlineImages) {
+        try {
+          const enriched = String(await deferredInlineImages() || '').trim();
+          if (enriched) {
+            const { error: patchError } = await admin.from('materials').update({
+              content_text: enriched,
+              content_excerpt: enriched.slice(0, 240),
+            }).eq('id', material.id);
+            if (patchError) throw patchError;
+
+            const nextChunks = chunkText(enriched);
+            const { error: deleteChunksError } = await admin
+              .from('material_chunks')
+              .delete()
+              .eq('material_id', material.id);
+            if (deleteChunksError) throw deleteChunksError;
+            if (nextChunks.length) {
+              const { error: insertChunksError } = await admin.from('material_chunks').insert(
+                nextChunks.map((chunk, chunkIndex) => ({
+                  material_id: material.id,
+                  user_id: material.user_id,
+                  knowledge_base_id: material.knowledge_base_id,
+                  chunk_index: chunkIndex,
+                  ...chunk,
+                })),
+              );
+              if (insertChunksError) throw insertChunksError;
+            }
+            await invokeEmbedMaterial({
+              supabaseUrl: Deno.env.get('SUPABASE_URL') || '',
+              serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
+              materialId: material.id,
+            });
+          }
+        } catch (imageError) {
+          console.error('deferred inline image enrichment failed', imageError);
+        }
+        return;
+      }
+
+      if (!deferredImageOcr) return;
+      try {
+        const appendix = String(await deferredImageOcr() || '').trim();
+        if (!appendix) return;
+        const { data: latest, error: latestError } = await admin
+          .from('materials')
+          .select('content_text')
+          .eq('id', material.id)
+          .maybeSingle();
+        if (latestError) throw latestError;
+        const base = String(latest?.content_text || text || '').trim();
+        if (!base || base.includes('【文内图片识别】')) return;
+        const full = `${base}\n\n${appendix}`.trim();
+        const { error: patchError } = await admin.from('materials').update({
+          content_text: full,
+          content_excerpt: full.slice(0, 240),
+        }).eq('id', material.id);
+        if (patchError) throw patchError;
+
+        const nextChunks = chunkText(full);
+        const { error: deleteChunksError } = await admin
+          .from('material_chunks')
+          .delete()
+          .eq('material_id', material.id);
+        if (deleteChunksError) throw deleteChunksError;
+        if (nextChunks.length) {
+          const { error: insertChunksError } = await admin.from('material_chunks').insert(
+            nextChunks.map((chunk, chunkIndex) => ({
+              material_id: material.id,
+              user_id: material.user_id,
+              knowledge_base_id: material.knowledge_base_id,
+              chunk_index: chunkIndex,
+              ...chunk,
+            })),
+          );
+          if (insertChunksError) throw insertChunksError;
+        }
+        await invokeEmbedMaterial({
+          supabaseUrl: Deno.env.get('SUPABASE_URL') || '',
+          serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '',
+          materialId: material.id,
+        });
+      } catch (imageError) {
+        console.error('deferred embedded image OCR failed', imageError);
+      }
+    })();
+
     const edgeRuntime = (globalThis as any).EdgeRuntime;
     const waitUntil = edgeRuntime?.waitUntil?.bind(edgeRuntime);
     if (typeof waitUntil === 'function') {
-      waitUntil(embedPromise);
+      waitUntil(backgroundEnrichment);
     } else {
-      await embedPromise.catch(() => {});
+      // Local/tests: still return ready quickly; enrichment continues without blocking caller hard.
+      void backgroundEnrichment.catch(() => {});
     }
     return response({ ok: true, status: 'ready', quality: linkFields.quality || 'full' });
   } catch (error) {

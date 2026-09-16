@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { AnswerContent } from '../chat/AnswerContent.jsx';
+import { EditableUserMessage } from '../chat/EditableUserMessage.jsx';
 import { AnswerActions } from './AnswerActions.jsx';
 
 function BubbleCheck({ selected }) {
@@ -11,15 +12,15 @@ function BubbleCheck({ selected }) {
   );
 }
 
-function BubbleRow({ align, shareMode, selected, label, onToggle, children }) {
+function BubbleRow({ align, selectMode, selected, label, onToggle, children }) {
   const className = [
     'home-bubble-row',
     `is-${align}`,
-    shareMode ? 'is-selectable' : '',
+    selectMode ? 'is-selectable' : '',
     selected ? 'is-selected' : '',
   ].filter(Boolean).join(' ');
 
-  if (!shareMode) {
+  if (!selectMode) {
     return <div className={className}>{children}</div>;
   }
 
@@ -42,19 +43,24 @@ export function KbConversation({
   onSaveCard,
   onAddToNote,
   onOpenMaterial,
+  onResend,
+  onDeleteStart,
   shareMode = false,
+  selectMode = null,
   selectedBubbleIds = [],
   onShareStart,
   onToggleBubble,
 }) {
   const endRef = useRef(null);
   const selected = new Set(selectedBubbleIds);
+  const busy = messages.some((message) => !message.answer);
+  const activeSelectMode = selectMode || (shareMode ? 'share' : null);
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end' });
   }, [messages.length]);
 
   return (
-    <div className={`kb-conversation ${shareMode ? 'is-share-mode' : ''}`} aria-label="知识库 AI 对话">
+    <div className={`kb-conversation ${activeSelectMode ? 'is-share-mode' : ''}`} aria-label="知识库问答">
       {messages.map((message) => {
         const isRag = message.mode === 'rag';
         const userId = `kb-${message.id}-user`;
@@ -73,17 +79,23 @@ export function KbConversation({
           <article className="conversation home-conversation-turn" key={message.id}>
             <BubbleRow
               align="user"
-              shareMode={shareMode}
+              selectMode={activeSelectMode}
               selected={selected.has(userId)}
               label={`选择提问：${message.question}`}
               onToggle={() => onToggleBubble?.(userId)}
             >
-              <div className="user-message">{message.question}</div>
+              <EditableUserMessage
+                message={message}
+                bubbleClassName="user-message"
+                shareMode={Boolean(activeSelectMode)}
+                disabled={busy}
+                onResend={onResend}
+              />
             </BubbleRow>
             {message.answer ? (
               <BubbleRow
                 align="answer"
-                shareMode={shareMode}
+                selectMode={activeSelectMode}
                 selected={selected.has(answerId)}
                 label="选择回答"
                 onToggle={() => onToggleBubble?.(answerId)}
@@ -91,24 +103,25 @@ export function KbConversation({
                 <div className={`answer-message ${message.failed ? 'is-failed' : ''}`}>
                   <AnswerActions
                     answer={answer}
-                    shareMode={shareMode}
+                    shareMode={Boolean(activeSelectMode)}
                     onSaveCard={onSaveCard}
                     onAddToNote={onAddToNote}
                     onShare={() => onShareStart?.(answerId)}
+                    onDelete={() => onDeleteStart?.(answerId)}
                   >
                     <AnswerContent
                       text={message.answer}
                       citations={isRag ? message.citations : []}
                       conversational={false}
-                      interactive={!shareMode}
+                      interactive={!activeSelectMode}
                       onOpenMaterial={onOpenMaterial}
                     />
                   </AnswerActions>
                 </div>
               </BubbleRow>
-            ) : (
+            ) : String(message.id).startsWith('pending-') ? (
               <div className="answer-message is-pending" role="status">正在生成回答…</div>
-            )}
+            ) : null}
           </article>
         );
       })}

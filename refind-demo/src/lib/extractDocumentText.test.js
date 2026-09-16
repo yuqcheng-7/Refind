@@ -25,11 +25,17 @@ describe('extractDocumentText', () => {
       '[Content_Types].xml': '<?xml version="1.0"?><Types></Types>',
       'word/document.xml': `<?xml version="1.0"?>
         <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-          <w:body><w:p><w:r><w:t>拾藏文档正文</w:t></w:r></w:p></w:body>
+          <w:body>
+            <w:p><w:r><w:t>拾藏文档正文</w:t></w:r></w:p>
+            <w:p><w:r><w:t>第二段落</w:t></w:r></w:p>
+          </w:body>
         </w:document>`,
     });
 
-    await expect(extractDocumentText('docx', bytes, deps)).resolves.toContain('拾藏文档正文');
+    const text = await extractDocumentText('docx', bytes, deps);
+    expect(text).toContain('拾藏文档正文');
+    expect(text).toContain('第二段落');
+    expect(text).toMatch(/拾藏文档正文\n\n第二段落/);
   });
 
   it('extracts text from pptx slides', async () => {
@@ -42,6 +48,7 @@ describe('extractDocumentText', () => {
         </p:sld>`,
     });
 
+    await expect(extractDocumentText('pptx', bytes, deps)).resolves.toContain('【幻灯片 1】');
     await expect(extractDocumentText('pptx', bytes, deps)).resolves.toContain('幻灯片标题');
   });
 
@@ -62,6 +69,7 @@ describe('extractDocumentText', () => {
     });
 
     const text = await extractDocumentText('xlsx', bytes, deps);
+    expect(text).toContain('【工作表 1】');
     expect(text).toContain('产品');
     expect(text).toContain('拾藏');
     expect(text).toContain('42');

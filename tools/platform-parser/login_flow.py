@@ -1,4 +1,4 @@
-"""Local Playwright login jobs for xhs / douyin."""
+"""Local Playwright login jobs for xhs / douyin / zhihu / bilibili."""
 
 from __future__ import annotations
 
@@ -11,27 +11,48 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from session_store import (
+  COOKIE_DOMAINS,
   SUPPORTED_LOGIN_PLATFORMS,
+  browser_profile_dir,
+  clear_browser_profile,
   clear_platform_session,
+  load_platform_session,
+  playwright_cookies_from_session,
   save_platform_session,
 )
 
 LOGIN_TIMEOUT_SEC = 180
+# Platforms that reuse a disk Chromium profile across login windows.
+# Closing the window must not wipe cookies; reconnect should open still logged-in.
+PERSISTENT_BROWSER_PLATFORMS = frozenset({"zhihu"})
+# Legacy: no platforms keep the window open after success (auto-close after persist).
+KEEP_BROWSER_OPEN_AFTER_LOGIN = frozenset()
+KEEP_OPEN_AFTER_SUCCESS_SEC = 30 * 60
+
+
+class LoginWindowClosed(RuntimeError):
+  """Raised when the user closes the Playwright login window before completion."""
 
 LOGIN_URLS = {
-  "xhs": "https://www.xiaohongshu.com/explore",
+  "xhs": "https://www.xiaohongshu.com/login",
   "douyin": "https://www.douyin.com/",
+  "zhihu": "https://www.zhihu.com/signin?next=%2F",
+  "bilibili": "https://passport.bilibili.com/login",
 }
 
 SUCCESS_COOKIE_KEYS = {
   # Note: xhs sets web_session for guests too — real login is confirmed via /user/me.
   "xhs": ("web_session",),
   "douyin": ("sessionid", "sessionid_ss", "sid_tt", "uid_tt"),
+  "zhihu": ("z_c0",),
+  "bilibili": ("SESSDATA", "DedeUserID"),
 }
 
 PROFILE_BOOTSTRAP = {
   "xhs": "https://www.xiaohongshu.com/user/profile/me",
   "douyin": "https://www.douyin.com/user/self",
+  "zhihu": "https://www.zhihu.com/",
+  "bilibili": "https://www.bilibili.com/",
 }
 
 
@@ -70,6 +91,69 @@ def has_success_cookies(platform: str, cookies: list[dict[str, Any]]) -> bool:
   names = {str(item.get("name") or "") for item in cookies}
   keys = SUCCESS_COOKIE_KEYS.get(platform) or ()
   return any(key in names for key in keys)
+
+
+def cookie_value(cookies: list[dict[str, Any]], name: str) -> str:
+  target = str(name or "").strip()
+  for item in cookies:
+    if str(item.get("name") or "") == target:
+      return str(item.get("value") or "").strip()
+  return ""
+
+
+def has_meaningful_cookie(cookies: list[dict[str, Any]], names: tuple[str, ...], *, min_len: int = 8) -> bool:
+  for name in names:
+    value = cookie_value(cookies, name)
+    if len(value) >= min_len:
+      return True
+  return False
+
+
+def xhs_state_logged_in(page: Any) -> bool:
+  try:
+    return bool(
+      page.evaluate(
+        """() => {
+          const s = window.__INITIAL_STATE__ || window.__INITIAL_SSR_STATE__ || {};
+          const u = s?.user?.userInfo || s?.user?.userPageData?.basicInfo || s?.user || {};
+          if (u.guest === true) return false;
+          if (u.guest !== false) return false;
+          const id = u.userId || u.user_id || u.redId || u.red_id;
+          return Boolean(id);
+        }"""
+      )
+    )
+  except Exception:  # noqa: BLE001
+    return False
+
+
+def login_page_visible(page: Any, platform: str) -> bool:
+  patterns = {
+    "xhs": r"扫码登录|手机号登录|验证码登录",
+    "douyin": r"扫码登录|验证码登录|密码登录",
+    "zhihu": r"登录知乎|扫码登录|验证码登录|注册账号",
+    "bilibili": r"扫码登录|密码登录|短信登录",
+  }
+  pattern = patterns.get(platform)
+  if not pattern:
+    return False
+  try:
+    return bool(
+      page.evaluate(
+        """([re]) => {
+          const text = document.body?.innerText || '';
+          return new RegExp(re).test(text);
+        }""",
+        pattern,
+      )
+    )
+  except Exception:  # noqa: BLE001
+    return False
+
+
+def mark_login_verified(captured: dict[str, Any]) -> None:
+  captured["login_verified"] = True
+  captured["logged_in"] = True
 
 
 def guess_account_name(cookies: list[dict[str, Any]]) -> str:
@@ -147,6 +231,17 @@ def account_label_from_cookies(platform: str, cookies: list[dict[str, Any]]) -> 
     session = by_name.get("web_session") or ""
     if session:
       return f"会话 {session[:10]}"
+  if platform == "zhihu":
+    session = by_name.get("z_c0") or ""
+    if session:
+      return f"会话 {session[:10]}"
+  if platform == "bilibili":
+    uid = by_name.get("DedeUserID") or ""
+    if uid:
+      return f"UID {uid[:12]}"
+    session = by_name.get("SESSDATA") or ""
+    if session:
+      return f"会话 {session[:10]}"
   return ""
 
 
@@ -204,13 +299,37 @@ def fetch_xhs_me(page: Any) -> dict[str, Any] | None:
     data = body.get("data") if isinstance(body, dict) else None
     if not isinstance(data, dict):
       return None
-    if data.get("guest") is True:
+    if data.get("guest") is not False:
       return None
-    if data.get("user_id") or data.get("nickname") or data.get("red_id"):
-      return data
+    if not (data.get("user_id") or data.get("red_id")):
+      return None
+    return data
   except Exception:  # noqa: BLE001
     return None
   return None
+
+
+def fetch_zhihu_me(page: Any) -> dict[str, Any] | None:
+  """Return /api/v4/me payload when logged in."""
+  try:
+    resp = page.request.get(
+      "https://www.zhihu.com/api/v4/me?include=account_status",
+      headers={
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.zhihu.com/",
+      },
+      timeout=15_000,
+    )
+    if resp.status != 200:
+      return None
+    body = resp.json()
+    if not isinstance(body, dict):
+      return None
+    if not (body.get("id") or body.get("url_token") or body.get("name")):
+      return None
+    return body
+  except Exception:  # noqa: BLE001
+    return None
 
 
 def scrape_account_name_from_page(page: Any, platform: str) -> str:
@@ -220,6 +339,15 @@ def scrape_account_name_from_page(page: Any, platform: str) -> str:
     found = nickname_from_mapping(me or {})
     if found:
       return found
+  if platform == "zhihu":
+    me = fetch_zhihu_me(page)
+    if me:
+      found = normalize_display_name(me.get("name"))
+      if found:
+        return found
+      token = str(me.get("url_token") or "").strip()
+      if token:
+        return f"知乎用户 {token[:16]}"
   if platform == "douyin":
     try:
       resp = page.request.get(
@@ -332,6 +460,20 @@ def scrape_account_name_from_page(page: Any, platform: str) -> str:
       "[class*='user-name']",
       "header [class*='name']",
     ],
+    "zhihu": [
+      ".AppHeader-profileEntry",
+      ".AppHeader-userInfo",
+      "a[href*='/people/']",
+      "[class*='UserLink']",
+      ".Avatar + *",
+    ],
+    "bilibili": [
+      ".header-avatar-wrap",
+      ".header-entry-avatar",
+      ".nickname",
+      ".bili-avatar + *",
+      "a[href*='//space.bilibili.com/']",
+    ],
   }
   for selector in selectors.get(platform) or []:
     try:
@@ -347,35 +489,148 @@ def scrape_account_name_from_page(page: Any, platform: str) -> str:
 
 
 def platform_login_ready(page: Any, platform: str, cookies: list[dict[str, Any]], captured: dict[str, Any] | None = None) -> bool:
-  if captured and captured.get("logged_in"):
+  """Return True only after authoritative login signals — not guest cookies or generic DOM."""
+  captured = captured if captured is not None else {}
+  if captured.get("login_verified"):
     return True
-  if platform == "xhs":
-    # page.request /user/me often 406 (anti-bot). Prefer intercepted page responses.
-    names = {str(item.get("name") or "") for item in cookies}
-    if names & {
-      "access-token-creator.xiaohongshu.com",
-      "customer-sso-sid",
-      "x-user-id-creator.xiaohongshu.com",
-      "galaxy.creator.beaker.session.id",
-    }:
+
+  # Zhihu: after QR/sms login, the sign-in shell may still be visible while z_c0 is already set.
+  # Prefer live /api/v4/me over the login-page DOM check.
+  if platform == "zhihu":
+    if not has_meaningful_cookie(cookies, ("z_c0",), min_len=16):
+      return False
+    if probe_browser_session(page, platform, captured):
       return True
+    if login_page_visible(page, platform):
+      return False
+    return False
+
+  if login_page_visible(page, platform):
+    return False
+
+  if platform == "xhs":
+    me = fetch_xhs_me(page)
+    if me and me.get("guest") is not True:
+      mark_login_verified(captured)
+      return True
+    if xhs_state_logged_in(page):
+      mark_login_verified(captured)
+      return True
+    return False
+
+  if platform == "douyin":
+    if not has_meaningful_cookie(cookies, ("sessionid", "sessionid_ss")):
+      return False
+    return bool(captured.get("login_verified"))
+
+  if platform == "bilibili":
+    if not has_meaningful_cookie(cookies, ("SESSDATA",), min_len=16):
+      return False
+    if not has_meaningful_cookie(cookies, ("DedeUserID",), min_len=1):
+      return False
+    return bool(captured.get("login_verified"))
+
+  return False
+
+
+def verify_authenticated_session(
+  platform: str,
+  page: Any,
+  cookies: list[dict[str, Any]],
+  captured: dict[str, Any] | None = None,
+) -> bool:
+  """Final check before saving cookies — must match real logged-in state."""
+  captured = captured if captured is not None else {}
+  if not captured.get("login_verified"):
+    return False
+
+  if platform == "xhs":
+    me = fetch_xhs_me(page)
+    return bool(me and me.get("guest") is False and (me.get("user_id") or me.get("red_id")))
+
+  if platform == "douyin":
+    if not has_meaningful_cookie(cookies, ("sessionid", "sessionid_ss")):
+      return False
     try:
-      return bool(
-        page.evaluate(
-          """() => {
-            const text = document.body?.innerText || '';
-            if (/扫码登录|手机号登录|验证码登录/.test(text) && !/退出|我的频道|创作中心/.test(text)) {
-              return false;
-            }
-            return Boolean(document.querySelector(
-              '.side-bar .user, .side-bar .user-name, .reds-avatar, [class*="user-name"], a[href*="/user/profile/"]'
-            ));
-          }"""
-        )
+      resp = page.request.get(
+        "https://www.douyin.com/aweme/v1/web/user/profile/self/?device_platform=webapp&aid=6383",
+        headers={
+          "Accept": "application/json, text/plain, */*",
+          "Referer": "https://www.douyin.com/",
+        },
+        timeout=15_000,
       )
+      if resp.status != 200:
+        return False
+      body = resp.json()
+      if not isinstance(body, dict) or body.get("status_code") not in (0, None):
+        return False
+      user = body.get("user") or (body.get("data") or {}).get("user") if isinstance(body.get("data"), dict) else None
+      if not isinstance(user, dict):
+        return False
+      return bool(user.get("uid") or nickname_from_mapping(user) or account_id_from_mapping(user))
     except Exception:  # noqa: BLE001
       return False
-  return has_success_cookies(platform, cookies)
+
+  if platform == "zhihu":
+    if not has_meaningful_cookie(cookies, ("z_c0",), min_len=16):
+      return False
+    try:
+      resp = page.request.get(
+        "https://www.zhihu.com/api/v4/me?include=account_status",
+        headers={
+          "Accept": "application/json, text/plain, */*",
+          "Referer": "https://www.zhihu.com/",
+        },
+        timeout=15_000,
+      )
+      if resp.status != 200:
+        return False
+      body = resp.json()
+      return isinstance(body, dict) and bool(body.get("id") or body.get("url_token") or body.get("name"))
+    except Exception:  # noqa: BLE001
+      return False
+
+  if platform == "bilibili":
+    if not has_meaningful_cookie(cookies, ("SESSDATA",), min_len=16):
+      return False
+    if not has_meaningful_cookie(cookies, ("DedeUserID",), min_len=1):
+      return False
+    try:
+      resp = page.request.get(
+        "https://api.bilibili.com/x/web-interface/nav",
+        headers={
+          "Accept": "application/json, text/plain, */*",
+          "Referer": "https://www.bilibili.com/",
+        },
+        timeout=15_000,
+      )
+      if resp.status != 200:
+        return False
+      body = resp.json()
+      data = body.get("data") if isinstance(body, dict) else None
+      if not isinstance(data, dict):
+        return False
+      return data.get("isLogin") is True and bool(data.get("mid"))
+    except Exception:  # noqa: BLE001
+      return False
+
+  return False
+
+
+def weak_account_label(platform: str, label: str) -> bool:
+  text = str(label or "").strip()
+  if not text:
+    return True
+  # Zhihu often only exposes "知乎用户 xxx" / cookie-derived labels; those are fine
+  # once /api/v4/me has verified the session.
+  if platform == "zhihu":
+    return False
+  if text.startswith(("设备 ", "会话 ")):
+    return True
+  if platform == "xhs" and text in {"小红书账号", "未获取到昵称"}:
+    return True
+  return False
 
 
 def attach_account_response_listener(page: Any, platform: str, captured: dict[str, Any]) -> None:
@@ -390,11 +645,8 @@ def attach_account_response_listener(page: Any, platform: str, captured: dict[st
     acc_id = account_id_from_mapping(data)
     if acc_id and not captured.get("account_id"):
       captured["account_id"] = acc_id
-    if mark_login or nick or acc_id:
-      if mark_login or nick:
-        captured["logged_in"] = True
-      elif acc_id and platform == "xhs" and data.get("guest") is False:
-        captured["logged_in"] = True
+    if mark_login:
+      mark_login_verified(captured)
 
   def on_response(response: Any) -> None:
     try:
@@ -416,12 +668,8 @@ def attach_account_response_listener(page: Any, platform: str, captured: dict[st
       if platform == "xhs":
         if "/user/me" in url and isinstance(data, dict):
           absorb(data, mark_login=data.get("guest") is False)
-        if "otherinfo" in url or "user/selfinfo" in url:
-          absorb(data if isinstance(data, dict) else {}, mark_login=True)
-        if "qrcode" in url and isinstance(data, dict):
-          if data.get("login_status") in (True, 1, "success", "ok") or data.get("code_status") == 2:
-            captured["logged_in"] = True
-          absorb(data)
+        if ("otherinfo" in url or "user/selfinfo" in url) and isinstance(data, dict):
+          absorb(data, mark_login=data.get("guest") is False)
 
       if platform == "douyin":
         interesting = any(token in url for token in (
@@ -432,9 +680,45 @@ def attach_account_response_listener(page: Any, platform: str, captured: dict[st
         user = data
         if isinstance(data, dict):
           user = data.get("user") or data.get("user_info") or data.get("account") or data
-        absorb(user if isinstance(user, dict) else {})
-        if isinstance(body, dict) and body.get("status_code") == 0 and (captured.get("account") or captured.get("account_id")):
-          captured["logged_in"] = True
+        user_dict = user if isinstance(user, dict) else {}
+        absorb(user_dict)
+        if (
+          isinstance(body, dict)
+          and body.get("status_code") == 0
+          and (nickname_from_mapping(user_dict) or account_id_from_mapping(user_dict))
+        ):
+          mark_login_verified(captured)
+
+      if platform == "zhihu":
+        interesting = any(token in url for token in (
+          "/api/v4/me", "/members/me", "account/api", "prod/account",
+        ))
+        if interesting:
+          user = data
+          if isinstance(data, dict):
+            user = data.get("user") or data.get("member") or data
+          user_dict = user if isinstance(user, dict) else {}
+          verified = bool(
+            user_dict.get("id")
+            or user_dict.get("uid")
+            or user_dict.get("url_token")
+            or nickname_from_mapping(user_dict)
+          )
+          absorb(user_dict, mark_login=verified)
+
+      if platform == "bilibili":
+        interesting = any(token in url for token in (
+          "nav", "account.bilibili.com", "x/web-interface/nav", "x/space/myinfo",
+        ))
+        if interesting:
+          user = data if isinstance(data, dict) else {}
+          if isinstance(data, dict) and isinstance(data.get("data"), dict):
+            user = data.get("data") or {}
+          if isinstance(user, dict) and user.get("uname") and not user.get("nickname"):
+            user = {**user, "nickname": user.get("uname")}
+          user_dict = user if isinstance(user, dict) else {}
+          verified = bool(user_dict.get("isLogin") is True or user_dict.get("mid"))
+          absorb(user_dict, mark_login=verified)
     except Exception:  # noqa: BLE001
       return
 
@@ -583,10 +867,112 @@ def snapshot_job(login_id: str) -> dict[str, Any] | None:
     }
 
 
-BrowserRunner = Callable[[str, float], dict[str, Any]]
+BrowserRunner = Callable[..., dict[str, Any]]
 
 
-def default_playwright_runner(platform: str, timeout_sec: float) -> dict[str, Any]:
+def _wait_until_user_closes_browser(
+  page: Any,
+  browser: Any,
+  window_closed: dict[str, bool],
+  *,
+  timeout_sec: float = KEEP_OPEN_AFTER_SUCCESS_SEC,
+) -> None:
+  """Leave the window open until the user closes it (or soft timeout)."""
+  deadline = time.time() + max(30.0, float(timeout_sec))
+  while time.time() < deadline:
+    try:
+      if window_closed.get("value") or page.is_closed():
+        break
+    except Exception:  # noqa: BLE001
+      break
+    try:
+      page.wait_for_timeout(800)
+    except Exception:  # noqa: BLE001
+      break
+  # Caller closes the browser/context; do not close here when using persistent profiles.
+
+
+def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
+  """Open the visible login UI (QR / phone) when landing pages hide it."""
+  if platform == "xhs":
+    try:
+      if page.url and "login" not in page.url and "signin" not in page.url:
+        page.goto("https://www.xiaohongshu.com/login", wait_until="domcontentloaded", timeout=45_000)
+    except Exception:  # noqa: BLE001
+      try:
+        page.goto(start_url, wait_until="domcontentloaded", timeout=45_000)
+      except Exception:  # noqa: BLE001
+        pass
+    try:
+      page.wait_for_timeout(1200)
+      for selector in (
+        "text=扫码登录",
+        "text=登录",
+        ".login-btn",
+        "button:has-text('登录')",
+      ):
+        loc = page.locator(selector).first
+        if loc.count() > 0:
+          loc.click(timeout=2500)
+          page.wait_for_timeout(800)
+          break
+    except Exception:  # noqa: BLE001
+      pass
+
+
+def probe_browser_session(page: Any, platform: str, captured: dict[str, Any] | None = None) -> bool:
+  """Hit first-party APIs in the browser to confirm an injected session is live."""
+  captured = captured if captured is not None else {}
+  if platform == "zhihu":
+    if not has_meaningful_cookie(page.context.cookies(), ("z_c0",), min_len=16):
+      return False
+    try:
+      resp = page.request.get(
+        "https://www.zhihu.com/api/v4/me?include=account_status",
+        headers={
+          "Accept": "application/json, text/plain, */*",
+          "Referer": "https://www.zhihu.com/",
+        },
+        timeout=15_000,
+      )
+      if resp.status != 200:
+        return False
+      body = resp.json()
+      if isinstance(body, dict) and (body.get("id") or body.get("url_token") or body.get("name")):
+        absorb = nickname_from_mapping(body)
+        if absorb and not captured.get("account"):
+          captured["account"] = absorb
+        mark_login_verified(captured)
+        return True
+    except Exception:  # noqa: BLE001
+      return False
+  return False
+
+
+def seed_saved_cookies(context: Any, platform: str) -> bool:
+  """Inject previously saved cookies so reconnect / re-open is not a blank guest browser."""
+  payload = load_platform_session(platform)
+  cleaned = playwright_cookies_from_session(payload, platform)
+  if not cleaned:
+    return False
+  try:
+    # Playwright requires a URL in the cookie domain before add_cookies in some cases;
+    # open a blank page on the site origin first.
+    bootstrap = PROFILE_BOOTSTRAP.get(platform) or LOGIN_URLS.get(platform) or "about:blank"
+    page = context.new_page()
+    page.goto(bootstrap, wait_until="domcontentloaded", timeout=45_000)
+    context.add_cookies(cleaned)
+    page.close()
+    return True
+  except Exception:  # noqa: BLE001
+    return False
+
+
+def default_playwright_runner(
+  platform: str,
+  timeout_sec: float,
+  on_authenticated: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
   try:
     from playwright.sync_api import sync_playwright
   except ImportError as exc:
@@ -595,50 +981,196 @@ def default_playwright_runner(platform: str, timeout_sec: float) -> dict[str, An
     ) from exc
 
   url = LOGIN_URLS[platform]
+  home = PROFILE_BOOTSTRAP.get(platform) or url
   deadline = time.time() + timeout_sec
-  captured: dict[str, Any] = {"account": "", "account_id": "", "logged_in": False}
-  with sync_playwright() as playwright:
-    browser = playwright.chromium.launch(headless=False)
-    context = browser.new_context(
-      locale="zh-CN",
-      user_agent=UA_FALLBACK,
-      viewport={"width": 1280, "height": 860},
-    )
-    page = context.new_page()
-    attach_account_response_listener(page, platform, captured)
-    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+  keep_open = platform in KEEP_BROWSER_OPEN_AFTER_LOGIN
+  use_persistent = platform in PERSISTENT_BROWSER_PLATFORMS
+  captured: dict[str, Any] = {"account": "", "account_id": "", "logged_in": False, "login_verified": False}
+  saved_payload = load_platform_session(platform)
+  session_ua = str((saved_payload or {}).get("ua") or UA_FALLBACK).strip() or UA_FALLBACK
+
+  browser = None
+  context = None
+  page = None
+  window_closed = {"value": False}
+
+  def close_browser() -> None:
+    nonlocal browser, context
     try:
+      if context is not None:
+        context.close()
+    except Exception:  # noqa: BLE001
+      pass
+    context = None
+    try:
+      if browser is not None and browser.is_connected():
+        browser.close()
+    except Exception:  # noqa: BLE001
+      pass
+    browser = None
+
+  def finish(account: str, cookies: list[dict[str, Any]]) -> dict[str, Any]:
+    result = {
+      "cookies": cookies_to_header(cookies),
+      "cookie_items": cookies,
+      "account_display_name": account,
+      "ua": session_ua,
+    }
+    if on_authenticated is not None:
+      on_authenticated(result)
+    if keep_open:
+      try:
+        current = str(getattr(page, "url", "") or "")
+        if "signin" in current or "/login" in current:
+          page.goto(home, wait_until="domcontentloaded", timeout=45_000)
+          page.wait_for_timeout(800)
+        try:
+          page.evaluate(
+            """() => {
+              document.title = '拾藏已保存登录 · 可关闭此窗口';
+            }"""
+          )
+        except Exception:  # noqa: BLE001
+          pass
+      except Exception:  # noqa: BLE001
+        pass
+      _wait_until_user_closes_browser(page, browser or context, window_closed)
+      # Re-dump cookies after browsing — Zhihu may rotate tokens while the window stays open.
+      try:
+        final_cookies = context.cookies() if context is not None else cookies
+        result = {
+          "cookies": cookies_to_header(final_cookies),
+          "cookie_items": final_cookies,
+          "account_display_name": account,
+          "ua": session_ua,
+        }
+        if on_authenticated is not None:
+          on_authenticated(result)
+      except Exception:  # noqa: BLE001
+        pass
+      close_browser()
+      return result
+    close_browser()
+    return result
+
+  with sync_playwright() as playwright:
+    try:
+      if use_persistent:
+        profile_dir = browser_profile_dir(platform)
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        launch_kwargs: dict[str, Any] = {
+          "user_data_dir": str(profile_dir),
+          "headless": False,
+          "locale": "zh-CN",
+          "user_agent": session_ua,
+          "viewport": {"width": 1280, "height": 860},
+        }
+        # Prefer installed Google Chrome for Zhihu — bundled Chromium is often blocked.
+        try:
+          context = playwright.chromium.launch_persistent_context(channel="chrome", **launch_kwargs)
+        except Exception:  # noqa: BLE001
+          context = playwright.chromium.launch_persistent_context(**launch_kwargs)
+        browser = context.browser
+        page = context.pages[0] if context.pages else context.new_page()
+        seeded = True  # profile itself carries prior cookies
+      else:
+        launch_kwargs = {"headless": False}
+        browser = playwright.chromium.launch(**launch_kwargs)
+        context = browser.new_context(
+          locale="zh-CN",
+          user_agent=session_ua,
+          viewport={"width": 1280, "height": 860},
+        )
+        seeded = seed_saved_cookies(context, platform)
+        page = context.new_page()
+
+      def _mark_window_closed() -> None:
+        window_closed["value"] = True
+
+      page.on("close", _mark_window_closed)
+      attach_account_response_listener(page, platform, captured)
+      # Prefer home when we already have a profile/session so a valid login
+      # shows as logged-in (not a blank sign-in page that looks like "logged out").
+      start_url = home if seeded else url
+      page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+      if seeded:
+        page.wait_for_timeout(1200)
+        probe_browser_session(page, platform, captured)
+        if platform != "zhihu":
+          page.reload(wait_until="domcontentloaded", timeout=45_000)
+          page.wait_for_timeout(800)
+        cookies = context.cookies()
+        if platform_login_ready(page, platform, cookies, captured) and verify_authenticated_session(
+          platform, page, cookies, captured,
+        ):
+          account = capture_account_after_login(page, platform, cookies, captured)
+          if not weak_account_label(platform, account):
+            return finish(account, context.cookies())
+        ensure_login_surface(page, platform, url)
+      else:
+        ensure_login_surface(page, platform, url)
+
+      ready_streak = 0
+      closed_hint = (
+        "登录窗口已关闭。请重新点击「连接」并完成扫码；"
+        "知乎会复用本机登录配置，成功保存后关闭窗口不会退出拾藏登录态。"
+        if use_persistent
+        else "登录窗口已关闭。请重新点击「连接」，扫码后等待窗口自动关闭，不要手动关闭。"
+      )
       while time.time() < deadline:
+        if window_closed["value"]:
+          raise LoginWindowClosed(closed_hint)
+        try:
+          if page.is_closed():
+            raise LoginWindowClosed(closed_hint)
+        except LoginWindowClosed:
+          raise
+        except Exception:  # noqa: BLE001
+          pass
         cookies = context.cookies()
         if platform_login_ready(page, platform, cookies, captured):
-          # Give first-party XHRs a moment to land nickname payloads.
+          ready_streak += 1
+        else:
+          ready_streak = 0
+
+        if ready_streak >= 3:
+          fresh = context.cookies()
+          if not verify_authenticated_session(platform, page, fresh, captured):
+            ready_streak = 0
+            page.wait_for_timeout(1200)
+            continue
           for _ in range(8):
             if captured.get("account") or captured.get("account_id"):
               break
             page.wait_for_timeout(500)
-          account = capture_account_after_login(page, platform, cookies, captured)
-          if not account or account.startswith(("会话 ", "设备 ")):
+          account = capture_account_after_login(page, platform, fresh, captured)
+          if platform == "zhihu" and not str(account or "").strip():
+            me = fetch_zhihu_me(page)
+            if me:
+              account = normalize_display_name(me.get("name")) or (
+                f"知乎用户 {str(me.get('url_token') or '')[:16]}".strip()
+              )
+            account = str(account or "").strip() or "知乎账号"
+          if weak_account_label(platform, account):
             page.wait_for_timeout(1500)
             better = capture_account_after_login(page, platform, context.cookies(), captured)
-            if better:
+            if better and not weak_account_label(platform, better):
               account = better
+            elif weak_account_label(platform, account):
+              ready_streak = 0
+              page.wait_for_timeout(1200)
+              continue
           fresh = context.cookies()
-          header = cookies_to_header(fresh)
-          browser.close()
-          return {
-            "cookies": header,
-            "cookie_items": fresh,
-            "account_display_name": account,
-            "ua": UA_FALLBACK,
-          }
+          if not verify_authenticated_session(platform, page, fresh, captured):
+            ready_streak = 0
+            page.wait_for_timeout(1200)
+            continue
+          return finish(account, fresh)
         page.wait_for_timeout(1200)
-      browser.close()
+      close_browser()
       raise TimeoutError("登录超时，请重试并完成扫码")
     except Exception:
-      try:
-        browser.close()
-      except Exception:  # noqa: BLE001
-        pass
+      close_browser()
       raise
 
 
@@ -648,29 +1180,62 @@ UA_FALLBACK = (
 )
 
 
+def _persist_login_success(login_id: str, platform: str, result: dict[str, Any]) -> None:
+  payload = {
+    "cookies": str(result.get("cookies") or "").strip(),
+    "cookie_items": result.get("cookie_items") if isinstance(result.get("cookie_items"), list) else [],
+    "ua": str(result.get("ua") or UA_FALLBACK),
+    "captured_at": _now_iso(),
+    "account_display_name": str(result.get("account_display_name") or "").strip(),
+  }
+  if not payload["cookies"]:
+    raise RuntimeError("登录完成但未拿到 Cookie")
+  save_platform_session(platform, payload)
+  mark_job(
+    login_id,
+    status="success",
+    account_display_name=payload["account_display_name"],
+    session_payload=json.dumps(payload, ensure_ascii=False),
+    error="",
+  )
+
+
 def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: float) -> None:
+  early_done = {"value": False}
+
+  def on_authenticated(result: dict[str, Any]) -> None:
+    if early_done["value"]:
+      return
+    _persist_login_success(login_id, platform, result)
+    early_done["value"] = True
+
   try:
-    result = runner(platform, timeout_sec)
-    payload = {
-      "cookies": str(result.get("cookies") or "").strip(),
-      "cookie_items": result.get("cookie_items") if isinstance(result.get("cookie_items"), list) else [],
-      "ua": str(result.get("ua") or UA_FALLBACK),
-      "captured_at": _now_iso(),
-      "account_display_name": str(result.get("account_display_name") or "").strip(),
-    }
-    if not payload["cookies"]:
-      raise RuntimeError("登录完成但未拿到 Cookie")
-    save_platform_session(platform, payload)
-    mark_job(
-      login_id,
-      status="success",
-      account_display_name=payload["account_display_name"],
-      session_payload=json.dumps(payload, ensure_ascii=False),
-      error="",
-    )
+    if platform in KEEP_BROWSER_OPEN_AFTER_LOGIN:
+      result = runner(platform, timeout_sec, on_authenticated=on_authenticated)
+    else:
+      result = runner(platform, timeout_sec)
+    if early_done["value"]:
+      return
+    _persist_login_success(login_id, platform, result)
   except TimeoutError as exc:
+    if early_done["value"]:
+      return
     mark_job(login_id, status="expired", error=str(exc))
+  except LoginWindowClosed as exc:
+    if early_done["value"]:
+      return
+    mark_job(login_id, status="failed", error=str(exc))
   except Exception as exc:  # noqa: BLE001
+    if early_done["value"]:
+      return
+    err = str(exc).lower()
+    if "closed" in err or "target" in err and "closed" in err:
+      mark_job(
+        login_id,
+        status="failed",
+        error="登录窗口已关闭。请重新点击「连接」，扫码后等待窗口自动关闭，不要手动关闭。",
+      )
+      return
     mark_job(login_id, status="failed", error=str(exc) or "登录失败")
 
 
@@ -682,7 +1247,7 @@ def start_login(
 ) -> str:
   code = str(platform or "").strip().lower()
   if code not in SUPPORTED_LOGIN_PLATFORMS:
-    raise ValueError("仅支持小红书与抖音本机真实登录")
+    raise ValueError("仅支持小红书、抖音、知乎与 B 站本机真实登录")
   login_id = uuid.uuid4().hex
   job = LoginJob(login_id=login_id, platform=code)
   with _lock:
@@ -698,3 +1263,7 @@ def start_login(
 
 def logout_platform(platform: str) -> None:
   clear_platform_session(platform)
+  try:
+    clear_browser_profile(platform)
+  except Exception:  # noqa: BLE001
+    pass

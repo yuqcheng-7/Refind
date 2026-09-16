@@ -14,19 +14,15 @@ const { deleteAccount, demoSession, sendChatMessage, supabase, conversationStore
   };
   const store = {
     homeItems: [],
+    turnsById: {},
   };
   return {
     deleteAccount: vi.fn(),
     demoSession: session,
     conversationStore: store,
     sendChatMessage: vi.fn(async (payload) => {
-      const conversationId = payload.conversationId || 'conv-test-1';
-      store.homeItems = [{
-        id: conversationId,
-        title: `会话 · ${String(payload.content || '未命名').slice(0, 24)}`,
-        updatedAt: new Date().toISOString(),
-      }];
-      return {
+      const conversationId = payload.conversationId || `conv-test-${Object.keys(store.turnsById).length + 1}`;
+      const message = {
         id: `assistant-${payload.content}`,
         conversationId,
         question: payload.content,
@@ -39,6 +35,13 @@ const { deleteAccount, demoSession, sendChatMessage, supabase, conversationStore
           ? [{ order: 1, label: '真实资料标题', materialId: 'material-1', excerpt: '真实摘录' }]
           : [],
       };
+      store.turnsById[conversationId] = [...(store.turnsById[conversationId] || []), message];
+      store.homeItems = [{
+        id: conversationId,
+        title: `会话 · ${String(payload.content || '未命名').slice(0, 24)}`,
+        updatedAt: new Date().toISOString(),
+      }, ...store.homeItems.filter((item) => item.id !== conversationId)];
+      return message;
     }),
     supabase: {
       auth: {
@@ -74,9 +77,26 @@ vi.mock('../../lib/api/conversations.js', () => ({
       ? [{ id: 'kb-conv-1', title: '会员活动设计', updatedAt: new Date().toISOString() }]
       : [...conversationStore.homeItems]
   ),
-  loadConversationTurns: async () => [],
+  createConversation: async ({ surface } = {}) => {
+    const created = {
+      id: `conv-new-${Date.now()}`,
+      title: '新会话',
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+    if (surface !== 'knowledge') {
+      conversationStore.homeItems = [created, ...conversationStore.homeItems.filter((item) => item.id !== created.id)];
+    }
+    return created;
+  },
+  loadConversationTurns: async (conversationId) => (
+    conversationId ? [...(conversationStore.turnsById[conversationId] || [])] : []
+  ),
   renameConversation: async (id, title) => ({ id, title, updatedAt: new Date().toISOString() }),
   deleteConversation: async () => {},
+  truncateConversationFromTurn: async () => {},
+  deleteChatMessages: async () => {},
+  isPlaceholderTitle: (title) => !String(title || '').trim() || title === '新会话' || title === '未命名会话',
   groupConversationsByDay: (items = []) => (items.length ? [{ label: '今天', items }] : []),
   groupLabelForDate: () => '今天',
   pairChatTurns: () => [],
@@ -134,6 +154,7 @@ afterEach(() => {
   cleanup();
   sendChatMessage.mockClear();
   conversationStore.homeItems = [];
+  conversationStore.turnsById = {};
   listMaterialTags.mockClear();
   listMaterialTags.mockResolvedValue([
     { id: 'tag-growth', name: '增长策略' },
@@ -379,7 +400,7 @@ describe('HomeComposer', () => {
     expect(screen.getByLabelText('会话历史')).toBeVisible();
     expect(screen.getByRole('button', { name: '搜索会话' })).toBeVisible();
     expect(screen.getByText('历史会话')).toBeVisible();
-    expect(screen.queryByRole('heading', { name: 'AI 对话' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '知识库问答' })).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(homePlaceholder)).toBeVisible();
   });
 
@@ -412,7 +433,7 @@ describe('HomeComposer', () => {
     expect(screen.getByPlaceholderText(homePlaceholder)).toBeVisible();
   });
 
-  it('restores the previous chat when Home is clicked after brand returns to hero', async () => {
+  it('opens the latest history conversation when Home is clicked after brand returns to hero', async () => {
     render(<App />);
 
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '保留的会话内容');
@@ -422,8 +443,60 @@ describe('HomeComposer', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '首页' }));
     expect(screen.queryByText('Welcome, Refind!')).not.toBeInTheDocument();
-    expect(screen.getByText('保留的会话内容')).toBeVisible();
+    expect(await screen.findByText('保留的会话内容')).toBeVisible();
     expect(screen.getByLabelText('会话历史')).toBeVisible();
+    expect(screen.queryByText('新会话')).not.toBeInTheDocument();
+    expect(screen.getByText(/会话 · 保留的会话内容/)).toBeVisible();
+    expect(screen.getByPlaceholderText(homePlaceholder)).toBeVisible();
+  });
+
+  it('does not persist an empty home draft when opening chat from hero after refresh-like hero return', async () => {
+    render(<App />);
+
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '已有会话');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+    await screen.findByText(/会话 · 已有会话/);
+    expect(conversationStore.homeItems).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole('button', { name: '回到英雄区' }));
+    await userEvent.click(screen.getByRole('button', { name: '首页' }));
+
+    expect(conversationStore.homeItems).toHaveLength(1);
+    expect(screen.queryByText('新会话')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('会话历史')).toBeVisible();
+
+    await userEvent.click(screen.getByRole('button', { name: '新增会话' }));
+    expect(screen.getByText('新会话')).toBeVisible();
+    expect(conversationStore.homeItems).toHaveLength(2);
+  });
+
+  it('does not continue the previous conversation when sending from hero after brand click', async () => {
+    render(<App />);
+
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '旧会话问题');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+    expect(await screen.findByText('旧会话问题')).toBeVisible();
+    expect(sendChatMessage).toHaveBeenCalled();
+    const firstConversationId = sendChatMessage.mock.calls.at(-1)?.[0]?.conversationId
+      || sendChatMessage.mock.results.at(-1)?.value?.conversationId
+      || 'conv-test-1';
+    // After the first reply lands, App keeps that conversation id for follow-ups.
+    await screen.findByText(/API 回答：旧会话问题/);
+
+    await userEvent.click(screen.getByRole('button', { name: '回到英雄区' }));
+    expect(screen.getByText('Welcome, Refind!')).toBeVisible();
+
+    sendChatMessage.mockClear();
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '英雄区新问题');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({
+      content: '英雄区新问题',
+    }));
+    const resentId = sendChatMessage.mock.calls.at(-1)?.[0]?.conversationId;
+    expect(resentId == null || resentId !== firstConversationId).toBe(true);
+    expect(screen.getByText('英雄区新问题')).toBeVisible();
+    expect(screen.queryByText('旧会话问题')).not.toBeInTheDocument();
   });
 
   it('keeps first-entry hero without Home hover until Home is clicked', async () => {
@@ -446,7 +519,7 @@ describe('HomeComposer', () => {
     expect(screen.getByRole('button', { name: '首页' })).not.toHaveClass('is-active');
   });
 
-  it('opens AI chat from Home click/hover only after unlock and when history exists', async () => {
+  it('opens the latest conversation from Home click/hover after unlock when history exists', async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -462,6 +535,7 @@ describe('HomeComposer', () => {
 
     await user.click(screen.getByRole('button', { name: '首页' }));
     expect(screen.queryByText('Welcome, Refind!')).not.toBeInTheDocument();
+    expect(await screen.findByText('首次会话')).toBeVisible();
     expect(screen.getByLabelText('会话历史')).toBeVisible();
     expect(screen.getByRole('button', { name: '首页' })).toHaveClass('is-active');
 
@@ -473,6 +547,7 @@ describe('HomeComposer', () => {
     });
     await user.hover(screen.getByRole('button', { name: '首页' }));
     expect(screen.queryByText('Welcome, Refind!')).not.toBeInTheDocument();
+    expect(await screen.findByText('首次会话')).toBeVisible();
     expect(screen.getByLabelText('会话历史')).toBeVisible();
   });
 
@@ -498,7 +573,7 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('button', { name: '知识库' }));
 
     expect(screen.queryByText('首页的问题')).not.toBeInTheDocument();
-    expect(screen.getByText('从你的资料里找答案')).toBeVisible();
+    expect(screen.getByText('从你的知识库中寻找答案')).toBeVisible();
   });
 
   it('clears only the knowledge-base conversation when starting a new KB conversation', async () => {
@@ -509,11 +584,11 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('button', { name: '知识库' }));
     await userEvent.type(screen.getByPlaceholderText('基于当前知识库提问，输入 # 可选择标签'), '待清除的知识库问题');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
-    const kbPanel = screen.getByRole('heading', { name: 'AI 对话' }).closest('.ai-panel');
+    const kbPanel = screen.getByRole('heading', { name: '知识库问答' }).closest('.ai-panel');
     await userEvent.click(within(kbPanel).getByRole('button', { name: '新建会话' }));
 
     expect(screen.queryByText('待清除的知识库问题')).not.toBeInTheDocument();
-    expect(screen.getByText('从你的资料里找答案')).toBeVisible();
+    expect(screen.getByText('从你的知识库中寻找答案')).toBeVisible();
     await userEvent.click(screen.getByRole('button', { name: '首页' }));
     expect(screen.getByText('仍保留的首页问题')).toBeVisible();
   });
