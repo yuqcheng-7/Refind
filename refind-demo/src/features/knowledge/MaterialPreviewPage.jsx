@@ -9,6 +9,7 @@ import {
   getPreviewTypeLabel,
   getVideoPlayback,
   isVideoMaterial,
+  splitPreviewBodyAndImageAppendix,
 } from './materialPreview.js';
 import {
   hasOriginalFile,
@@ -73,6 +74,24 @@ function ParagraphBlock({ text, className = 'material-preview-paragraphs' }) {
         }
         return <p key={`${index}-${block.text.slice(0, 12)}`}>{block.text}</p>;
       })}
+    </div>
+  );
+}
+
+function CollapsiblePreviewContent({ label, children }) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className="material-preview-collapsible">
+      <button
+        type="button"
+        className="material-preview-collapsible-toggle"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((open) => !open)}
+      >
+        {label}
+      </button>
+      {isOpen ? children : null}
     </div>
   );
 }
@@ -187,6 +206,9 @@ export function MaterialPreviewPage({
   const caption = getPreviewCaption(material);
   const subtitles = (material.subtitles || '').trim();
   const articleBody = isVideo ? '' : (material.body || '').trim();
+  const imageAppendix = isLink && !isVideo
+    ? splitPreviewBodyAndImageAppendix(articleBody)
+    : { body: articleBody, appendix: '' };
 
   const bodyFallback = material.status === 'failed'
     ? (material.lastParseError || '解析失败，暂无正文。可重试解析或打开原链接。')
@@ -198,7 +220,7 @@ export function MaterialPreviewPage({
 
   const videoCaptionFallback = '暂未获取到视频简介/文案。可先播放，或打开原站查看。';
   const showArticleBody = !isVideo;
-  const readableBody = articleBody || bodyFallback;
+  const readableBody = imageAppendix.body || bodyFallback;
 
   return (
     <main className="material-preview-page">
@@ -277,9 +299,10 @@ export function MaterialPreviewPage({
             <p className="material-preview-muted">{videoCaptionFallback}</p>
           )}
           {subtitles ? (
-            <section className="material-preview-section" aria-labelledby="preview-subtitles-title">
-              <h2 id="preview-subtitles-title">字幕</h2>
-              <ParagraphBlock text={subtitles} />
+            <section className="material-preview-section" aria-label="字幕">
+              <CollapsiblePreviewContent label="字幕">
+                <ParagraphBlock text={subtitles} />
+              </CollapsiblePreviewContent>
             </section>
           ) : null}
         </section>
@@ -290,7 +313,14 @@ export function MaterialPreviewPage({
             {isFile ? (
               <MaterialFilePreview material={material} fallbackText={bodyFallback} />
             ) : (
-              <ParagraphBlock text={readableBody} />
+              <>
+                <ParagraphBlock text={readableBody} />
+                {imageAppendix.appendix ? (
+                  <CollapsiblePreviewContent label="图片识别">
+                    <ParagraphBlock text={imageAppendix.appendix} />
+                  </CollapsiblePreviewContent>
+                ) : null}
+              </>
             )}
           </article>
         </section>

@@ -117,7 +117,7 @@ describe('material previews', () => {
     expect(screen.getByRole('link', { name: '回到原文' })).toHaveAttribute('href', material.url);
   });
 
-  it('shows video player, caption, and subtitles for bilibili materials', () => {
+  it('shows video player and caption for bilibili materials', () => {
     const material = materialDemo.find((item) => item.platform === 'bilibili');
     render(<MaterialPreviewPage material={material} />);
 
@@ -126,7 +126,45 @@ describe('material previews', () => {
     expect(screen.getByText('文案 / 简介')).toBeVisible();
     expect(screen.getByText(/关注续费与扩展使用/)).toBeVisible();
     expect(screen.getByText('字幕')).toBeVisible();
-    expect(screen.getByText(/从 0 到 1 的增长路径/)).toBeVisible();
+    expect(screen.queryByText(/从 0 到 1 的增长路径/)).not.toBeInTheDocument();
+  });
+
+  it('folds image recognition appendix by default', async () => {
+    const user = userEvent.setup();
+    render(<MaterialPreviewPage material={{
+      id: 'link-with-image-appendix',
+      kind: 'link',
+      platform: 'zhihu',
+      url: 'https://www.zhihu.com/question/1',
+      title: '测试文章',
+      summary: '测试摘要',
+      body: '可见正文\n\n【文内图片识别】\n\n【图1】\n秘密字',
+      status: 'ready',
+    }} />);
+
+    expect(screen.getByText('可见正文')).toBeInTheDocument();
+    expect(screen.queryByText(/秘密字/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /图片识别/ }));
+
+    expect(screen.getByText(/秘密字/)).toBeInTheDocument();
+  });
+
+  it('folds video subtitles by default', () => {
+    render(<MaterialPreviewPage material={{
+      id: 'bilibili-with-subtitles',
+      kind: 'link',
+      platform: 'bilibili',
+      url: 'https://www.bilibili.com/video/BV1xx411c7mD',
+      title: '测试视频',
+      caption: '简介文案',
+      subtitles: '隐藏字幕行',
+      status: 'ready',
+    }} />);
+
+    expect(screen.getByText('简介文案')).toBeInTheDocument();
+    expect(screen.getByText('字幕')).toBeVisible();
+    expect(screen.queryByText('隐藏字幕行')).not.toBeInTheDocument();
   });
 
   it('hides the subtitles section when a video has none', () => {
