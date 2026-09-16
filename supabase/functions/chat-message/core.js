@@ -12,6 +12,14 @@ function uniqueStrings(value) {
     .filter(Boolean))];
 }
 
+function resolveModelId(value) {
+  const raw = String(value.modelId || '').trim();
+  if (raw === 'qwen' || raw === 'ds-fast' || raw === 'ds-deep') return raw;
+  if (value.thinkingMode === 'deep') return 'ds-deep';
+  if (value.thinkingMode === 'qwen') return 'qwen';
+  return 'ds-fast';
+}
+
 export function normalizeRequestBody(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error('request body must be an object');
@@ -28,9 +36,11 @@ export function normalizeRequestBody(value) {
     throw new Error('knowledge surface requires at least one knowledgeBaseId');
   }
 
+  const modelId = resolveModelId(value);
   const body = {
     content,
-    thinkingMode: value.thinkingMode === 'deep' ? 'deep' : 'fast',
+    modelId,
+    thinkingMode: modelId === 'ds-deep' ? 'deep' : 'fast',
     onlineEnabled: value.onlineEnabled === true,
     knowledgeBaseIds,
     tagFilters: uniqueStrings(value.tagFilters),

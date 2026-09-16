@@ -52,12 +52,28 @@ test('normalizes supported request fields and ignores client answer mode', () =>
   }), {
     conversationId: 'conversation-1',
     content: '问题内容',
+    modelId: 'ds-deep',
     thinkingMode: 'deep',
     onlineEnabled: true,
     knowledgeBaseIds: ['kb-1'],
     tagFilters: ['tag-1'],
     surface: 'home',
   });
+});
+
+test('normalizes modelId qwen and ds modes', () => {
+  assert.equal(
+    normalizeRequestBody({ content: 'hi', surface: 'home', modelId: 'qwen' }).modelId,
+    'qwen',
+  );
+  assert.equal(
+    normalizeRequestBody({ content: 'hi', surface: 'home', thinkingMode: 'deep' }).modelId,
+    'ds-deep',
+  );
+  assert.equal(
+    normalizeRequestBody({ content: 'hi', surface: 'home' }).modelId,
+    'ds-fast',
+  );
 });
 
 test('knowledge requests require at least one knowledge base', () => {
