@@ -109,6 +109,18 @@ export function splitReadableParagraphs(text) {
   return value.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
 }
 
+const IMAGE_APPENDIX_HEADER = '【文内图片识别】';
+
+export function splitPreviewBodyAndImageAppendix(text = '') {
+  const value = String(text || '');
+  const at = value.indexOf(IMAGE_APPENDIX_HEADER);
+  if (at < 0) return { body: value.trim(), appendix: '' };
+  return {
+    body: value.slice(0, at).trim(),
+    appendix: value.slice(at).trim(),
+  };
+}
+
 export function buildReadableBlocks(text) {
   const value = String(text || '');
   if (!value.trim()) return [];

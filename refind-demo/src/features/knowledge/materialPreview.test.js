@@ -9,6 +9,7 @@ import {
   getPreviewTypeLabel,
   isPreviewHeading,
   isVideoMaterial,
+  splitPreviewBodyAndImageAppendix,
   splitReadableParagraphs,
 } from './materialPreview.js';
 
@@ -66,6 +67,15 @@ describe('materialPreview helpers', () => {
     expect(getPreviewOriginLabel(file)).toBe('本地上传');
     expect(getPreviewTypeLabel(file)).toBe('PDF');
     expect(getPreviewTags(file)).toEqual(['用户研究', '教育']);
+  });
+
+  it('splits image recognition appendix for folded preview', () => {
+    const raw = '正文段落。\n\n【文内图片识别】\n\n【图1】\n识别字';
+    expect(splitPreviewBodyAndImageAppendix(raw)).toEqual({
+      body: '正文段落。',
+      appendix: '【文内图片识别】\n\n【图1】\n识别字',
+    });
+    expect(splitPreviewBodyAndImageAppendix('仅正文')).toEqual({ body: '仅正文', appendix: '' });
   });
 
   it('avoids weak BV placeholders as AI summary or caption', () => {
