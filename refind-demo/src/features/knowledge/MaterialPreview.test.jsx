@@ -178,4 +178,16 @@ describe('material previews', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('重新解析失败');
     expect(screen.getByRole('button', { name: '重新解析' })).toBeVisible();
   });
+
+  it('shows an em dash in the tags fact when material has no tags', () => {
+    const material = {
+      ...materialDemo.find((item) => item.kind === 'link' && item.platform === 'xhs'),
+      tags: [],
+      tag: '',
+    };
+    render(<MaterialPreviewPage material={material} />);
+
+    expect(screen.getByText('标签')).toBeVisible();
+    expect(screen.getByText('标签').closest('div')).toHaveTextContent('—');
+  });
 });

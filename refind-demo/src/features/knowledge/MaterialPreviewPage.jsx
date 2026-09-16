@@ -241,18 +241,18 @@ export function MaterialPreviewPage({
             <dt>时间</dt>
             <dd>{material.time || '—'}</dd>
           </div>
-          {tags.length > 0 ? (
-            <div className="material-preview-facts-tags">
-              <dt>标签</dt>
-              <dd>
+          <div className="material-preview-facts-tags">
+            <dt>标签</dt>
+            <dd>
+              {tags.length > 0 ? (
                 <ul className="material-preview-tags">
                   {tags.map((tag) => (
                     <li key={tag}>#{tag}</li>
                   ))}
                 </ul>
-              </dd>
-            </div>
-          ) : null}
+              ) : '—'}
+            </dd>
+          </div>
         </dl>
 
         {error ? (
