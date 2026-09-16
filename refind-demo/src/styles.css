@@ -736,6 +736,9 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .answer-cite{display:inline;margin:0;padding:0 2px;border:0;border-radius:4px;color:#4f6f9a;background:rgba(79,111,154,.08);font:inherit;font-size:.92em;font-weight:650;line-height:inherit;vertical-align:baseline;cursor:pointer}
 .answer-cite:hover,.answer-cite-wrap.is-open .answer-cite{color:#2f4f78;background:rgba(79,111,154,.16)}
 .answer-cite--missing{color:#9aa6b4}
+.answer-web-sources{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.answer-web-source{display:inline;margin:0;padding:2px 7px;border:0;border-radius:6px;color:#4f6f9a;background:rgba(79,111,154,.08);font:inherit;font-size:.86em;font-weight:650;line-height:1.45;cursor:pointer}
+.answer-web-source:hover{color:#2f4f78;background:rgba(79,111,154,.16)}
 .answer-cite-pop{position:fixed;z-index:120;display:grid;gap:8px;max-width:min(320px,calc(100vw - 24px));padding:12px 14px;border:1px solid rgba(151,164,181,.32);border-radius:12px;background:rgba(255,255,255,.99);box-shadow:0 14px 36px rgba(28,39,54,.16);text-align:left;cursor:pointer}
 .answer-cite-pop__title{margin:0;color:#1b2735;font-size:13px;font-weight:650;line-height:1.45}
 .answer-cite-pop__excerpt{margin:0;color:#5c6b7c;font-size:12px;line-height:1.55;white-space:pre-wrap;overflow:visible;max-height:none}

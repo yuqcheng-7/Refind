@@ -135,6 +135,7 @@ export function HomeConversation({
                       <AnswerContent
                         text={message.answer}
                         citations={isRag ? message.citations : []}
+                        webSources={!isRag ? (message.webSources || []) : []}
                         conversational={!isRag && !message.failed}
                         interactive={!activeSelectMode}
                         onOpenMaterial={onOpenMaterial}

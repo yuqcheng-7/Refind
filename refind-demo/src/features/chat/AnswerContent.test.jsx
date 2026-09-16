@@ -59,4 +59,19 @@ describe('AnswerContent', () => {
     expect(screen.getByText('检索阶段')).toBeVisible();
     expect(document.body.textContent).not.toContain('*');
   });
+
+  it('opens web source urls from online answers', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <AnswerContent
+        text="根据最新消息…"
+        webSources={[{ order: 1, title: '气象台', url: 'https://example.com/weather' }]}
+        conversational
+        interactive
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: '来源 1：气象台' }));
+    expect(open).toHaveBeenCalledWith('https://example.com/weather', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
 });

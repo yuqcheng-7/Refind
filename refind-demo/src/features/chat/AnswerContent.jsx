@@ -179,6 +179,7 @@ function CitationChip({ order, citation, open, onShow, onHide, onOpenMaterial })
 export function AnswerContent({
   text = '',
   citations = [],
+  webSources = [],
   interactive = true,
   conversational = false,
   onOpenMaterial,
@@ -186,6 +187,7 @@ export function AnswerContent({
   const [openKey, setOpenKey] = useState(null);
   const blocks = splitAnswerBlocks(text, { conversational });
   const allowMarkdown = !conversational;
+  const sources = Array.isArray(webSources) ? webSources : [];
 
   if (!blocks.length) return null;
 
@@ -229,6 +231,21 @@ export function AnswerContent({
           </p>
         );
       })}
+      {sources.length > 0 && (
+        <div className="answer-web-sources" aria-label="网络来源">
+          {sources.map((source) => (
+            <button
+              key={source.order}
+              type="button"
+              className="answer-web-source"
+              aria-label={`来源 ${source.order}：${source.title}`}
+              onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')}
+            >
+              来源 {source.order}：{source.title}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
