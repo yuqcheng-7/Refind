@@ -731,6 +731,18 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .material-preview-body{max-width:740px;margin:0 0 80px;color:#405063;font-size:16px;line-height:1.9}
 .material-preview-paragraphs{display:grid;gap:16px}
 .material-preview-paragraphs p{margin:0;color:#405063;font-size:15.5px;line-height:1.95;letter-spacing:.01em}
+.material-preview-body,
+.material-preview-docx,
+.material-preview-markdown,
+.material-preview-plaintext,
+.material-preview-structured,
+.material-preview-paragraphs{max-width:740px}
+.material-preview-pdf,
+.material-preview-image{max-width:740px}
+.material-preview-docx img,
+.material-preview-markdown img{display:block;max-width:100%;width:auto;height:auto;max-height:min(70vh,720px);object-fit:contain;border-radius:12px}
+.material-preview-collapsible-toggle{margin:0;padding:0;border:0;background:transparent;color:#607083;font:inherit;font-size:13px;font-weight:550;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.material-preview-collapsible-toggle:hover{color:#1f2b38}
 .material-preview-muted{margin:16px 0 0;color:#7a8796;font-size:14px;line-height:1.7}
 .material-preview-video{margin-top:28px;margin-bottom:80px}
 .material-preview-player{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:14px;background:#111827;border:1px solid rgba(28,39,53,.12);box-shadow:0 16px 36px rgba(28,39,53,.08)}
