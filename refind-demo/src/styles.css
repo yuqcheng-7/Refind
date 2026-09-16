@@ -739,6 +739,9 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .material-preview-paragraphs{max-width:740px}
 .material-preview-pdf,
 .material-preview-image{max-width:740px}
+.material-preview-pdf iframe{width:100%;height:min(78vh,880px);border:0}
+.material-preview-image img,
+.material-preview-inline-image img{display:block;max-width:100%;width:auto;height:auto;max-height:min(70vh,720px);object-fit:contain;border-radius:12px}
 .material-preview-docx img,
 .material-preview-markdown img{display:block;max-width:100%;width:auto;height:auto;max-height:min(70vh,720px);object-fit:contain;border-radius:12px}
 .material-preview-collapsible-toggle{margin:0;padding:0;border:0;background:transparent;color:#607083;font:inherit;font-size:13px;font-weight:550;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
