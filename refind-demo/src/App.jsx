@@ -38,6 +38,7 @@ import {
   deleteChatMessages,
   deleteConversation,
   groupConversationsByDay,
+  isPlaceholderTitle,
   listConversations,
   loadConversationTurns,
   renameConversation,
@@ -291,12 +292,6 @@ export function App() {
   const [kbConversationId, setKbConversationId] = useState(null);
   const [kbConversations, setKbConversations] = useState([]);
   const [homeScope, setHomeScope] = useState(initialHomeScope);
-  const [conversationScope, setConversationScope] = useState(null);
-  useEffect(() => {
-    if (!homeScope.selectedBases.length && !homeScope.selectedTags.length) {
-      setConversationScope(null);
-    }
-  }, [homeScope.selectedBases, homeScope.selectedTags]);
   const [knowledgeMaterials, setKnowledgeMaterials] = useState([]);
   const materialsListFetchGenRef = useRef(0);
   const [homeTagOptions, setHomeTagOptions] = useState([]);
@@ -696,7 +691,6 @@ export function App() {
   const enterFreshHomeChatShell = () => {
     exitHomeShare();
     setHomeScope(initialHomeScope);
-    setConversationScope(null);
     setHomeThreadSurface('home');
     setHomeThreadKnowledgeBaseId(null);
     setHomeChatOpened(true);
@@ -714,7 +708,6 @@ export function App() {
     setHomeChatOpened(true);
     setHomeNavUnlocked(true);
     setHomeSurface('chat');
-    setConversationScope(null);
     try {
       const turns = await loadConversationTurns(conversationId);
       setHomeMessages(turns);
@@ -732,12 +725,49 @@ export function App() {
     setHomeHistoryOpen(true);
     void openHomeConversation(latest.id);
   };
+  const promoteHomeConversation = (conversation, { title } = {}) => {
+    if (!conversation?.id) return;
+    const now = new Date().toISOString();
+    const nextTitle = String(title || '').trim().slice(0, 60);
+    setHomeConversations((items) => {
+      const existing = items.find((item) => item.id === conversation.id);
+      const titleForItem = nextTitle && (!existing || isPlaceholderTitle(existing.title))
+        ? nextTitle
+        : (existing?.title || conversation.title || nextTitle || '新会话');
+      const next = {
+        id: conversation.id,
+        title: titleForItem,
+        updatedAt: now,
+        createdAt: existing?.createdAt || conversation.createdAt || now,
+      };
+      return [next, ...items.filter((item) => item.id !== conversation.id)];
+    });
+    setHomeHistoryOpen(true);
+  };
+  const promoteKbConversation = (conversation, { title } = {}) => {
+    if (!conversation?.id) return;
+    const now = new Date().toISOString();
+    const nextTitle = String(title || '').trim().slice(0, 60);
+    setKbConversations((items) => {
+      const existing = items.find((item) => item.id === conversation.id);
+      const titleForItem = nextTitle && (!existing || isPlaceholderTitle(existing.title))
+        ? nextTitle
+        : (existing?.title || conversation.title || nextTitle || '新会话');
+      const next = {
+        id: conversation.id,
+        title: titleForItem,
+        updatedAt: now,
+        createdAt: existing?.createdAt || conversation.createdAt || now,
+      };
+      return [next, ...items.filter((item) => item.id !== conversation.id)];
+    });
+  };
   const startNewHomeChat = async () => {
     enterFreshHomeChatShell();
     try {
       const created = await createConversation({ surface: 'home' });
       setHomeConversationId(created.id);
-      setHomeConversations((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+      promoteHomeConversation(created);
     } catch {
       setHomeConversationId(null);
       say('创建会话失败，请稍后重试。');
@@ -884,7 +914,6 @@ export function App() {
     // starts fresh; old conversations remain in the history list.
     setHomeMessages([]);
     setHomeConversationId(null);
-    setConversationScope(null);
     setHomeScope(initialHomeScope);
     setHomeThreadSurface('home');
     setHomeThreadKnowledgeBaseId(null);
@@ -949,14 +978,17 @@ export function App() {
         }
       }
     }
-    const scope = request.replaceMessageId || !conversationScope
-      ? {
-        bases: request.selectedBases || [],
-        tags: request.selectedTags || [],
-        mode: request.mode,
-        online: request.online,
-      }
-      : conversationScope;
+    const selectedBases = request.selectedBases || [];
+    const selectedTags = request.selectedTags || [];
+    const hasScope = selectedBases.length > 0 || selectedTags.length > 0;
+    // Each turn follows the current composer selection (same as KB panel),
+    // so switching into a knowledge base mid-thread re-enters RAG.
+    const scope = {
+      bases: selectedBases,
+      tags: selectedTags,
+      mode: hasScope ? 'rag' : (request.mode || 'general'),
+      online: hasScope ? false : Boolean(request.online),
+    };
     const pendingId = `pending-home-${Date.now()}-${crypto.randomUUID()}`;
     const pendingMessage = {
       id: pendingId,
@@ -967,42 +999,58 @@ export function App() {
       selectedTags: [...scope.tags],
       citations: [],
     };
-    setConversationScope(scope);
     setHomeChatOpened(true);
     setHomeNavUnlocked(true);
     setHomeSurface('chat');
     setHomeMessages((all) => [...all, pendingMessage]);
     try {
       const selectedBaseNames = new Set(scope.bases);
-      let knowledgeBaseIds = knowledgeBases
+      const knowledgeBaseIds = knowledgeBases
         .filter((item) => selectedBaseNames.has(item.name))
         .map((item) => item.id);
+      if (scope.bases.length > 0 && knowledgeBaseIds.length === 0) {
+        throw new Error('知识库尚未就绪，请稍后重试。');
+      }
       const surface = resolveChatSurface({
         knowledgeBaseIds,
-        preferredSurface: homeConversationId && priorCount > 0
-          ? homeThreadSurface
-          : undefined,
+        // Home composer always writes home history so the left history card stays in sync.
+        preferredSurface: 'home',
       });
-      if (surface === 'knowledge' && !knowledgeBaseIds.length && homeThreadKnowledgeBaseId) {
-        knowledgeBaseIds = [homeThreadKnowledgeBaseId];
+      // Ensure a home-history row exists before the slow chat-message round-trip.
+      let conversationId = homeConversationId;
+      const promptTitle = String(request.prompt || '').trim().slice(0, 60);
+      if (!conversationId) {
+        try {
+          const created = await createConversation({ surface: 'home', title: promptTitle });
+          conversationId = created.id;
+          setHomeConversationId(created.id);
+          promoteHomeConversation(created, { title: promptTitle });
+        } catch {
+          // Fall through: server may still create the conversation on send.
+        }
+      } else {
+        promoteHomeConversation({ id: conversationId }, { title: promptTitle });
       }
       const message = await sendChatMessage({
         content: request.prompt,
         thinkingMode: request.thinkingMode || 'fast',
+        modelId: request.modelId || (request.thinkingMode === 'deep' ? 'ds-deep' : 'ds-fast'),
         onlineEnabled: scope.online,
         knowledgeBaseIds,
         tagFilters: resolveTagFilterIds(scope.tags, homeTagOptions),
         surface,
-        conversationId: homeConversationId,
+        conversationId,
         selectedBases: scope.bases,
         selectedTags: scope.tags,
       });
       setHomeMessages((all) => all.map((item) => item.id === pendingId ? message : item));
-      if (message.conversationId) setHomeConversationId(message.conversationId);
-      setHomeThreadSurface(surface);
-      setHomeThreadKnowledgeBaseId(surface === 'knowledge' ? (knowledgeBaseIds[0] || null) : null);
-      await refreshHomeConversations();
-      await refreshKbConversations();
+      if (message.conversationId) {
+        setHomeConversationId(message.conversationId);
+        promoteHomeConversation({ id: message.conversationId }, { title: promptTitle });
+      }
+      setHomeThreadSurface('home');
+      setHomeThreadKnowledgeBaseId(knowledgeBaseIds.length === 1 ? knowledgeBaseIds[0] : null);
+      void refreshHomeConversations();
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'AI 回答生成失败，请稍后重试。';
       setHomeMessages((all) => all.map((item) => (
@@ -1056,6 +1104,24 @@ export function App() {
     };
     setKbMessages((all) => [...all, pendingMessage]);
     try {
+      let conversationId = kbConversationId;
+      const promptTitle = String(question || '').trim().slice(0, 60);
+      if (!conversationId && selectedKnowledgeBase?.id) {
+        try {
+          const created = await createConversation({
+            surface: 'knowledge',
+            knowledgeBaseId: selectedKnowledgeBase.id,
+            title: promptTitle,
+          });
+          conversationId = created.id;
+          setKbConversationId(created.id);
+          promoteKbConversation(created, { title: promptTitle });
+        } catch {
+          // Fall through: server may still create the conversation on send.
+        }
+      } else if (conversationId) {
+        promoteKbConversation({ id: conversationId }, { title: promptTitle });
+      }
       const message = await sendChatMessage({
         content: question,
         thinkingMode: thinkingMode || 'fast',
@@ -1063,13 +1129,16 @@ export function App() {
         knowledgeBaseIds: selectedKnowledgeBase ? [selectedKnowledgeBase.id] : [],
         tagFilters: resolveTagFilterIds(selectedTags, kbTagOptions),
         surface: 'knowledge',
-        conversationId: kbConversationId,
+        conversationId,
         selectedBases: scope.bases,
         selectedTags,
       });
       setKbMessages((all) => all.map((item) => item.id === pendingId ? message : item));
-      if (message.conversationId) setKbConversationId(message.conversationId);
-      refreshKbConversations();
+      if (message.conversationId) {
+        setKbConversationId(message.conversationId);
+        promoteKbConversation({ id: message.conversationId }, { title: promptTitle });
+      }
+      void refreshKbConversations();
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'AI 回答生成失败，请稍后重试。';
       setKbMessages((all) => all.map((item) => (

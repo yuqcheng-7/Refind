@@ -2,15 +2,24 @@ import { useRef, useState } from 'react';
 import { ArrowRight, ArrowUp, BookOpen, Check, ChevronDown, Globe2, WifiOff } from 'lucide-react';
 import { useDismissable } from '../../hooks/useDismissable.js';
 
+const MODEL_IDS = ['ds-fast', 'ds-deep', 'qwen'];
+
+function isDeepSeekModel(modelId) {
+  return modelId === 'ds-fast' || modelId === 'ds-deep';
+}
+
 export const defaultHomeScope = {
-  thinkingMode: 'fast',
   online: false,
+  modelId: 'ds-fast',
+  lastDeepSeekModelId: 'ds-fast',
   selectedBases: [],
   selectedTags: [],
 };
 
-export function modelLabel(thinkingMode) {
-  return thinkingMode === 'deep' ? 'DS深度' : 'DS快速';
+export function modelLabel(modelId) {
+  if (modelId === 'qwen') return 'QW';
+  if (modelId === 'ds-deep') return 'DS深度';
+  return 'DS快速';
 }
 
 let composerIntroBeamPlayed = false;
@@ -55,12 +64,26 @@ export function HomeComposer({
   };
   const scope = controlledScope || localScope;
   const setScope = onScopeChange || setLocalScope;
-  const { thinkingMode = 'fast', online, selectedBases, selectedTags } = scope;
+  const {
+    modelId = 'ds-fast',
+    lastDeepSeekModelId = 'ds-fast',
+    online,
+    selectedBases,
+    selectedTags,
+  } = scope;
   const hasScope = selectedBases.length > 0 || selectedTags.length > 0;
   const tagNames = availableTags.map((tag) => tag.name);
   const filteredTags = tagNames.filter((item) => !tagQuery || item.includes(tagQuery));
-  const selectedModel = modelLabel(thinkingMode);
-  const toggle = (key, value) => setScope((current) => ({ ...current, [key]: current[key].includes(value) ? current[key].filter((item) => item !== value) : [...current[key], value] }));
+  const selectedModel = modelLabel(modelId);
+  const toggle = (key, value) => setScope((current) => {
+    const list = current[key].includes(value)
+      ? current[key].filter((item) => item !== value)
+      : [...current[key], value];
+    const next = { ...current, [key]: list };
+    const scoped = next.selectedBases.length > 0 || next.selectedTags.length > 0;
+    if (scoped) next.online = false;
+    return next;
+  });
   useDismissable({ open: baseMenu, onClose: () => setBaseMenu(false), rootRef: baseMenuRef });
   useDismissable({ open: modelMenu, onClose: () => setModelMenu(false), rootRef: modelMenuRef });
   useDismissable({ open: tagMenu, onClose: () => setTagMenu(false), rootRef: tagMenuRef });
@@ -80,12 +103,17 @@ export function HomeComposer({
 
   const insertTag = (tag) => {
     const removing = selectedTags.includes(tag);
-    setScope((current) => ({
-      ...current,
-      selectedTags: removing
+    setScope((current) => {
+      const nextTags = removing
         ? current.selectedTags.filter((item) => item !== tag)
-        : [...current.selectedTags, tag],
-    }));
+        : [...current.selectedTags, tag];
+      const scoped = current.selectedBases.length > 0 || nextTags.length > 0;
+      return {
+        ...current,
+        selectedTags: nextTags,
+        online: scoped ? false : current.online,
+      };
+    });
     setPrompt((value) => {
       if (removing) {
         const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -101,8 +129,35 @@ export function HomeComposer({
     setTagQuery('');
   };
 
-  const setThinkingMode = (mode) => {
-    setScope((current) => ({ ...current, thinkingMode: mode }));
+  const setModelId = (nextModelId) => {
+    setScope((current) => {
+      if (current.online && isDeepSeekModel(nextModelId)) return current;
+      const next = { ...current, modelId: nextModelId };
+      if (isDeepSeekModel(nextModelId)) next.lastDeepSeekModelId = nextModelId;
+      return next;
+    });
+  };
+
+  const toggleOnline = () => {
+    setScope((current) => {
+      const nextOnline = !current.online;
+      if (nextOnline) {
+        const currentModel = current.modelId || 'ds-fast';
+        return {
+          ...current,
+          online: true,
+          lastDeepSeekModelId: isDeepSeekModel(currentModel)
+            ? currentModel
+            : (current.lastDeepSeekModelId || 'ds-fast'),
+          modelId: 'qwen',
+        };
+      }
+      return {
+        ...current,
+        online: false,
+        modelId: current.lastDeepSeekModelId || lastDeepSeekModelId || 'ds-fast',
+      };
+    });
   };
 
   const send = (event) => {
@@ -112,7 +167,8 @@ export function HomeComposer({
       prompt: prompt.trim(),
       mode: hasScope ? 'rag' : 'general',
       online: hasScope ? false : online,
-      thinkingMode,
+      modelId,
+      thinkingMode: modelId === 'ds-deep' ? 'deep' : 'fast',
       model: selectedModel,
       selectedBases: [...selectedBases],
       selectedTags: [...selectedTags],
@@ -160,7 +216,7 @@ export function HomeComposer({
             {filteredTags.length ? filteredTags.map((item) => (
               <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
                 <span className="tag-text">
-                  <span className="tag-hash" aria-hidden="true">#</span>
+                  <span className="tag-hash">#</span>
                   <span className="tag-label">{item}</span>
                 </span>
                 {selectedTags.includes(item) && <Check size={14} />}
@@ -185,31 +241,19 @@ export function HomeComposer({
               <ChevronDown size={13} strokeWidth={1.8} />
             </button>
             {modelMenu && (
-              <div className="composer-menu composer-model-menu" role="dialog" aria-label="DeepSeek 模型设置">
-                <div className="composer-model-menu__row">
-                  <div>
-                    <strong>DeepSeek</strong>
-                    <small>思考模式</small>
-                  </div>
-                  <div className="composer-think-toggle" role="group" aria-label="思考模式">
-                    <button
-                      type="button"
-                      aria-pressed={thinkingMode === 'fast'}
-                      className={thinkingMode === 'fast' ? 'is-active' : ''}
-                      onClick={() => setThinkingMode('fast')}
-                    >
-                      快速
-                    </button>
-                    <button
-                      type="button"
-                      aria-pressed={thinkingMode === 'deep'}
-                      className={thinkingMode === 'deep' ? 'is-active' : ''}
-                      onClick={() => setThinkingMode('deep')}
-                    >
-                      深度
-                    </button>
-                  </div>
-                </div>
+              <div className="composer-menu composer-model-menu" role="dialog" aria-label="模型设置">
+                {MODEL_IDS.map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    disabled={Boolean(online && isDeepSeekModel(id))}
+                    aria-pressed={modelId === id}
+                    onClick={() => setModelId(id)}
+                  >
+                    <span>{modelLabel(id)}</span>
+                    {modelId === id && <Check size={14} />}
+                  </button>
+                ))}
               </div>
             )}
           </div>
@@ -218,7 +262,7 @@ export function HomeComposer({
             type="button"
             aria-pressed={hasScope ? false : online}
             disabled={hasScope}
-            onClick={() => setScope((current) => ({ ...current, online: !current.online }))}
+            onClick={toggleOnline}
           >
             {hasScope || !online ? <WifiOff size={14} strokeWidth={1.8} /> : <Globe2 size={14} strokeWidth={1.8} />}
             <span>{hasScope || !online ? '不联网' : '联网'}</span>

@@ -36,11 +36,13 @@ const { deleteAccount, demoSession, sendChatMessage, supabase, conversationStore
           : [],
       };
       store.turnsById[conversationId] = [...(store.turnsById[conversationId] || []), message];
-      store.homeItems = [{
-        id: conversationId,
-        title: `会话 · ${String(payload.content || '未命名').slice(0, 24)}`,
-        updatedAt: new Date().toISOString(),
-      }, ...store.homeItems.filter((item) => item.id !== conversationId)];
+      if (payload.surface !== 'knowledge') {
+        store.homeItems = [{
+          id: conversationId,
+          title: `会话 · ${String(payload.content || '未命名').slice(0, 24)}`,
+          updatedAt: new Date().toISOString(),
+        }, ...store.homeItems.filter((item) => item.id !== conversationId)];
+      }
       return message;
     }),
     supabase: {
@@ -77,10 +79,10 @@ vi.mock('../../lib/api/conversations.js', () => ({
       ? [{ id: 'kb-conv-1', title: '会员活动设计', updatedAt: new Date().toISOString() }]
       : [...conversationStore.homeItems]
   ),
-  createConversation: async ({ surface } = {}) => {
+  createConversation: async ({ surface, title } = {}) => {
     const created = {
       id: `conv-new-${Date.now()}`,
-      title: '新会话',
+      title: title || '新会话',
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
     };
@@ -190,12 +192,31 @@ describe('HomeComposer', () => {
     render(<HomeComposer bases={bases} onSubmit={vi.fn()} />);
 
     await userEvent.click(screen.getByRole('button', { name: '选择模型' }));
-    expect(screen.getByRole('dialog', { name: 'DeepSeek 模型设置' })).toBeVisible();
-    expect(screen.getByRole('button', { name: '快速' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('dialog', { name: '模型设置' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'DS快速' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'QW' })).toBeEnabled();
 
-    await userEvent.click(screen.getByRole('button', { name: '深度' }));
+    await userEvent.click(screen.getByRole('button', { name: 'DS深度' }));
     expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('DS深度');
-    expect(screen.getByRole('button', { name: '深度' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'DS深度' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('switches to QW when online is enabled and restores DS when disabled', async () => {
+    render(<HomeComposer bases={bases} onSubmit={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '选择模型' }));
+    await userEvent.click(screen.getByRole('button', { name: 'DS深度' }));
+    await userEvent.click(screen.getByRole('button', { name: '不联网' }));
+    expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('QW');
+    expect(screen.getByRole('button', { name: '联网' })).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.click(screen.getByRole('button', { name: '选择模型' }));
+    expect(screen.getByRole('button', { name: 'DS快速' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'DS深度' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'QW' })).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.click(screen.getByRole('button', { name: '联网' }));
+    expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('DS深度');
   });
 
   it('forces offline when a knowledge base is selected', async () => {
@@ -310,6 +331,8 @@ describe('HomeComposer', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       prompt: '给我一个总结',
       mode: 'rag',
+      modelId: 'ds-fast',
+      thinkingMode: 'fast',
       selectedBases: ['默认知识库'],
       selectedTags: [],
     }));
@@ -329,20 +352,24 @@ describe('HomeComposer', () => {
     expect(screen.getByRole('button', { name: '引用 1：真实资料标题' })).toBeVisible();
     expect(sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({
       content: '基于资料回答',
+      modelId: 'ds-fast',
       thinkingMode: 'fast',
       onlineEnabled: false,
       knowledgeBaseIds: ['base-default'],
       tagFilters: [],
-      surface: 'knowledge',
+      surface: 'home',
     }));
+    // Single-KB home chats must remain visible in the home history card.
+    expect(conversationStore.homeItems.some((item) => item.id)).toBe(true);
   });
 
   it('resolves selected tag names to tagFilter ids when sending home chat', async () => {
     render(<App />);
 
     await screen.findByPlaceholderText(homePlaceholder);
-    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
+    await vi.waitFor(() => expect(listMaterialTags).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText(homePlaceholder), { target: { value: '#' } });
+    await userEvent.click(await screen.findByRole('option', { name: /产品灵感/ }));
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '带标签提问');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
@@ -415,6 +442,46 @@ describe('HomeComposer', () => {
     expect(screen.getByText('历史会话')).toBeVisible();
     expect(screen.queryByRole('heading', { name: '知识库问答' })).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(homePlaceholder)).toBeVisible();
+  });
+
+  it('lists the new home conversation before the AI answer returns', async () => {
+    let releaseSend;
+    const deferred = new Promise((resolve) => {
+      releaseSend = resolve;
+    });
+    sendChatMessage.mockImplementationOnce(async (payload) => {
+      await deferred;
+      const conversationId = payload.conversationId || `conv-deferred-${Date.now()}`;
+      const message = {
+        id: `assistant-${payload.content}`,
+        conversationId,
+        question: payload.content,
+        answer: `API 回答：${payload.content}`,
+        mode: 'general',
+        online: false,
+        selectedBases: payload.selectedBases,
+        selectedTags: payload.selectedTags,
+        citations: [],
+      };
+      conversationStore.turnsById[conversationId] = [...(conversationStore.turnsById[conversationId] || []), message];
+      conversationStore.homeItems = [{
+        id: conversationId,
+        title: `会话 · ${String(payload.content || '未命名').slice(0, 24)}`,
+        updatedAt: new Date().toISOString(),
+      }, ...conversationStore.homeItems.filter((item) => item.id !== conversationId)];
+      return message;
+    });
+
+    render(<App />);
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '先出现在历史里');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(await screen.findByLabelText('会话历史')).toBeVisible();
+    expect(within(screen.getByLabelText('会话历史')).getByText('先出现在历史里')).toBeVisible();
+    expect(screen.queryByText('API 回答：先出现在历史里')).not.toBeInTheDocument();
+
+    releaseSend();
+    expect(await screen.findByText('API 回答：先出现在历史里')).toBeVisible();
   });
 
   it('collapses the floating history card to a single reopen button', async () => {
@@ -629,8 +696,11 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
     await userEvent.click(screen.getByRole('option', { name: '产品与设计资料' }));
     fireEvent.pointerDown(document.body);
-    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(screen.getByRole('option', { name: '#产品灵感' }));
+    const input = screen.getByPlaceholderText(homePlaceholder);
+    fireEvent.change(input, { target: { value: '#' } });
+    expect(screen.getByRole('listbox', { name: '选择标签' })).toBeVisible();
+    expect(screen.getByRole('option', { name: /产品灵感/ })).toBeVisible();
+    await userEvent.click(screen.getByRole('option', { name: /产品灵感/ }));
     await userEvent.click(screen.getByRole('button', { name: '切换页面' }));
     await userEvent.click(screen.getByRole('button', { name: '切换页面' }));
 
@@ -645,8 +715,9 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
     await userEvent.click(screen.getByRole('option', { name: '产品与设计资料' }));
     fireEvent.pointerDown(document.body);
-    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
+    await vi.waitFor(() => expect(listMaterialTags).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText(homePlaceholder), { target: { value: '#' } });
+    await userEvent.click(await screen.findByRole('option', { name: /产品灵感/ }));
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '首个问题');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
@@ -662,16 +733,17 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
     await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
     fireEvent.pointerDown(document.body);
-    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
+    await vi.waitFor(() => expect(listMaterialTags).toHaveBeenCalled());
+    fireEvent.change(screen.getByPlaceholderText(homePlaceholder), { target: { value: '#' } });
+    await userEvent.click(await screen.findByRole('option', { name: /产品灵感/ }));
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '首个问题');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
     await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
     await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
     fireEvent.pointerDown(document.body);
-    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '#');
-    await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
+    fireEvent.change(screen.getByPlaceholderText(homePlaceholder), { target: { value: '#' } });
+    await userEvent.click(await screen.findByRole('option', { name: /产品灵感/ }));
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '范围已清后的追问');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
@@ -680,5 +752,39 @@ describe('HomeComposer', () => {
     expect(screen.queryAllByText(/默认知识库、#产品灵感/)).toHaveLength(1);
     expect(screen.getByText('范围已清后的追问').closest('.home-conversation-turn')).toBeTruthy();
     expect(await screen.findByText('API 回答：范围已清后的追问')).toBeVisible();
+  });
+
+  it('switches from online general to RAG after selecting a knowledge base', async () => {
+    render(<App />);
+
+    await userEvent.click(screen.getByRole('button', { name: '不联网' }));
+    expect(screen.getByRole('button', { name: '联网' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '先联网闲聊');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+    expect(await screen.findByText('API 回答：先联网闲聊')).toBeVisible();
+    expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '先联网闲聊',
+      modelId: 'qwen',
+      thinkingMode: 'fast',
+      onlineEnabled: true,
+      knowledgeBaseIds: [],
+      surface: 'home',
+    }));
+
+    await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
+    await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
+    fireEvent.pointerDown(document.body);
+    expect(screen.getByRole('button', { name: '不联网' })).toBeDisabled();
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '大模型架构是什么');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(await screen.findByText('API 回答：大模型架构是什么')).toBeVisible();
+    expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '大模型架构是什么',
+      onlineEnabled: false,
+      knowledgeBaseIds: ['base-default'],
+      surface: 'home',
+    }));
+    expect(screen.getAllByText(/默认知识库/).length).toBeGreaterThan(0);
   });
 });
