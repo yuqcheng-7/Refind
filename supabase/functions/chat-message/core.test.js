@@ -294,8 +294,21 @@ test('general system prompt enables search when online and never claims search i
   const offline = core.buildGeneralChatSystemContent(false);
   assert.match(online, /已启用联网搜索/);
   assert.doesNotMatch(online, /未启用联网搜索/);
+  assert.doesNotMatch(online, /可用 \[n\]/);
+  assert.match(online, /不要在正文里写 \[n\]/);
+  assert.match(online, /来源会由界面单独展示/);
   assert.doesNotMatch(offline, /已启用联网搜索/);
   assert.doesNotMatch(offline, /未启用联网搜索/);
+  assert.doesNotMatch(offline, /不要在正文里写 \[n\]/);
+});
+
+test('strips leftover [n] markers from general plain answers', () => {
+  assert.equal(
+    core.stripLeftoverCitationMarkers('今天北京[1]晴，上海[2]有雨。'),
+    '今天北京晴，上海有雨。',
+  );
+  assert.equal(core.stripLeftoverCitationMarkers('没有编号'), '没有编号');
+  assert.equal(core.stripLeftoverCitationMarkers(''), '');
 });
 
 test('keeps web sources only when general online search is enabled', () => {

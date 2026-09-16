@@ -188,7 +188,16 @@ export function buildGeneralChatSystemContent(onlineEnabled) {
 - 直接把话说清楚，像人与人交流，不要用 Markdown（禁止 **加粗**、# 标题、\`代码\`、--- 分隔线等符号残留在正文里）。
 - 若要分点，用「1. 2. 3.」且序号与内容写在同一行。
 - 不要伪造知识库引用或「根据资料」字样。
-${onlineEnabled ? '- 已启用联网搜索；可依据检索结果回答，并可用 [n] 对应来源编号。' : ''}`;
+${onlineEnabled ? '- 已启用联网搜索；可依据检索结果回答。不要在正文里写 [n] 编号；来源会由界面单独展示。' : ''}`;
+}
+
+/** Remove leftover [n] markers from general/online answers (sources live in the footer). */
+export function stripLeftoverCitationMarkers(text = '') {
+  return String(text)
+    .replace(/\[(\d+)\]/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
 }
 
 export function resolveGeneralWebSources(onlineEnabled, webSources) {

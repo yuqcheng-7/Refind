@@ -35,6 +35,7 @@ import {
   resolveRagAnswerOutcome,
   shouldReuseConversation,
   shouldUseQwenGeneralChat,
+  stripLeftoverCitationMarkers,
   stripMarkdownForReading,
 } from './core.js';
 
@@ -266,11 +267,11 @@ Deno.serve(async (req) => {
         const result = await qwenChatWithOptionalSearch(messages, {
           onlineEnabled: body.onlineEnabled === true,
         });
-        plainAnswer = stripMarkdownForReading(result.content);
+        plainAnswer = stripLeftoverCitationMarkers(stripMarkdownForReading(result.content));
         webSources = resolveGeneralWebSources(body.onlineEnabled === true, result.webSources);
       } else {
         const answer = await deepseekChat(messages, { model: mapThinkingMode(body.thinkingMode) });
-        plainAnswer = stripMarkdownForReading(answer);
+        plainAnswer = stripLeftoverCitationMarkers(stripMarkdownForReading(answer));
       }
 
       const { data: assistantMessage, error } = await admin

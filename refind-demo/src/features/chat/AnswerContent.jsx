@@ -234,15 +234,28 @@ export function AnswerContent({
       {sources.length > 0 && (
         <div className="answer-web-sources" aria-label="网络来源">
           {sources.map((source) => (
-            <button
-              key={source.order}
-              type="button"
-              className="answer-web-source"
-              aria-label={`来源 ${source.order}：${source.title}`}
-              onClick={() => window.open(source.url, '_blank', 'noopener,noreferrer')}
-            >
-              来源 {source.order}：{source.title}
-            </button>
+            interactive ? (
+              <button
+                key={source.order}
+                type="button"
+                className="answer-web-source"
+                aria-label={`来源 ${source.order}：${source.title}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  window.open(source.url, '_blank', 'noopener,noreferrer');
+                }}
+              >
+                来源 {source.order}：{source.title}
+              </button>
+            ) : (
+              <span
+                key={source.order}
+                className="answer-web-source"
+                aria-label={`来源 ${source.order}：${source.title}`}
+              >
+                来源 {source.order}：{source.title}
+              </span>
+            )
           ))}
         </div>
       )}

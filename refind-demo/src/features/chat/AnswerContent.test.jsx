@@ -74,4 +74,20 @@ describe('AnswerContent', () => {
     expect(open).toHaveBeenCalledWith('https://example.com/weather', '_blank', 'noopener,noreferrer');
     open.mockRestore();
   });
+
+  it('does not open web source urls when not interactive', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <AnswerContent
+        text="根据最新消息…"
+        webSources={[{ order: 1, title: '气象台', url: 'https://example.com/weather' }]}
+        conversational
+        interactive={false}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: '来源 1：气象台' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByText('来源 1：气象台'));
+    expect(open).not.toHaveBeenCalled();
+    open.mockRestore();
+  });
 });
