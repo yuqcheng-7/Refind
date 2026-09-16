@@ -277,3 +277,31 @@ test('summarizes distinct knowledge bases and materials', () => {
     chunkCount: 2,
   });
 });
+
+test('uses Qwen for general chat when online even if modelId is DeepSeek', () => {
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: true, modelId: 'ds-fast' }), true);
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: true, modelId: 'ds-deep' }), true);
+});
+
+test('uses Qwen for general chat when modelId is qwen, otherwise DeepSeek', () => {
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: false, modelId: 'qwen' }), true);
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: false, modelId: 'ds-fast' }), false);
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: false, modelId: 'ds-deep' }), false);
+});
+
+test('general system prompt enables search when online and never claims search is unavailable', () => {
+  const online = core.buildGeneralChatSystemContent(true);
+  const offline = core.buildGeneralChatSystemContent(false);
+  assert.match(online, /已启用联网搜索/);
+  assert.doesNotMatch(online, /未启用联网搜索/);
+  assert.doesNotMatch(offline, /已启用联网搜索/);
+  assert.doesNotMatch(offline, /未启用联网搜索/);
+});
+
+test('keeps web sources only when general online search is enabled', () => {
+  const sources = [{ order: 1, title: '气象台', url: 'https://example.com' }];
+  assert.deepEqual(core.resolveGeneralWebSources(true, sources), sources);
+  assert.deepEqual(core.resolveGeneralWebSources(false, sources), []);
+  assert.equal(core.persistableWebSources(sources), sources);
+  assert.equal(core.persistableWebSources([]), null);
+});

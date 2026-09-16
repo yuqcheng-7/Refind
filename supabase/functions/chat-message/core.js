@@ -177,6 +177,29 @@ export function buildRetrievalSummary(chunks) {
   };
 }
 
+/** General (no KB/tags) uses Qwen when online, or when the user picked QW offline. */
+export function shouldUseQwenGeneralChat(body = {}) {
+  return body.onlineEnabled === true || body.modelId === 'qwen';
+}
+
+export function buildGeneralChatSystemContent(onlineEnabled) {
+  return `你是拾藏助手，像懂行的朋友用自然中文聊天。
+要求：
+- 直接把话说清楚，像人与人交流，不要用 Markdown（禁止 **加粗**、# 标题、\`代码\`、--- 分隔线等符号残留在正文里）。
+- 若要分点，用「1. 2. 3.」且序号与内容写在同一行。
+- 不要伪造知识库引用或「根据资料」字样。
+${onlineEnabled ? '- 已启用联网搜索；可依据检索结果回答，并可用 [n] 对应来源编号。' : ''}`;
+}
+
+export function resolveGeneralWebSources(onlineEnabled, webSources) {
+  if (onlineEnabled !== true || !Array.isArray(webSources)) return [];
+  return webSources;
+}
+
+export function persistableWebSources(webSources) {
+  return Array.isArray(webSources) && webSources.length ? webSources : null;
+}
+
 /** Strip markdown so general chat reads like plain conversation. */
 export function stripMarkdownForReading(text = '') {
   let value = String(text).replace(/\r\n/g, '\n');

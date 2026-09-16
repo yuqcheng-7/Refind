@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { deepseekChat, embedTexts, rerankDocuments } from '../_shared/ai.ts';
+import { parseWebSources, qwenChatWithOptionalSearch } from '../_shared/webSearch.js';
 import { focusExcerpt } from '../_shared/chunkText.js';
 import {
   buildRagSystemPrompt,
@@ -24,12 +25,16 @@ import {
 import {
   buildCitationRows,
   buildConversationRebindPatch,
+  buildGeneralChatSystemContent,
   buildRetrievalSummary,
   canRebindEmptyConversation,
   isPlaceholderTitle,
   normalizeRequestBody,
+  persistableWebSources,
+  resolveGeneralWebSources,
   resolveRagAnswerOutcome,
   shouldReuseConversation,
+  shouldUseQwenGeneralChat,
   stripMarkdownForReading,
 } from './core.js';
 
@@ -248,20 +253,29 @@ Deno.serve(async (req) => {
     insertedUserMessageId = userMessage.id;
 
     if (answerMode === 'general') {
-      const onlineNote = body.onlineEnabled ? '当前版本未启用联网搜索；不要声称已联网。' : '';
-      const answer = await deepseekChat([
-        {
-          role: 'system',
-          content: `你是拾藏助手，像懂行的朋友用自然中文聊天。
-要求：
-- 直接把话说清楚，像人与人交流，不要用 Markdown（禁止 **加粗**、# 标题、\`代码\`、--- 分隔线等符号残留在正文里）。
-- 若要分点，用「1. 2. 3.」且序号与内容写在同一行。
-- 不要伪造知识库引用或「根据资料」字样。
-${onlineNote}`,
-        },
+      const useQwen = shouldUseQwenGeneralChat(body);
+      let plainAnswer: string;
+      let webSources: { order: number; title: string; url: string }[] = [];
+
+      const messages = [
+        { role: 'system', content: buildGeneralChatSystemContent(body.onlineEnabled) },
         { role: 'user', content: body.content },
-      ], { model: mapThinkingMode(body.thinkingMode) });
-      const plainAnswer = stripMarkdownForReading(answer);
+      ];
+
+      if (useQwen) {
+        const result = await qwenChatWithOptionalSearch(messages, {
+          onlineEnabled: body.onlineEnabled === true,
+        });
+        plainAnswer = stripMarkdownForReading(result.content);
+        webSources = resolveGeneralWebSources(
+          body.onlineEnabled === true,
+          parseWebSources({ search_results: result.webSources }),
+        );
+      } else {
+        const answer = await deepseekChat(messages, { model: mapThinkingMode(body.thinkingMode) });
+        plainAnswer = stripMarkdownForReading(answer);
+      }
+
       const { data: assistantMessage, error } = await admin
         .from('chat_messages')
         .insert({
@@ -269,6 +283,7 @@ ${onlineNote}`,
           role: 'assistant',
           content: plainAnswer,
           is_insufficient: false,
+          web_sources: persistableWebSources(webSources),
         })
         .select('id')
         .single();
@@ -282,6 +297,7 @@ ${onlineNote}`,
         content: plainAnswer,
         insufficient: false,
         citations: [],
+        webSources,
       });
     }
 
