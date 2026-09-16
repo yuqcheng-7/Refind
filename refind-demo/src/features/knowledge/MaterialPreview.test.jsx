@@ -110,11 +110,11 @@ describe('material previews', () => {
     expect(screen.getByText('xiaohongshu.com')).toBeVisible();
     expect(screen.getByText('类型')).toBeVisible();
     expect(screen.getByText('小红书')).toBeVisible();
-    expect(screen.getByText('AI 摘要')).toBeVisible();
+    expect(screen.getByText('摘要')).toBeVisible();
     expect(screen.getByText(material.summary)).toBeVisible();
     expect(screen.getByText('原文')).toBeVisible();
     expect(screen.getByText(/冷启动阶段优先聚焦/)).toBeVisible();
-    expect(screen.getByRole('link', { name: '在原站打开' })).toHaveAttribute('href', material.url);
+    expect(screen.getByRole('link', { name: '回到原文' })).toHaveAttribute('href', material.url);
   });
 
   it('shows video player, caption, and subtitles for bilibili materials', () => {
@@ -146,14 +146,21 @@ describe('material previews', () => {
 
     expect(screen.getByText('本地上传')).toBeVisible();
     expect(screen.getByText('PDF')).toBeVisible();
-    expect(screen.queryByRole('link', { name: '在原站打开' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '回到原文' })).not.toBeInTheDocument();
   });
 
-  it('exposes reparse action', async () => {
+  it('places preview actions, facts, and summary in the content shell', async () => {
     const onReparse = vi.fn();
     const material = materialDemo.find((item) => item.kind === 'link' && item.platform === 'xhs');
     render(<MaterialPreviewPage material={material} onReparse={onReparse} />);
-    await userEvent.click(screen.getByRole('button', { name: '重新解析' }));
+
+    expect(screen.getByRole('button', { name: /重新解析/ })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /回到原文/ })).toBeInTheDocument();
+    expect(document.querySelector('.material-preview-actions')).toBeTruthy();
+    expect(document.querySelector('.material-preview-facts.is-inline')).toBeTruthy();
+    expect(screen.getByRole('region', { name: '摘要' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /重新解析/ }));
     expect(onReparse).toHaveBeenCalled();
   });
 

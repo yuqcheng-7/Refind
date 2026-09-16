@@ -1,4 +1,6 @@
-import { ExternalLink, FileText, Link2, Play } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ExternalLink, FileText, Link2, Play, RefreshCw } from 'lucide-react';
+import { createMaterialSignedUrl } from '../../lib/api/materials.js';
 import {
   getPreviewCaption,
   getPreviewOriginLabel,
@@ -7,17 +9,70 @@ import {
   getPreviewTypeLabel,
   getVideoPlayback,
   isVideoMaterial,
-  splitReadableParagraphs,
 } from './materialPreview.js';
+import {
+  hasOriginalFile,
+  MaterialFilePreview,
+  openMaterialOriginalFile,
+} from './MaterialFilePreview.jsx';
+import { buildReadableBlocks } from './materialPreview.js';
+
+function StoragePreviewImage({ storageKey }) {
+  const [src, setSrc] = useState('');
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSrc('');
+    setFailed(false);
+    createMaterialSignedUrl(storageKey)
+      .then((url) => {
+        if (!cancelled) setSrc(url);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [storageKey]);
+
+  if (failed) {
+    return <p className="material-preview-muted">图片暂时无法加载</p>;
+  }
+  if (!src) {
+    return <p className="material-preview-muted">图片加载中…</p>;
+  }
+  return (
+    <figure className="material-preview-inline-image">
+      <img src={src} alt="" loading="lazy" />
+    </figure>
+  );
+}
 
 function ParagraphBlock({ text, className = 'material-preview-paragraphs' }) {
-  const paragraphs = splitReadableParagraphs(text);
-  if (!paragraphs.length) return null;
+  const blocks = buildReadableBlocks(text);
+  if (!blocks.length) return null;
   return (
     <div className={className}>
-      {paragraphs.map((paragraph, index) => (
-        <p key={`${index}-${paragraph.slice(0, 12)}`}>{paragraph}</p>
-      ))}
+      {blocks.map((block, index) => {
+        if (block.type === 'image') {
+          return (
+            <StoragePreviewImage
+              key={`${index}-${block.storageKey}`}
+              storageKey={block.storageKey}
+            />
+          );
+        }
+        if (block.type === 'heading') {
+          return (
+            <h3 key={`${index}-${block.text.slice(0, 12)}`} className="material-preview-heading">
+              {block.text}
+            </h3>
+          );
+        }
+        return <p key={`${index}-${block.text.slice(0, 12)}`}>{block.text}</p>;
+      })}
     </div>
   );
 }
@@ -65,6 +120,37 @@ function VideoPlayer({ material }) {
   );
 }
 
+function OpenOriginalFileButton({ material }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  if (!hasOriginalFile(material)) return null;
+
+  return (
+    <>
+      <button
+        type="button"
+        className="material-preview-action"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setError('');
+          try {
+            await openMaterialOriginalFile(material);
+          } catch (err) {
+            setError(err?.message || '无法打开原文件');
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        <ExternalLink size={14} /> {busy ? '打开中…' : '打开原文件'}
+      </button>
+      {error ? <span className="material-preview-tool-error">{error}</span> : null}
+    </>
+  );
+}
+
 export function MaterialPreviewPage({
   material,
   loading = false,
@@ -89,6 +175,7 @@ export function MaterialPreviewPage({
   }
 
   const isLink = material.kind === 'link' && material.url;
+  const isFile = material.kind === 'file';
   const isVideo = isVideoMaterial(material);
   const title = material.title || material.fileName || '未命名资料';
   const originLabel = getPreviewOriginLabel(material);
@@ -122,7 +209,26 @@ export function MaterialPreviewPage({
           {statusLabel ? <span className={`material-preview-status is-${material.status}`}>{statusLabel}</span> : null}
         </div>
         <h1>{title}</h1>
-        <dl className="material-preview-facts">
+        <div className="material-preview-actions">
+          {typeof onReparse === 'function' ? (
+            <button
+              type="button"
+              className="material-preview-action"
+              onClick={onReparse}
+              disabled={reparsing}
+            >
+              <RefreshCw size={14} /> {reparsing ? '解析中…' : '重新解析'}
+            </button>
+          ) : null}
+          {isFile ? <OpenOriginalFileButton material={material} /> : null}
+          {isLink ? (
+            <a className="material-preview-action" href={material.url} target="_blank" rel="noreferrer">
+              <ExternalLink size={14} /> 回到原文
+            </a>
+          ) : null}
+        </div>
+
+        <dl className="material-preview-facts is-inline">
           <div>
             <dt>来源</dt>
             <dd>{originLabel}</dd>
@@ -148,30 +254,14 @@ export function MaterialPreviewPage({
             </div>
           ) : null}
         </dl>
+
         {error ? (
           <p className="material-preview-error" role="alert">{error}</p>
         ) : null}
-        <div className="material-preview-tools">
-          {typeof onReparse === 'function' ? (
-            <button
-              type="button"
-              className="material-original-link"
-              onClick={onReparse}
-              disabled={reparsing}
-            >
-              重新解析
-            </button>
-          ) : null}
-          {isLink ? (
-            <a className="material-original-link" href={material.url} target="_blank" rel="noreferrer">
-              在原站打开 <ExternalLink size={14} />
-            </a>
-          ) : null}
-        </div>
       </header>
 
       <section className="material-preview-summary" aria-labelledby="preview-summary-title">
-        <p id="preview-summary-title">AI 摘要</p>
+        <p id="preview-summary-title">摘要</p>
         <div className="material-preview-summary-body">{summary}</div>
       </section>
 
@@ -197,7 +287,11 @@ export function MaterialPreviewPage({
         <section className="material-preview-section" aria-labelledby="preview-body-title">
           <h2 id="preview-body-title">原文</h2>
           <article className="material-preview-body" aria-label="资料正文">
-            <ParagraphBlock text={readableBody} />
+            {isFile ? (
+              <MaterialFilePreview material={material} fallbackText={bodyFallback} />
+            ) : (
+              <ParagraphBlock text={readableBody} />
+            )}
           </article>
         </section>
       ) : null}
