@@ -8,6 +8,18 @@ function isDeepSeekModel(modelId) {
   return modelId === 'ds-fast' || modelId === 'ds-deep';
 }
 
+function lastDeepSeekFrom(scope) {
+  return isDeepSeekModel(scope?.lastDeepSeekModelId) ? scope.lastDeepSeekModelId : 'ds-fast';
+}
+
+function withScopedOffline(scope) {
+  return {
+    ...scope,
+    online: false,
+    modelId: lastDeepSeekFrom(scope),
+  };
+}
+
 export const defaultHomeScope = {
   online: false,
   modelId: 'ds-fast',
@@ -81,8 +93,7 @@ export function HomeComposer({
       : [...current[key], value];
     const next = { ...current, [key]: list };
     const scoped = next.selectedBases.length > 0 || next.selectedTags.length > 0;
-    if (scoped) next.online = false;
-    return next;
+    return scoped ? withScopedOffline(next) : next;
   });
   useDismissable({ open: baseMenu, onClose: () => setBaseMenu(false), rootRef: baseMenuRef });
   useDismissable({ open: modelMenu, onClose: () => setModelMenu(false), rootRef: modelMenuRef });
@@ -108,11 +119,8 @@ export function HomeComposer({
         ? current.selectedTags.filter((item) => item !== tag)
         : [...current.selectedTags, tag];
       const scoped = current.selectedBases.length > 0 || nextTags.length > 0;
-      return {
-        ...current,
-        selectedTags: nextTags,
-        online: scoped ? false : current.online,
-      };
+      const next = { ...current, selectedTags: nextTags };
+      return scoped ? withScopedOffline(next) : next;
     });
     setPrompt((value) => {
       if (removing) {
@@ -163,13 +171,16 @@ export function HomeComposer({
   const send = (event) => {
     event.preventDefault();
     if (!prompt.trim()) return;
+    const submittedModelId = hasScope
+      ? (isDeepSeekModel(modelId) ? modelId : lastDeepSeekFrom(scope))
+      : modelId;
     onSubmit({
       prompt: prompt.trim(),
       mode: hasScope ? 'rag' : 'general',
       online: hasScope ? false : online,
-      modelId,
-      thinkingMode: modelId === 'ds-deep' ? 'deep' : 'fast',
-      model: selectedModel,
+      modelId: submittedModelId,
+      thinkingMode: submittedModelId === 'ds-deep' ? 'deep' : 'fast',
+      model: modelLabel(submittedModelId),
       selectedBases: [...selectedBases],
       selectedTags: [...selectedTags],
     });

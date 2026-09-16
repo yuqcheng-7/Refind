@@ -230,6 +230,32 @@ describe('HomeComposer', () => {
     expect(screen.getByRole('button', { name: '选择知识库' })).toHaveTextContent('增长与运营案例');
   });
 
+  it('forces offline and restores DS modelId after online QW then knowledge-base send', async () => {
+    const onSubmit = vi.fn();
+    render(<HomeComposer bases={bases} onSubmit={onSubmit} />);
+
+    await userEvent.click(screen.getByRole('button', { name: '选择模型' }));
+    await userEvent.click(screen.getByRole('button', { name: 'DS深度' }));
+    await userEvent.click(screen.getByRole('button', { name: '不联网' }));
+    expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('QW');
+
+    await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
+    await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
+    expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('DS深度');
+    expect(screen.getByRole('button', { name: '不联网' })).toHaveAttribute('aria-pressed', 'false');
+
+    await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '基于资料回答');
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      modelId: 'ds-deep',
+      thinkingMode: 'deep',
+      online: false,
+    }));
+    expect(onSubmit.mock.calls[0][0].modelId).toMatch(/^ds-(fast|deep)$/);
+    expect(onSubmit.mock.calls[0][0].modelId).not.toBe('qwen');
+  });
+
   it('shows multi-base label and opens hash tag suggestions from availableTags', async () => {
     render(<HomeComposer bases={bases} availableTags={[{ id: '1', name: '增长策略' }]} onSubmit={vi.fn()} />);
 
@@ -781,10 +807,12 @@ describe('HomeComposer', () => {
     expect(await screen.findByText('API 回答：大模型架构是什么')).toBeVisible();
     expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
       content: '大模型架构是什么',
+      modelId: expect.stringMatching(/^ds-(fast|deep)$/),
       onlineEnabled: false,
       knowledgeBaseIds: ['base-default'],
       surface: 'home',
     }));
+    expect(sendChatMessage.mock.calls.at(-1)[0].modelId).not.toBe('qwen');
     expect(screen.getAllByText(/默认知识库/).length).toBeGreaterThan(0);
   });
 });
