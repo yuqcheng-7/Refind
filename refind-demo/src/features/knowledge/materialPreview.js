@@ -76,30 +76,79 @@ export function getPreviewCaption(material) {
   return '';
 }
 
+function normalizePreviewText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\u3000/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** Insert breaks before numbered outline markers in a single wall of text. */
+function insertSectionBreaks(text) {
+  return String(text || '')
+    .replace(/(?<=[。！？；.!?\n]|^)\s*(?=[一二三四五六七八九十百千]+[、.．])/g, '\n\n')
+    .replace(/(?<=[。！？；.!?\n\s]|^)(?=\d{1,2}[\.、．]\s*[^\s\d])/g, '\n\n');
+}
+
+export function isPreviewHeading(line) {
+  const text = String(line || '').trim();
+  if (!text || text.length > 48) return false;
+  if (/^[一二三四五六七八九十百千]+[、.．]/.test(text)) return true;
+  if (/^\d{1,2}[\.、．]\s*\S/.test(text)) return true;
+  return false;
+}
+
 export function splitReadableParagraphs(text) {
-  const value = String(text || '').replace(/\r\n/g, '\n').trim();
+  const value = normalizePreviewText(insertSectionBreaks(text));
   if (!value) return [];
+  return value.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+}
 
-  const byBlank = value.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  if (byBlank.length > 1) return byBlank;
+export function buildReadableBlocks(text) {
+  const value = String(text || '');
+  if (!value.trim()) return [];
 
-  const byLine = value.split('\n').map((part) => part.trim()).filter(Boolean);
-  if (byLine.length > 1) return byLine;
-
-  const bySentence = value
-    .split(/(?<=[。！？；])\s*/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (bySentence.length > 1) {
-    const grouped = [];
-    for (let index = 0; index < bySentence.length; index += 2) {
-      grouped.push(bySentence.slice(index, index + 2).join(''));
+  const segments = [];
+  const imageRe = /!\[[^\]]*]\(storage:([^)\s]+)\)/g;
+  let lastIndex = 0;
+  let match = imageRe.exec(value);
+  while (match) {
+    if (match.index > lastIndex) {
+      segments.push({ type: 'text', text: value.slice(lastIndex, match.index) });
     }
-    return grouped;
+    const storageKey = String(match[1] || '').trim();
+    if (storageKey) segments.push({ type: 'image', storageKey });
+    lastIndex = match.index + match[0].length;
+    match = imageRe.exec(value);
+  }
+  if (lastIndex < value.length) {
+    segments.push({ type: 'text', text: value.slice(lastIndex) });
+  }
+  if (!segments.length) {
+    segments.push({ type: 'text', text: value });
   }
 
-  return [value];
+  const blocks = [];
+  for (const segment of segments) {
+    if (segment.type === 'image') {
+      blocks.push({ type: 'image', storageKey: segment.storageKey });
+      continue;
+    }
+    for (const line of splitReadableParagraphs(segment.text)) {
+      blocks.push({
+        type: isPreviewHeading(line) ? 'heading' : 'paragraph',
+        text: line,
+      });
+    }
+  }
+  return blocks;
 }
+
 
 export function getBilibiliEmbedUrl(sourceUrl) {
   if (!sourceUrl) return '';

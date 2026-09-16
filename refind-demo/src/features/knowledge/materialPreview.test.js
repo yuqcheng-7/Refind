@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildReadableBlocks,
   getBilibiliEmbedUrl,
   getPreviewCaption,
   getPreviewOriginLabel,
   getPreviewSummary,
   getPreviewTags,
   getPreviewTypeLabel,
+  isPreviewHeading,
   isVideoMaterial,
   splitReadableParagraphs,
 } from './materialPreview.js';
@@ -13,6 +15,37 @@ import {
 describe('materialPreview helpers', () => {
   it('splits body text into readable paragraphs', () => {
     expect(splitReadableParagraphs('第一段。\n\n第二段。')).toEqual(['第一段。', '第二段。']);
+  });
+
+  it('only treats numbered outline lines as headings', () => {
+    expect(isPreviewHeading('一、免费工具怎么选')).toBe(true);
+    expect(isPreviewHeading('1. 安装步骤')).toBe(true);
+    expect(isPreviewHeading('打开很快')).toBe(false);
+    expect(isPreviewHeading('2 项目技术栈')).toBe(false); // no delimiter → not H1
+  });
+
+  it('splits only on blank lines and keeps long sentences intact', () => {
+    const wall = '在推荐工具前，先说清楚什么叫「够用」的修图体验：打开快、导出不加水印。优先看是否支持中文界面。';
+    expect(splitReadableParagraphs(wall)).toEqual([wall]);
+    expect(splitReadableParagraphs(`${wall}\n\n第二段内容。`)).toEqual([wall, '第二段内容。']);
+  });
+
+  it('detects outline headings and builds readable blocks', () => {
+    expect(isPreviewHeading('1. 项目背景')).toBe(true);
+    expect(isPreviewHeading('二、每周详细学习与任务安排')).toBe(true);
+    const blocks = buildReadableBlocks('1. 项目背景\n\n联想提出天禧AI生态战略。\n\n2. 项目技术栈\n\n基于开源模型与RAG框架。');
+    expect(blocks[0]).toEqual({ type: 'heading', text: '1. 项目背景' });
+    expect(blocks[1].type).toBe('paragraph');
+    expect(blocks[2]).toEqual({ type: 'heading', text: '2. 项目技术栈' });
+  });
+
+  it('parses storage markdown images into image blocks', () => {
+    const blocks = buildReadableBlocks(
+      '第一段。\n\n![](storage:user/mat.inline.1.jpg)\n\n第二段。',
+    );
+    expect(blocks[0]).toEqual({ type: 'paragraph', text: '第一段。' });
+    expect(blocks[1]).toEqual({ type: 'image', storageKey: 'user/mat.inline.1.jpg' });
+    expect(blocks[2]).toEqual({ type: 'paragraph', text: '第二段。' });
   });
 
   it('detects video materials and type labels', () => {
