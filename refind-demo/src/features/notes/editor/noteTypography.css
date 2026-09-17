@@ -1,0 +1,200 @@
+/* Note editor typography — design §4.3–4.4 */
+
+.note-rich-editor {
+  --note-font-stack: 'Refind Source Han SC', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  font-family: var(--note-font-stack);
+  color: #1d2129;
+}
+
+.note-rich-editor .ProseMirror {
+  outline: none;
+  min-height: 280px;
+  font-family: var(--note-font-stack);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 24px;
+  color: #1d2129;
+}
+
+.note-rich-editor .ProseMirror p.is-editor-empty:first-child::before {
+  color: #9ba5b1;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.note-typo {
+  font-family: var(--note-font-stack);
+}
+
+.note-typo--h1,
+.note-rich-editor .ProseMirror h1 {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 40px;
+  color: #1d2129;
+  margin: 0 0 24px;
+}
+
+.note-typo--h2,
+.note-rich-editor .ProseMirror h2 {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 32px;
+  color: #1d2129;
+  margin: 20px 0 16px;
+}
+
+.note-typo--h3,
+.note-rich-editor .ProseMirror h3 {
+  font-size: 20px;
+  font-weight: 550;
+  line-height: 28px;
+  color: #1d2129;
+  margin: 16px 0 12px;
+}
+
+.note-typo--body1,
+.note-rich-editor .ProseMirror p,
+.note-rich-editor .ProseMirror p[data-body='body1'] {
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 24px;
+  color: #1d2129;
+  margin: 0 0 8px;
+}
+
+.note-typo--body2,
+.note-rich-editor .ProseMirror p[data-body='body2'] {
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  color: #4e5969;
+  margin: 0 0 6px;
+}
+
+.note-typo--body3,
+.note-rich-editor .ProseMirror p[data-body='body3'] {
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: #86909c;
+  margin: 0 0 4px;
+}
+
+.note-rich-editor .ProseMirror blockquote {
+  margin: 0 0 8px;
+  padding-left: 12px;
+  border-left: 3px solid rgba(151, 164, 181, 0.45);
+  color: #4e5969;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.note-rich-editor .ProseMirror ul,
+.note-rich-editor .ProseMirror ol {
+  margin: 0 0 8px;
+  padding-left: 1.35em;
+}
+
+.note-rich-editor .ProseMirror a {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+/* iPad — design §4.4 (~80% spacing) */
+@media (min-width: 768px) and (max-width: 1199px) {
+  .note-typo--h1,
+  .note-rich-editor .ProseMirror h1 {
+    font-size: 30px;
+    line-height: 38px;
+    margin-bottom: 19px;
+  }
+
+  .note-typo--h2,
+  .note-rich-editor .ProseMirror h2 {
+    font-size: 22px;
+    line-height: 30px;
+    margin-top: 16px;
+    margin-bottom: 13px;
+  }
+
+  .note-typo--h3,
+  .note-rich-editor .ProseMirror h3 {
+    font-size: 19px;
+    line-height: 26px;
+    margin-top: 13px;
+    margin-bottom: 10px;
+  }
+
+  .note-typo--body1,
+  .note-rich-editor .ProseMirror p,
+  .note-rich-editor .ProseMirror p[data-body='body1'] {
+    font-size: 17px;
+    line-height: 26px;
+    margin-bottom: 6px;
+  }
+
+  .note-typo--body2,
+  .note-rich-editor .ProseMirror p[data-body='body2'] {
+    font-size: 15px;
+    line-height: 22px;
+    margin-bottom: 5px;
+  }
+
+  .note-typo--body3,
+  .note-rich-editor .ProseMirror p[data-body='body3'] {
+    font-size: 13px;
+    line-height: 20px;
+    margin-bottom: 3px;
+  }
+}
+
+/* Phone */
+@media (max-width: 767px) {
+  .note-typo--h1,
+  .note-rich-editor .ProseMirror h1 {
+    font-size: 28px;
+    line-height: 36px;
+    margin-bottom: 17px;
+  }
+
+  .note-typo--h2,
+  .note-rich-editor .ProseMirror h2 {
+    font-size: 22px;
+    line-height: 30px;
+    margin-top: 14px;
+    margin-bottom: 11px;
+  }
+
+  .note-typo--h3,
+  .note-rich-editor .ProseMirror h3 {
+    font-size: 18px;
+    line-height: 26px;
+    margin-top: 11px;
+    margin-bottom: 8px;
+  }
+
+  .note-typo--body1,
+  .note-rich-editor .ProseMirror p,
+  .note-rich-editor .ProseMirror p[data-body='body1'] {
+    font-size: 15px;
+    line-height: 22px;
+    margin-bottom: 6px;
+  }
+
+  .note-typo--body2,
+  .note-rich-editor .ProseMirror p[data-body='body2'] {
+    font-size: 14px;
+    line-height: 20px;
+    margin-bottom: 4px;
+  }
+
+  .note-typo--body3,
+  .note-rich-editor .ProseMirror p[data-body='body3'] {
+    font-size: 12px;
+    line-height: 18px;
+    margin-bottom: 3px;
+  }
+}

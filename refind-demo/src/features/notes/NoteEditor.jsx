@@ -1,15 +1,9 @@
-import { ArrowDown, ArrowUp, Bold, ChevronLeft, GripVertical, Italic, Link2, List, ListOrdered, Maximize2, PanelBottomClose, PanelBottomOpen, Plus, Quote, Redo2, Trash2, Undo2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronLeft, GripVertical, Maximize2, PanelBottomClose, PanelBottomOpen, Plus, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CardDetailDialog } from './NoteDialogs.jsx';
-
-const toolbarItems = [
-  { label: '加粗', icon: Bold, command: 'bold' },
-  { label: '斜体', icon: Italic, command: 'italic' },
-  { label: '项目符号列表', icon: List, command: 'insertUnorderedList' },
-  { label: '编号列表', icon: ListOrdered, command: 'insertOrderedList' },
-  { label: '引用', icon: Quote, command: 'formatBlock', value: 'blockquote' },
-  { label: '插入链接', icon: Link2, command: 'createLink' },
-];
+import { NoteEditorToolbar } from './editor/NoteEditorToolbar.jsx';
+import { NoteRichEditor } from './editor/NoteRichEditor.jsx';
+import { htmlFromNoteContent, noteContentFromEditor } from './editor/noteContentCodec.js';
 
 function CitationButton({ index, label, card, onOpenCard }) {
   const [open, setOpen] = useState(false);
@@ -86,14 +80,50 @@ function CitationButton({ index, label, card, onOpenCard }) {
 }
 
 function MaterialsPanel({ cards, thoughts, onReorder, onThoughtChange, onRemove }) {
-  return <section className="materials-drawer" aria-label="素材面板">
-    <header><div><span className="eyebrow">写作素材</span><h2>已选灵感卡片</h2></div><span>{cards.length} 张</span></header>
-    <div className="materials-drawer__list">{cards.map((card, index) => <article className="material-card" data-testid="material-card" data-card-id={card.id} key={card.id}>
-      <div className="material-card__order"><GripVertical size={16} /><span>{index + 1}</span></div>
-      <div className="material-card__content"><p>{card.contentSnapshot}</p><small>{card.sourceLabel || (card.answerMode === 'rag' ? '知识库回答' : '首页通用 AI')}</small><label>我的想法<textarea value={thoughts[card.id] || ''} onChange={(event) => onThoughtChange(card.id, event.target.value)} placeholder="可选：补充你的看法或写作角度" /></label></div>
-      <div className="material-card__actions"><button type="button" aria-label={`上移 ${card.id}`} disabled={index === 0} onClick={() => onReorder(index, index - 1)}><ArrowUp size={14} /></button><button type="button" aria-label={`下移 ${card.id}`} disabled={index === cards.length - 1} onClick={() => onReorder(index, index + 1)}><ArrowDown size={14} /></button><button type="button" aria-label={`移除 ${card.id}`} onClick={() => onRemove(card.id)}><Trash2 size={14} /></button></div>
-    </article>)}</div>
-  </section>;
+  return (
+    <section className="materials-drawer" aria-label="素材面板">
+      <header>
+        <div>
+          <span className="eyebrow">写作素材</span>
+          <h2>已选灵感卡片</h2>
+        </div>
+        <span>{cards.length} 张</span>
+      </header>
+      <div className="materials-drawer__list">
+        {cards.map((card, index) => (
+          <article className="material-card" data-testid="material-card" data-card-id={card.id} key={card.id}>
+            <div className="material-card__order">
+              <GripVertical size={16} />
+              <span>{index + 1}</span>
+            </div>
+            <div className="material-card__content">
+              <p>{card.contentSnapshot}</p>
+              <small>{card.sourceLabel || (card.answerMode === 'rag' ? '知识库回答' : '首页通用 AI')}</small>
+              <label>
+                我的想法
+                <textarea
+                  value={thoughts[card.id] || ''}
+                  onChange={(event) => onThoughtChange(card.id, event.target.value)}
+                  placeholder="可选：补充你的看法或写作角度"
+                />
+              </label>
+            </div>
+            <div className="material-card__actions">
+              <button type="button" aria-label={`上移 ${card.id}`} disabled={index === 0} onClick={() => onReorder(index, index - 1)}>
+                <ArrowUp size={14} />
+              </button>
+              <button type="button" aria-label={`下移 ${card.id}`} disabled={index === cards.length - 1} onClick={() => onReorder(index, index + 1)}>
+                <ArrowDown size={14} />
+              </button>
+              <button type="button" aria-label={`移除 ${card.id}`} onClick={() => onRemove(card.id)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 export function NoteEditor({
@@ -114,31 +144,38 @@ export function NoteEditor({
   const isFullscreen = mode === 'inspiration';
   const materialsEnabled = showMaterials ?? isFullscreen;
   const [saveState, setSaveState] = useState('已保存');
-  const [activeTool, setActiveTool] = useState(null);
   const [panelOpen, setPanelOpen] = useState(materialsEnabled);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [undoStack, setUndoStack] = useState([]);
-  const [redoStack, setRedoStack] = useState([]);
-  const [revisions, setRevisions] = useState([]);
+  const [revisions] = useState([]);
   const [detailCard, setDetailCard] = useState(null);
-  const bodyRef = useRef(null);
   const persistTimerRef = useRef(null);
   const pendingPersistRef = useRef(null);
   const onPersistRef = useRef(onPersist);
-  const syncTokenRef = useRef(`${note.id}:${note.content?.text || ''}`);
+  const editorRef = useRef(null);
+  const [tiptapEditor, setTiptapEditor] = useState(null);
+  const lastHtmlRef = useRef(null);
 
   useEffect(() => {
     onPersistRef.current = onPersist;
   }, [onPersist]);
-  const selectedCards = useMemo(() => note.inspirationCardIds.map((id) => cards.find((card) => card.id === id)).filter(Boolean), [note.inspirationCardIds, cards]);
+
+  const selectedCards = useMemo(
+    () => note.inspirationCardIds.map((id) => cards.find((card) => card.id === id)).filter(Boolean),
+    [note.inspirationCardIds, cards],
+  );
   const availableCards = cards.filter((card) => !note.inspirationCardIds.includes(card.id));
+  const sections = note.content?.sections;
+  const hasSections = Array.isArray(sections) && sections.length > 0;
+  const editorHtml = hasSections
+    ? htmlFromNoteContent(note.content)
+    : (note.content?.html || htmlFromNoteContent(note.content));
 
   useEffect(() => {
     setSaveState('已保存');
-    setUndoStack([]);
-    setRedoStack([]);
     setPanelOpen(materialsEnabled);
+    lastHtmlRef.current = null;
+    setTiptapEditor(null);
   }, [note.id, mode, materialsEnabled]);
 
   useEffect(() => {
@@ -155,28 +192,7 @@ export function NoteEditor({
     }
   }, []);
 
-  // Keep contentEditable uncontrolled while typing; only sync on note switch / external content changes.
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    const nextText = note.content?.text || '';
-    const token = `${note.id}:${nextText}`;
-    const focused = document.activeElement === el;
-    if (focused && syncTokenRef.current.startsWith(`${note.id}:`)) return;
-    if (el.innerText !== nextText) el.innerText = nextText;
-    syncTokenRef.current = token;
-  }, [note.id, note.content?.text, generating]);
-
-  const readBody = () => {
-    const el = bodyRef.current;
-    return el ? (el.innerText || '').replace(/\u00a0/g, ' ') : '';
-  };
-
-  const commit = (changes, { record = true } = {}) => {
-    if (record) {
-      setUndoStack((stack) => [...stack, { title: note.title, content: note.content, inspirationCardIds: note.inspirationCardIds, materialThoughts: note.materialThoughts || {} }]);
-      setRedoStack([]);
-    }
+  const commit = (changes) => {
     setSaveState('正在保存');
     const nextNote = { ...note, ...changes, updatedLabel: '刚刚编辑' };
     onChange(nextNote);
@@ -194,45 +210,20 @@ export function NoteEditor({
     }
   };
 
-  const undo = () => {
-    const previous = undoStack.at(-1);
-    if (!previous || generating) return;
-    setRedoStack((stack) => [...stack, { title: note.title, content: note.content, inspirationCardIds: note.inspirationCardIds, materialThoughts: note.materialThoughts || {} }]);
-    setUndoStack((stack) => stack.slice(0, -1));
-    syncTokenRef.current = '';
-    commit(previous, { record: false });
-  };
-  const redo = () => {
-    const next = redoStack.at(-1);
-    if (!next || generating) return;
-    setUndoStack((stack) => [...stack, { title: note.title, content: note.content, inspirationCardIds: note.inspirationCardIds, materialThoughts: note.materialThoughts || {} }]);
-    setRedoStack((stack) => stack.slice(0, -1));
-    syncTokenRef.current = '';
-    commit(next, { record: false });
-  };
-
-  const updateBody = () => {
-    const text = readBody();
-    syncTokenRef.current = `${note.id}:${text}`;
-    commit({ content: { ...note.content, text } });
-  };
-
-  const applyTool = (item) => {
+  const handleEditorUpdate = (payload) => {
     if (generating) return;
-    const el = bodyRef.current;
-    if (!el) return;
-    el.focus();
-    if (item.command === 'createLink') {
-      const url = window.prompt('输入链接地址', 'https://');
-      if (!url) return;
-      document.execCommand('createLink', false, url);
-    } else if (item.command === 'formatBlock') {
-      document.execCommand('formatBlock', false, item.value);
-    } else {
-      document.execCommand(item.command, false);
-    }
-    setActiveTool(item.label);
-    updateBody();
+    const prevHtml = note.content?.html || htmlFromNoteContent(note.content);
+    const prevText = note.content?.text || '';
+    if (payload.html === prevHtml && payload.text === prevText) return;
+    if (payload.html === lastHtmlRef.current) return;
+    lastHtmlRef.current = payload.html;
+    commit({
+      content: {
+        ...note.content,
+        ...noteContentFromEditor(payload),
+        sections: [],
+      },
+    });
   };
 
   const reorderCards = (from, to) => {
@@ -240,18 +231,25 @@ export function NoteEditor({
     [next[from], next[to]] = [next[to], next[from]];
     commit({ inspirationCardIds: next });
   };
-  const updateThought = (cardId, thought) => commit({ materialThoughts: { ...(note.materialThoughts || {}), [cardId]: thought } });
-  const removeCard = (cardId) => commit({ inspirationCardIds: note.inspirationCardIds.filter((id) => id !== cardId) });
+  const updateThought = (cardId, thought) => commit({
+    materialThoughts: { ...(note.materialThoughts || {}), [cardId]: thought },
+  });
+  const removeCard = (cardId) => commit({
+    inspirationCardIds: note.inspirationCardIds.filter((id) => id !== cardId),
+  });
   const attachCard = (cardId) => {
     onAttachCards?.([cardId]);
     setPickerOpen(false);
   };
   const generate = () => {
     if (!selectedCards.length || generating) return;
-    onGenerate?.();
+    setGenerating(true);
+    try {
+      onGenerate?.();
+    } finally {
+      window.setTimeout(() => setGenerating(false), 0);
+    }
   };
-  const sections = note.content.sections;
-  const hasSections = Array.isArray(sections) && sections.length > 0;
 
   return (
     <article className={`note-editor ${isFullscreen ? 'note-editor--inspiration' : ''}`}>
@@ -268,46 +266,45 @@ export function NoteEditor({
               <Maximize2 size={15} />
             </button>
           )}
-          <span className={`note-editor__save-state ${saveState === '正在保存' ? 'is-saving' : ''}`} aria-live="polite">{saveState}</span>
+          <span className={`note-editor__save-state ${saveState === '正在保存' ? 'is-saving' : ''}`} aria-live="polite">
+            {saveState}
+          </span>
         </div>
-        <div className="note-editor__tool-list">
-          <button type="button" className="note-editor__tool" title="撤销" aria-label="撤销" disabled={!undoStack.length || generating} onClick={undo}><Undo2 size={16} /></button>
-          <button type="button" className="note-editor__tool" title="重做" aria-label="重做" disabled={!redoStack.length || generating} onClick={redo}><Redo2 size={16} /></button>
-          {toolbarItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.label}
-                type="button"
-                className={`note-editor__tool ${activeTool === item.label ? 'is-active' : ''}`}
-                title={item.label}
-                aria-label={item.label}
-                aria-pressed={activeTool === item.label}
-                disabled={generating}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => applyTool(item)}
-              >
-                <Icon size={16} />
-              </button>
-            );
-          })}
-        </div>
+        {!hasSections ? (
+          <NoteEditorToolbar editor={tiptapEditor} disabled={generating} />
+        ) : null}
         {isFullscreen && materialsEnabled && (
           <div className="note-editor__inspiration-actions">
-            <button type="button" onClick={() => setPickerOpen((open) => !open)} disabled={generating}><Plus size={15} />添加灵感卡片</button>
+            <button type="button" onClick={() => setPickerOpen((open) => !open)} disabled={generating}>
+              <Plus size={15} />
+              添加灵感卡片
+            </button>
             <button type="button" onClick={() => setPanelOpen((open) => !open)} disabled={generating}>
               {panelOpen ? <PanelBottomClose size={15} /> : <PanelBottomOpen size={15} />}
               素材面板
             </button>
-            <button type="button" className="note-editor__generate" disabled={!selectedCards.length || generating} onClick={generate}>生成笔记</button>
+            <button
+              type="button"
+              className="note-editor__generate"
+              disabled={!selectedCards.length || generating}
+              onClick={generate}
+            >
+              生成笔记
+            </button>
             {pickerOpen && (
               <div className="note-editor__card-picker" role="menu">
                 <header>
                   <strong>添加灵感卡片</strong>
-                  <button type="button" aria-label="关闭添加卡片" onClick={() => setPickerOpen(false)}><X size={14} /></button>
+                  <button type="button" aria-label="关闭添加卡片" onClick={() => setPickerOpen(false)}>
+                    <X size={14} />
+                  </button>
                 </header>
                 {availableCards.length
-                  ? availableCards.map((card) => <button type="button" role="menuitem" key={card.id} onClick={() => attachCard(card.id)}>{card.contentSnapshot}</button>)
+                  ? availableCards.map((card) => (
+                    <button type="button" role="menuitem" key={card.id} onClick={() => attachCard(card.id)}>
+                      {card.contentSnapshot}
+                    </button>
+                  ))
                   : <p>没有更多可添加的卡片。</p>}
               </div>
             )}
@@ -315,7 +312,13 @@ export function NoteEditor({
         )}
       </div>
       <div className="note-editor__document">
-        <input className="note-editor__title" aria-label="笔记标题" disabled={generating} value={note.title} onChange={(event) => commit({ title: event.target.value })} />
+        <input
+          className="note-editor__title"
+          aria-label="笔记标题"
+          disabled={generating}
+          value={note.title}
+          onChange={(event) => commit({ title: event.target.value })}
+        />
         {hasSections ? (
           <div className="note-editor__rich-body note-editor__rich-body--sections" aria-label="笔记正文">
             {sections.map((section, index) => (
@@ -336,22 +339,26 @@ export function NoteEditor({
             ))}
           </div>
         ) : (
-          <div
-            className="note-editor__rich-body"
-            ref={bodyRef}
-            role="textbox"
-            aria-label="笔记正文"
-            aria-multiline="true"
-            aria-disabled={generating}
-            contentEditable={!generating}
-            suppressContentEditableWarning
-            onInput={updateBody}
-            data-placeholder="开始记录你的想法…"
+          <NoteRichEditor
+            key={note.id}
+            editorRef={editorRef}
+            contentHtml={editorHtml}
+            editable={!generating}
+            placeholder="开始记录你的想法…"
+            showToolbar={false}
+            onReady={setTiptapEditor}
+            onUpdate={handleEditorUpdate}
           />
         )}
       </div>
       {isFullscreen && materialsEnabled && panelOpen && (
-        <MaterialsPanel cards={selectedCards} thoughts={note.materialThoughts || {}} onReorder={reorderCards} onThoughtChange={updateThought} onRemove={removeCard} />
+        <MaterialsPanel
+          cards={selectedCards}
+          thoughts={note.materialThoughts || {}}
+          onReorder={reorderCards}
+          onThoughtChange={updateThought}
+          onRemove={removeCard}
+        />
       )}
       {isFullscreen && materialsEnabled && revisions.length > 0 && (
         <span className="note-editor__revision" aria-live="polite">已保留生成前版本，可用撤销返回。</span>
