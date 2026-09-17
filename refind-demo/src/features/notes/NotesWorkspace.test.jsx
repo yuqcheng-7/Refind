@@ -201,13 +201,61 @@ describe('NotesWorkspace', () => {
     const originalSelection = window.getSelection;
     Object.defineProperty(window, 'getSelection', {
       configurable: true,
-      value: () => ({ toString: () => answer.content }),
+      value: () => ({
+        toString: () => answer.content,
+        isCollapsed: false,
+        rangeCount: 1,
+        getRangeAt: () => ({
+          getBoundingClientRect: () => ({
+            top: 120,
+            left: 180,
+            right: 280,
+            bottom: 140,
+            width: 100,
+            height: 20,
+          }),
+          getClientRects: () => [],
+        }),
+      }),
     });
 
     render(<AnswerActions answer={answer} onSaveCard={vi.fn()} onAddToNote={vi.fn()}><p>{answer.content}</p></AnswerActions>);
     fireEvent.mouseUp(screen.getByText(answer.content));
 
+    const menu = screen.getByRole('menu', { name: '收藏回答' });
+    expect(menu).toBeVisible();
     expect(screen.getByRole('menuitem', { name: '保存为灵感卡片' })).toBeVisible();
+    // Fixed compact width — never stretch with the selection.
+    expect(menu.style.width).toBe('168px');
+    expect(Number.parseFloat(menu.style.left)).toBeGreaterThan(100);
+    Object.defineProperty(window, 'getSelection', { configurable: true, value: originalSelection });
+  });
+
+  it('does not reopen capture menu when clicking copy while text stays selected', async () => {
+    const answer = { content: '正文中被划选的一段话。', answerMode: 'general' };
+    const originalSelection = window.getSelection;
+    Object.defineProperty(window, 'getSelection', {
+      configurable: true,
+      value: () => ({
+        toString: () => answer.content,
+        isCollapsed: false,
+        rangeCount: 1,
+        getRangeAt: () => ({
+          getBoundingClientRect: () => ({
+            top: 120, left: 180, right: 280, bottom: 140, width: 100, height: 20,
+          }),
+          getClientRects: () => [],
+        }),
+      }),
+    });
+
+    render(<AnswerActions answer={answer} onSaveCard={vi.fn()} onAddToNote={vi.fn()}><p>{answer.content}</p></AnswerActions>);
+    fireEvent.mouseUp(screen.getByText(answer.content));
+    expect(screen.getByRole('menu', { name: '收藏回答' })).toBeVisible();
+
+    await userEvent.click(screen.getByRole('button', { name: '复制回答' }));
+    expect(screen.queryByRole('menu', { name: '收藏回答' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '已复制' })).toBeVisible();
     Object.defineProperty(window, 'getSelection', { configurable: true, value: originalSelection });
   });
 

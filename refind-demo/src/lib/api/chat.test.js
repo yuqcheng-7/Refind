@@ -36,7 +36,22 @@ describe('mapChatResponseToMessage', () => {
       selectedTags: [],
       insufficient: false,
       citations: [{ order: 1, label: '增长笔记', materialId: 'mat1', excerpt: '...' }],
+      webSources: [],
     });
+  });
+
+  it('maps webSources from online answers', () => {
+    expect(mapChatResponseToMessage({
+      question: '天气',
+      response: {
+        assistantMessageId: 'a1',
+        userMessageId: 'u1',
+        conversationId: 'c1',
+        content: '晴',
+        answerMode: 'general',
+        webSources: [{ order: 1, title: '气象台', url: 'https://example.com' }],
+      },
+    }).webSources).toEqual([{ order: 1, title: '气象台', url: 'https://example.com' }]);
   });
 });
 
@@ -85,6 +100,37 @@ describe('sendChatMessage', () => {
       answer: '真实回答',
       mode: 'general',
     });
+  });
+
+  it('keeps a display question with #tags even when API content is stripped', async () => {
+    invoke.mockResolvedValue({
+      data: {
+        conversationId: 'conv-3',
+        assistantMessageId: 'assistant-2',
+        answerMode: 'rag',
+        content: '回答',
+        insufficient: false,
+        citations: [],
+      },
+      error: null,
+    });
+
+    const message = await sendChatMessage({
+      content: '#AI办公助手 是怎么做的',
+      question: '#AI办公助手 是怎么做的',
+      retrievalContent: 'AI办公助手\n是怎么做的',
+      selectedTags: ['AI办公助手'],
+      surface: 'home',
+    });
+
+    expect(invoke).toHaveBeenCalledWith('chat-message', {
+      body: expect.objectContaining({
+        content: '#AI办公助手 是怎么做的',
+        retrievalContent: 'AI办公助手\n是怎么做的',
+      }),
+    });
+    expect(message.question).toBe('#AI办公助手 是怎么做的');
+    expect(message.selectedTags).toEqual(['AI办公助手']);
   });
 
   it('throws the function error instead of creating a demo response', async () => {

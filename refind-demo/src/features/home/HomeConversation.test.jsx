@@ -79,4 +79,20 @@ describe('HomeConversation', () => {
     await userEvent.click(screen.getByRole('button', { name: '选择回答' }));
     expect(onToggleBubble).toHaveBeenCalledWith('turn-1-answer');
   });
+
+  it('opens web source urls from general answers', async () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(
+      <HomeConversation
+        messages={[{
+          ...messages[0],
+          answer: '根据最新消息…',
+          webSources: [{ order: 1, title: '气象台', url: 'https://example.com/weather' }],
+        }]}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: '来源 1：气象台' }));
+    expect(open).toHaveBeenCalledWith('https://example.com/weather', '_blank', 'noopener,noreferrer');
+    open.mockRestore();
+  });
 });

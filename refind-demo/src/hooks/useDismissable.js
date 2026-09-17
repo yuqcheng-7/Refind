@@ -8,6 +8,9 @@ export function useDismissable({ open, onClose, rootRef, triggerRef }) {
     const dismissOnOutsidePointerDown = (event) => {
       if (containsTarget(rootRef, event.target) || containsTarget(triggerRef, event.target)) return;
       onClose();
+      // Closing on pointerdown can otherwise let the same click activate controls
+      // underneath (e.g. home history items under a floating menu).
+      event.preventDefault();
     };
     const dismissOnEscape = (event) => {
       if (event.key === 'Escape') onClose();

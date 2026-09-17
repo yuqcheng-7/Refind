@@ -4,10 +4,9 @@ export function resolveAnswerMode({ surface, knowledgeBaseIds = [], tagFilters =
   return 'general';
 }
 
-/** Home + exactly one KB → knowledge history; otherwise stay on home. */
+/** Home UI always keeps home history; knowledge panel passes preferredSurface='knowledge'. */
 export function resolveChatSurface({ knowledgeBaseIds = [], preferredSurface } = {}) {
   if (preferredSurface === 'home' || preferredSurface === 'knowledge') return preferredSurface;
-  if (knowledgeBaseIds.length === 1) return 'knowledge';
   return 'home';
 }
 

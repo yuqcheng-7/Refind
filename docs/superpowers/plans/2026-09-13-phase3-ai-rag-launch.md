@@ -11,6 +11,22 @@
 **Depends on:** Phase 2 complete (`docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md`)  
 **Canonical design:** `docs/superpowers/specs/2026-09-13-phase2-3-roadmap-design.md`
 
+### Progress snapshot（2026-09-17）
+
+| 范围 | 状态 |
+| --- | --- |
+| Task 1–2：Embedding + RAG chat + 引用 UI | **已完成**（并经 A′ / LLM rewrite / 回答结构打磨） |
+| 回答可读性 + 短标题 + 追问检索 | **已完成** — 见 `2026-09-15-answer-inline-citations-design.md`、`2026-09-17-llm-query-rewrite.md` |
+| **下一执行重点：Task 3–5 笔记智能化** | **待开工**（产品确认：基于已调好的 AI 回答推进） |
+| Task 6–7：脑图（可选）+ 托管上线 | **笔记闭环后** |
+
+相关已完成切片计划：
+
+- `2026-09-16-ai-accuracy-multi-recall-rerank.md`
+- `2026-09-17-llm-query-rewrite.md`
+- `2026-09-17-home-online-qwen-search.md`
+- `2026-09-15-phase3-deepseek-summary-tags.md`
+
 ## Global Constraints
 
 - Homepage: no KB/tag → `answer_mode=general` (DeepSeek; online switch honored). Any KB or tag → force offline + strict RAG.
@@ -323,5 +339,5 @@ npm run build
 - Phase 2 non-goals correctly become Phase 3 goals.
 - Note content shape matches prototype (`sections` + `cardId`) for citation hover.
 - Secrets stay server-side; Vite only gets anon key + URL + parser URL.
-- V1.5 items (rerank, batch tags, MediaCrawler / 匿名网页抽取质量深化) explicitly out of this plan.
+- V1.5 items（批量打标、解析质量深化）仍显式不在本计划；**混合检索 + rerank 已由 A′ 切片落地**（`2026-09-16-ai-accuracy-multi-recall-rerank`），本计划 Task 1–2 的单路 RAG 已被 A′ 管线取代。
 - `*.vercel.app` 国内可达性风险与托管解析已写入 Step 2 / 2b。

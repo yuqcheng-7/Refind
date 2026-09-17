@@ -14,6 +14,7 @@ vi.mock('../supabaseClient.js', () => ({
 
 import {
   createConversation,
+  CONVERSATION_HISTORY_RETENTION_DAYS,
   groupConversationsByDay,
   groupLabelForDate,
   isPlaceholderTitle,
@@ -23,11 +24,14 @@ import {
 } from './conversations.js';
 
 describe('groupLabelForDate', () => {
-  it('labels today and yesterday', () => {
-    expect(groupLabelForDate(new Date())).toBe('今天');
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    expect(groupLabelForDate(yesterday)).toBe('昨天');
+  it('labels today, yesterday, and older days as YYYY年M月D日', () => {
+    const now = new Date('2026-09-17T12:00:00');
+    expect(groupLabelForDate(now, now)).toBe('今天');
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    expect(groupLabelForDate(yesterday, now)).toBe('昨天');
+    expect(groupLabelForDate(new Date('2026-03-15T08:00:00'), now)).toBe('2026年3月15日');
+    expect(groupLabelForDate(new Date('2025-12-01T08:00:00'), now)).toBe('2025年12月1日');
   });
 });
 
@@ -108,15 +112,28 @@ describe('createConversation', () => {
 });
 
 describe('groupConversationsByDay', () => {
-  it('groups conversations into ordered buckets', () => {
-    const today = new Date().toISOString();
-    const older = new Date('2020-01-01').toISOString();
+  it('groups by today/yesterday/YYYY年M月D日 and drops outside retention', () => {
+    const now = new Date('2026-09-17T12:00:00');
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const older = new Date('2026-08-01T10:00:00');
+    const expired = new Date(now);
+    expired.setDate(now.getDate() - (CONVERSATION_HISTORY_RETENTION_DAYS + 5));
+
     const groups = groupConversationsByDay([
-      { id: '1', title: 'A', updatedAt: today },
-      { id: '2', title: 'B', updatedAt: older },
+      { id: '1', title: 'A', updatedAt: now.toISOString() },
+      { id: '2', title: 'B', updatedAt: older.toISOString() },
+      { id: '3', title: 'C', updatedAt: yesterday.toISOString() },
+      { id: '4', title: 'D', updatedAt: expired.toISOString() },
+    ], now);
+
+    expect(groups.map((group) => group.label)).toEqual([
+      '今天',
+      '昨天',
+      '2026年8月1日',
     ]);
-    expect(groups.map((group) => group.label)).toEqual(['今天', '更早']);
     expect(groups[0].items).toHaveLength(1);
+    expect(groups.find((group) => group.label === '2026年8月1日')?.items[0].id).toBe('2');
   });
 });
 
@@ -142,7 +159,34 @@ describe('pairChatTurns', () => {
       question: '问题一',
       answer: '回答一[1]',
       citations: [{ order: 1, label: '资料A', materialId: 'mat-1', excerpt: '摘录' }],
+      webSources: [],
     });
+  });
+
+  it('pairs web_sources from assistant messages', () => {
+    const turns = pairChatTurns([
+      { id: 'u1', role: 'user', content: '天气' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '晴',
+        answer_mode: 'general',
+        web_sources: [{ order: 1, title: '气象台', url: 'https://example.com' }],
+      },
+    ], {});
+
+    expect(turns[0].webSources).toEqual([
+      { order: 1, title: '气象台', url: 'https://example.com' },
+    ]);
+  });
+
+  it('restores #tags on loaded user turns for bubble display', () => {
+    const turns = pairChatTurns([
+      { id: 'u1', role: 'user', content: '#AI办公助手 是怎么做的', answer_mode: 'rag' },
+      { id: 'a1', role: 'assistant', content: '暂无相关资料', answer_mode: 'rag', is_insufficient: true },
+    ], {});
+    expect(turns[0].question).toBe('#AI办公助手 是怎么做的');
+    expect(turns[0].selectedTags).toEqual(['AI办公助手']);
   });
 });
 

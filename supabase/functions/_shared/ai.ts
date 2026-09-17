@@ -1,4 +1,7 @@
 const EMBED_DIM = 1024;
+const RERANK_MODEL = 'qwen3-rerank';
+/** Soft char budget per document (~safe under 4k tokens for mixed CN/EN). */
+const RERANK_DOC_CHAR_LIMIT = 2800;
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   const key = Deno.env.get('DASHSCOPE_API_KEY');
@@ -27,6 +30,56 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   return batches;
 }
 
+export type RerankHit = { index: number; relevance_score: number };
+
+function clipForRerank(text: string) {
+  const value = String(text || '');
+  if (value.length <= RERANK_DOC_CHAR_LIMIT) return value;
+  return `${value.slice(0, RERANK_DOC_CHAR_LIMIT)}…`;
+}
+
+/**
+ * Bailian text rerank (qwen3-rerank). Returns results sorted by relevance_score desc.
+ * Each result.index points into the input documents array.
+ */
+export async function rerankDocuments(
+  query: string,
+  documents: string[],
+  opts: { topN?: number } = {},
+): Promise<RerankHit[]> {
+  const key = Deno.env.get('DASHSCOPE_API_KEY');
+  if (!key) throw new Error('DASHSCOPE_API_KEY missing');
+  const docs = (documents || []).map(clipForRerank).filter((item) => item.trim());
+  if (!docs.length) return [];
+
+  const topN = Math.max(1, Math.min(opts.topN ?? docs.length, docs.length));
+  const res = await fetch('https://dashscope.aliyuncs.com/compatible-api/v1/reranks', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: RERANK_MODEL,
+      query: String(query || '').slice(0, RERANK_DOC_CHAR_LIMIT),
+      documents: docs,
+      top_n: topN,
+      instruct: 'Given a web search query, retrieve relevant passages that answer the query.',
+    }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) throw new Error(`rerank failed: ${res.status} ${await res.text()}`);
+  const json = await res.json();
+  const results = Array.isArray(json?.results) ? json.results : [];
+  return results
+    .map((row: { index?: number; relevance_score?: number }) => ({
+      index: Number(row.index),
+      relevance_score: Number(row.relevance_score) || 0,
+    }))
+    .filter((row: RerankHit) => Number.isInteger(row.index) && row.index >= 0 && row.index < docs.length)
+    .sort((a: RerankHit, b: RerankHit) => b.relevance_score - a.relevance_score);
+}
+
 /** Map logical DeepSeek modes to Bailian OpenAI-compatible model ids (more reliable from CN/Edge). */
 function bailianChatModel(model: 'deepseek-chat' | 'deepseek-reasoner') {
   return model === 'deepseek-reasoner' ? 'deepseek-r1' : 'deepseek-v3.2';
@@ -52,6 +105,74 @@ async function chatCompletions(
   const content = json?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error(`${label} returned empty content`);
+  }
+  return content;
+}
+
+const REWRITE_SYSTEM = `你是检索 query 改写器。只输出 JSON，不要回答用户问题。
+格式：{"queries":["完整检索句"],"is_followup":true或false}
+规则：
+- queries 1～2 条；每条必须是可独立检索的完整中文问句，禁止无主题短句（如单独「具体是什么」）。
+- 追问/指代/展开：is_followup=true，并把实体还原进 query。
+- 独立新问：is_followup=false，query 接近用户原句（可轻微规范化）。
+- 只能重组对话里已出现的实体与主题，禁止编造。`;
+
+/**
+ * Lightweight LLM query rewrite. Aborts the upstream DashScope request on timeout.
+ */
+export async function rewriteQueriesWithLlm(
+  input: {
+    current: string;
+    recent_user?: string[];
+    recent_assistant?: string;
+  },
+  opts: { timeoutMs?: number; model?: string } = {},
+): Promise<string> {
+  const key = Deno.env.get('DASHSCOPE_API_KEY');
+  if (!key) throw new Error('DASHSCOPE_API_KEY missing');
+
+  const timeoutMs = Number(
+    opts.timeoutMs
+      ?? Deno.env.get('RAG_REWRITE_TIMEOUT_MS')
+      ?? 800,
+  );
+  const model = String(
+    opts.model
+      || Deno.env.get('RAG_REWRITE_MODEL')
+      || 'qwen-turbo',
+  );
+
+  const userPayload = {
+    current: input?.current || '',
+    recent_user: Array.isArray(input?.recent_user) ? input.recent_user : [],
+    ...(input?.recent_assistant ? { recent_assistant: input.recent_assistant } : {}),
+  };
+
+  const res = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      max_tokens: 256,
+      messages: [
+        { role: 'system', content: REWRITE_SYSTEM },
+        { role: 'user', content: JSON.stringify(userPayload) },
+      ],
+    }),
+    signal: AbortSignal.timeout(Math.max(100, timeoutMs)),
+  });
+
+  if (!res.ok) {
+    throw new Error(`rewrite failed: ${res.status} ${await res.text()}`);
+  }
+  const json = await res.json();
+  const content = json?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('rewrite failed: empty content');
   }
   return content;
 }

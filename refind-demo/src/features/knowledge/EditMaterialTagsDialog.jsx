@@ -74,6 +74,9 @@ export function EditMaterialTagsDialog({
             <X size={17} />
           </button>
         </header>
+        <p className="material-tag-editor__hint">
+          保存后将锁定标签：之后「重新解析」只会更新摘要，不会覆盖你改过的标签。未手改时，重新解析可能会换成新的 AI 标签。
+        </p>
         <div className="material-tag-editor">
           <div className="material-tag-editor__chips" aria-label="已选标签">
             {tags.map((tag) => (

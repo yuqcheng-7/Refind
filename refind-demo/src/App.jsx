@@ -14,11 +14,12 @@ import { MoveMaterialDialog } from './features/knowledge/MoveMaterialDialog.jsx'
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
 import { getMaterialPreviewUrl } from './features/knowledge/materialDemo.js';
 import { useDismissable } from './hooks/useDismissable.js';
+import { ComposerTagSuggest } from './features/chat/ComposerTagSuggest.jsx';
 import { AuthScreen } from './features/auth/AuthScreen.jsx';
 import { deleteAccount, getSession, signOut } from './lib/api/auth.js';
 import { createKnowledgeBase, filterKnowledgeBaseNames, listKnowledgeBases } from './lib/api/knowledge.js';
 import { createMaterialStub, deleteMaterial, getMaterialById, listMaterials, listMaterialTags, moveMaterial, replaceMaterialTags, formatMaterialTitle, formatMaterialTypeLabel, inferPlatformFromUrl } from './lib/api/materials.js';
-import { resolveTagFilterIds } from './lib/api/tagFilters.js';
+import { buildRagAskText, extractTagNamesFromPrompt, formatDisplayAskPrompt, matchHashTagQuery, mergeSelectedTagNames, pruneSelectedTagNames, replaceHashTagToken, resolveTagFilterIds } from './lib/api/tagFilters.js';
 import { isHttpUrlLike } from './lib/extractUrlFromPaste.js';
 import { inferMaterialInputType, parseAndPollMaterial, uploadMaterialFile } from './lib/api/ingest.js';
 import {
@@ -38,6 +39,7 @@ import {
   deleteChatMessages,
   deleteConversation,
   groupConversationsByDay,
+  isPlaceholderTitle,
   listConversations,
   loadConversationTurns,
   renameConversation,
@@ -119,19 +121,25 @@ function Composer({ base, bases, availableTags = [], onBase, onSubmit, compact =
   const [modelMenu, setModelMenu] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
   const [tagQuery, setTagQuery] = useState('');
+  const [hashCaret, setHashCaret] = useState(0);
   const [selectedTags, setSelectedTags] = useState([]);
   const baseMenuRef = useRef(null);
   const modelMenuRef = useRef(null);
   const tagMenuRef = useRef(null);
+  const tagAnchorRef = useRef(null);
+  const textareaRef = useRef(null);
+  const caretRef = useRef(0);
   const tagNames = availableTags.map((tag) => tag.name);
   const filteredTags = tagNames.filter((item) => !tagQuery || item.includes(tagQuery));
   const selectedModel = thinkingMode === 'deep' ? 'DS深度' : 'DS快速';
-  const syncHashMenu = (value) => {
+  const syncHashMenu = (value, caret = value.length) => {
     if (!compact) return;
-    const match = /(^|\s)#([^\s#]*)$/.exec(value);
+    caretRef.current = caret;
+    const match = matchHashTagQuery(value, caret);
     if (match) {
       setTagMenu(true);
-      setTagQuery(match[2] || '');
+      setTagQuery(match.query || '');
+      setHashCaret(match.start);
       return;
     }
     setTagMenu(false);
@@ -143,27 +151,36 @@ function Composer({ base, bases, availableTags = [], onBase, onSubmit, compact =
       removing ? current.filter((item) => item !== tag) : [...current, tag]
     ));
     setPrompt((value) => {
+      const caret = caretRef.current;
       if (removing) {
         const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return value
-          .replace(/(^|\s)#[^\s#]*$/, '$1')
-          .replace(new RegExp(`(^|\\s)#${escaped}(?=\\s|$)`, 'g'), '$1')
+        const withoutActive = replaceHashTagToken(value, tag, caret, { remove: true });
+        return withoutActive
+          .replace(new RegExp(`#${escaped}(?=\\s|$)`, 'g'), '')
           .replace(/[ \t]{2,}/g, ' ')
           .trim();
       }
-      return value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `);
+      const next = replaceHashTagToken(value, tag, caret);
+      caretRef.current = next.length;
+      return next;
     });
     setTagMenu(false);
     setTagQuery('');
   };
   useDismissable({ open: menu, onClose: () => setMenu(false), rootRef: baseMenuRef });
   useDismissable({ open: modelMenu, onClose: () => setModelMenu(false), rootRef: modelMenuRef });
-  useDismissable({ open: tagMenu, onClose: () => setTagMenu(false), rootRef: tagMenuRef });
+  useDismissable({
+    open: tagMenu,
+    onClose: () => setTagMenu(false),
+    rootRef: tagMenuRef,
+    triggerRef: tagAnchorRef,
+  });
   const send = (event) => {
     event.preventDefault();
     if (!prompt.trim()) return;
     onSubmit({ prompt, thinkingMode, selectedTags: [...selectedTags] });
     setPrompt('');
+    caretRef.current = 0;
     setSelectedTags([]);
     setMenu(false);
     setModelMenu(false);
@@ -177,32 +194,39 @@ function Composer({ base, bases, availableTags = [], onBase, onSubmit, compact =
   };
   return <form className={`question-composer ${compact ? 'is-compact' : ''} ${prompt.trim() ? 'has-content' : ''}`} onSubmit={send}>
     {compact && <span className="beam-main" aria-hidden="true" />}
-    <div className="composer-input-wrap" ref={tagMenuRef}>
+    <div className="composer-input-wrap" ref={tagAnchorRef}>
       <textarea
+        ref={textareaRef}
         value={prompt}
         onChange={(event) => {
           const value = event.target.value;
+          const caret = event.target.selectionStart ?? value.length;
           setPrompt(value);
-          syncHashMenu(value);
+          syncHashMenu(value, caret);
+        }}
+        onSelect={(event) => {
+          if (!compact) return;
+          syncHashMenu(event.target.value, event.target.selectionStart ?? event.target.value.length);
+        }}
+        onClick={(event) => {
+          if (!compact) return;
+          syncHashMenu(event.target.value, event.target.selectionStart ?? event.target.value.length);
         }}
         onKeyDown={onPromptKeyDown}
         placeholder={compact ? '基于当前知识库提问，输入 # 可选择标签' : '请输入内容进行提问'}
       />
-      {compact && tagMenu && (
-        <div className="composer-menu composer-tag-suggest" role="listbox" aria-label="选择标签">
-          {filteredTags.length ? filteredTags.map((item) => (
-            <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
-              <span className="tag-text">
-                <span className="tag-hash" aria-hidden="true">#</span>
-                <span className="tag-label">{item}</span>
-              </span>
-              {selectedTags.includes(item) && <Check size={15} />}
-            </button>
-          )) : (
-            <div className="composer-tag-suggest__empty">暂无标签</div>
-          )}
-        </div>
-      )}
+      {compact ? (
+        <ComposerTagSuggest
+          open={tagMenu}
+          anchorRef={tagAnchorRef}
+          textareaRef={textareaRef}
+          caretIndex={hashCaret}
+          menuRef={tagMenuRef}
+          tags={filteredTags}
+          selectedTags={selectedTags}
+          onPick={insertTag}
+        />
+      ) : null}
     </div>
     <div className="composer-footer">
       <div className="composer-actions">
@@ -291,14 +315,15 @@ export function App() {
   const [kbConversationId, setKbConversationId] = useState(null);
   const [kbConversations, setKbConversations] = useState([]);
   const [homeScope, setHomeScope] = useState(initialHomeScope);
-  const [conversationScope, setConversationScope] = useState(null);
-  useEffect(() => {
-    if (!homeScope.selectedBases.length && !homeScope.selectedTags.length) {
-      setConversationScope(null);
-    }
-  }, [homeScope.selectedBases, homeScope.selectedTags]);
   const [knowledgeMaterials, setKnowledgeMaterials] = useState([]);
   const materialsListFetchGenRef = useRef(0);
+  const kbThreadLoadGenRef = useRef(0);
+  const kbConversationIdRef = useRef(null);
+  const kbThreadKbIdRef = useRef(null);
+  const homeThreadLoadGenRef = useRef(0);
+  useEffect(() => {
+    kbConversationIdRef.current = kbConversationId;
+  }, [kbConversationId]);
   const [homeTagOptions, setHomeTagOptions] = useState([]);
   const [kbTagOptions, setKbTagOptions] = useState([]);
   const [hoveredMaterialId, setHoveredMaterialId] = useState(null);
@@ -414,21 +439,86 @@ export function App() {
   };
   useEffect(() => {
     refreshHomeConversations();
-  }, [session]);
+  }, [session?.user?.id]);
+  // Load KB conversation list when the signed-in user or selected knowledge base changes.
+  // IMPORTANT: depend on session.user.id (not the whole session object) — token refresh
+  // otherwise re-runs this effect and forcibly jumps back to the latest history thread.
   useEffect(() => {
-    refreshKbConversations();
-  }, [session, selectedKnowledgeBase?.id]);
-  useEffect(() => {
+    let active = true;
+    const loadGen = ++kbThreadLoadGenRef.current;
+    const kbId = selectedKnowledgeBase?.id ?? null;
+    const userId = session?.user?.id ?? null;
+    const kbChanged = kbThreadKbIdRef.current !== kbId;
+    kbThreadKbIdRef.current = kbId;
+
     setKbShareMode(false);
     setKbShareSelected([]);
     setKbDeleteMode(false);
     setKbDeleteSelected([]);
-    setKbConversationId(null);
-    setKbMessages([]);
     setHistoryOpen(false);
     setKbHistoryMenu(null);
     setKbRenameDraft(null);
-  }, [selectedKnowledgeBase?.id]);
+
+    // Only reset the visible thread when switching knowledge bases (or signing out).
+    if (kbChanged) {
+      setKbConversationId(null);
+      kbConversationIdRef.current = null;
+      setKbMessages([]);
+    }
+
+    (async () => {
+      if (!userId || !kbId) {
+        setKbConversations([]);
+        if (kbChanged) {
+          setKbConversationId(null);
+          kbConversationIdRef.current = null;
+          setKbMessages([]);
+        }
+        return;
+      }
+      try {
+        const items = await listConversations({
+          surface: 'knowledge',
+          knowledgeBaseId: kbId,
+        });
+        if (!active || loadGen !== kbThreadLoadGenRef.current) return;
+        setKbConversations(items);
+
+        const currentId = kbConversationIdRef.current;
+        const canKeep = Boolean(currentId && items.some((item) => item.id === currentId));
+        // Same KB + still-valid thread: refresh the history list only.
+        if (!kbChanged && canKeep) return;
+
+        const targetId = (kbChanged || !canKeep) ? (items[0]?.id || null) : currentId;
+        if (!targetId) {
+          setKbConversationId(null);
+          kbConversationIdRef.current = null;
+          setKbMessages([]);
+          return;
+        }
+        setKbConversationId(targetId);
+        kbConversationIdRef.current = targetId;
+        try {
+          const turns = await loadConversationTurns(targetId);
+          if (!active || loadGen !== kbThreadLoadGenRef.current) return;
+          setKbMessages(turns);
+        } catch {
+          if (!active || loadGen !== kbThreadLoadGenRef.current) return;
+          say('会话加载失败，请稍后重试。');
+          setKbMessages([]);
+        }
+      } catch {
+        if (!active || loadGen !== kbThreadLoadGenRef.current) return;
+        setKbConversations([]);
+        if (kbChanged) {
+          setKbConversationId(null);
+          kbConversationIdRef.current = null;
+          setKbMessages([]);
+        }
+      }
+    })();
+    return () => { active = false; };
+  }, [session?.user?.id, selectedKnowledgeBase?.id]);
   useEffect(() => {
     if (!session || !selectedKnowledgeBase) {
       setKnowledgeMaterials([]);
@@ -458,7 +548,7 @@ export function App() {
         say('资料暂时无法加载，请稍后重试。');
       });
     return () => { active = false; };
-  }, [session, selectedKnowledgeBase, query, source]);
+  }, [session?.user?.id, selectedKnowledgeBase?.id, query, source]);
   useEffect(() => {
     if (!session) {
       setHomeTagOptions([]);
@@ -470,6 +560,18 @@ export function App() {
       .catch(() => { if (active) setHomeTagOptions([]); });
     return () => { active = false; };
   }, [session, knowledgeMaterials]);
+  useEffect(() => {
+    setHomeScope((current) => {
+      const nextTags = pruneSelectedTagNames(current.selectedTags, homeTagOptions);
+      if (nextTags.length === current.selectedTags.length
+        && nextTags.every((name, index) => name === current.selectedTags[index])) {
+        return current;
+      }
+      const next = { ...current, selectedTags: nextTags };
+      const scoped = next.selectedBases.length > 0 || next.selectedTags.length > 0;
+      return scoped ? { ...next, online: false, modelId: next.lastDeepSeekModelId || 'ds-fast' } : next;
+    });
+  }, [homeTagOptions]);
   useEffect(() => {
     if (!selectedKnowledgeBase?.id) {
       setKbTagOptions([]);
@@ -658,8 +760,8 @@ export function App() {
   // otherwise every hero→chat visit (and leftover drafts on refresh) pollutes history.
   const enterFreshHomeChatShell = () => {
     exitHomeShare();
+    homeThreadLoadGenRef.current += 1;
     setHomeScope(initialHomeScope);
-    setConversationScope(null);
     setHomeThreadSurface('home');
     setHomeThreadKnowledgeBaseId(null);
     setHomeChatOpened(true);
@@ -671,17 +773,19 @@ export function App() {
   };
   const openHomeConversation = async (conversationId) => {
     exitHomeShare();
+    const loadGen = ++homeThreadLoadGenRef.current;
     setHomeConversationId(conversationId);
     setHomeThreadSurface('home');
     setHomeThreadKnowledgeBaseId(null);
     setHomeChatOpened(true);
     setHomeNavUnlocked(true);
     setHomeSurface('chat');
-    setConversationScope(null);
     try {
       const turns = await loadConversationTurns(conversationId);
+      if (loadGen !== homeThreadLoadGenRef.current) return;
       setHomeMessages(turns);
     } catch {
+      if (loadGen !== homeThreadLoadGenRef.current) return;
       say('会话加载失败，请稍后重试。');
       setHomeMessages([]);
     }
@@ -695,12 +799,49 @@ export function App() {
     setHomeHistoryOpen(true);
     void openHomeConversation(latest.id);
   };
+  const promoteHomeConversation = (conversation, { title } = {}) => {
+    if (!conversation?.id) return;
+    const now = new Date().toISOString();
+    const nextTitle = String(title || '').trim().slice(0, 60);
+    setHomeConversations((items) => {
+      const existing = items.find((item) => item.id === conversation.id);
+      const titleForItem = nextTitle && (!existing || isPlaceholderTitle(existing.title))
+        ? nextTitle
+        : (existing?.title || conversation.title || nextTitle || '新会话');
+      const next = {
+        id: conversation.id,
+        title: titleForItem,
+        updatedAt: now,
+        createdAt: existing?.createdAt || conversation.createdAt || now,
+      };
+      return [next, ...items.filter((item) => item.id !== conversation.id)];
+    });
+    setHomeHistoryOpen(true);
+  };
+  const promoteKbConversation = (conversation, { title } = {}) => {
+    if (!conversation?.id) return;
+    const now = new Date().toISOString();
+    const nextTitle = String(title || '').trim().slice(0, 60);
+    setKbConversations((items) => {
+      const existing = items.find((item) => item.id === conversation.id);
+      const titleForItem = nextTitle && (!existing || isPlaceholderTitle(existing.title))
+        ? nextTitle
+        : (existing?.title || conversation.title || nextTitle || '新会话');
+      const next = {
+        id: conversation.id,
+        title: titleForItem,
+        updatedAt: now,
+        createdAt: existing?.createdAt || conversation.createdAt || now,
+      };
+      return [next, ...items.filter((item) => item.id !== conversation.id)];
+    });
+  };
   const startNewHomeChat = async () => {
     enterFreshHomeChatShell();
     try {
       const created = await createConversation({ surface: 'home' });
       setHomeConversationId(created.id);
-      setHomeConversations((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+      promoteHomeConversation(created);
     } catch {
       setHomeConversationId(null);
       say('创建会话失败，请稍后重试。');
@@ -732,44 +873,55 @@ export function App() {
     || bases[0]
     || ''
   );
-  const openKnowledgeBase = (name) => {
-    const next = name || firstKnowledgeBaseName();
-    if (next) setBase(next);
-    switchNav('知识库');
-  };
-  const startNewKbChat = async () => {
+  const startNewKbChat = () => {
     exitKbShare();
     setHistoryOpen(false);
+    // Invalidate any in-flight open/load so an older reply cannot overwrite this blank thread.
+    kbThreadLoadGenRef.current += 1;
     if (!selectedKnowledgeBase) {
       setKbConversationId(null);
       setKbMessages([]);
       say('请先选择一个知识库。');
       return;
     }
-
+    // Local blank draft only — create the DB row on first send (avoids empty「新会话」spam + list lag).
+    setKbConversationId(null);
     setKbMessages([]);
-    try {
-      const created = await createConversation({
-        surface: 'knowledge',
-        knowledgeBaseId: selectedKnowledgeBase.id,
-      });
-      setKbConversationId(created.id);
-      setKbConversations((items) => [created, ...items.filter((item) => item.id !== created.id)]);
-    } catch {
-      setKbConversationId(null);
-      say('创建会话失败，请稍后重试。');
-    }
   };
   const openKbConversation = async (conversationId) => {
     exitKbBubbleSelect();
+    const loadGen = ++kbThreadLoadGenRef.current;
     setKbConversationId(conversationId);
     setHistoryOpen(false);
     try {
       const turns = await loadConversationTurns(conversationId);
+      if (loadGen !== kbThreadLoadGenRef.current) return;
       setKbMessages(turns);
     } catch {
+      if (loadGen !== kbThreadLoadGenRef.current) return;
       say('会话加载失败，请稍后重试。');
       setKbMessages([]);
+    }
+  };
+  const openLatestKbConversation = () => {
+    const latest = kbConversations[0];
+    if (!latest) {
+      kbThreadLoadGenRef.current += 1;
+      setKbConversationId(null);
+      setKbMessages([]);
+      return;
+    }
+    void openKbConversation(latest.id);
+  };
+  const openKnowledgeBase = (name) => {
+    const next = name || firstKnowledgeBaseName();
+    const sameBase = Boolean(next) && next === base;
+    if (next) setBase(next);
+    switchNav('知识库');
+    // Re-entering the same KB must keep the current thread. Only fall back to latest
+    // when there is no active conversation (switching KB is handled by the load effect).
+    if (sameBase && !kbConversationId) {
+      openLatestKbConversation();
     }
   };
   const renameHomeConversation = async (conversationId, title) => {
@@ -835,7 +987,6 @@ export function App() {
     // starts fresh; old conversations remain in the history list.
     setHomeMessages([]);
     setHomeConversationId(null);
-    setConversationScope(null);
     setHomeScope(initialHomeScope);
     setHomeThreadSurface('home');
     setHomeThreadKnowledgeBaseId(null);
@@ -900,60 +1051,94 @@ export function App() {
         }
       }
     }
-    const scope = request.replaceMessageId || !conversationScope
-      ? {
-        bases: request.selectedBases || [],
-        tags: request.selectedTags || [],
-        mode: request.mode,
-        online: request.online,
-      }
-      : conversationScope;
+    const selectedBases = request.selectedBases || [];
+    const selectedTags = mergeSelectedTagNames(
+      request.selectedTags || [],
+      extractTagNamesFromPrompt(request.prompt, homeTagOptions),
+    );
+    const hasScope = selectedBases.length > 0 || selectedTags.length > 0;
+    // Each turn follows the current composer selection (same as KB panel),
+    // so switching into a knowledge base mid-thread re-enters RAG.
+    const scope = {
+      bases: selectedBases,
+      tags: selectedTags,
+      mode: hasScope ? 'rag' : (request.mode || 'general'),
+      online: hasScope ? false : Boolean(request.online),
+    };
+    const displayQuestion = formatDisplayAskPrompt(request.prompt, scope.tags);
     const pendingId = `pending-home-${Date.now()}-${crypto.randomUUID()}`;
     const pendingMessage = {
       id: pendingId,
-      question: request.prompt,
+      question: displayQuestion,
       mode: scope.mode,
       online: scope.online,
       selectedBases: [...scope.bases],
       selectedTags: [...scope.tags],
       citations: [],
+      pending: true,
     };
-    setConversationScope(scope);
     setHomeChatOpened(true);
     setHomeNavUnlocked(true);
     setHomeSurface('chat');
     setHomeMessages((all) => [...all, pendingMessage]);
     try {
       const selectedBaseNames = new Set(scope.bases);
-      let knowledgeBaseIds = knowledgeBases
+      const knowledgeBaseIds = knowledgeBases
         .filter((item) => selectedBaseNames.has(item.name))
         .map((item) => item.id);
+      if (scope.bases.length > 0 && knowledgeBaseIds.length === 0) {
+        throw new Error('知识库尚未就绪，请稍后重试。');
+      }
+      const tagFilters = resolveTagFilterIds(scope.tags, homeTagOptions);
+      if (scope.tags.length > 0 && tagFilters.length === 0) {
+        throw new Error('所选标签已失效（可能因资料重新解析而更新），请重新输入 # 选择标签。');
+      }
+      const askText = buildRagAskText(request.prompt, scope.tags);
+      if (!askText) {
+        throw new Error('请输入要提问的内容。');
+      }
       const surface = resolveChatSurface({
         knowledgeBaseIds,
-        preferredSurface: homeConversationId && priorCount > 0
-          ? homeThreadSurface
-          : undefined,
+        // Home composer always writes home history so the left history card stays in sync.
+        preferredSurface: 'home',
       });
-      if (surface === 'knowledge' && !knowledgeBaseIds.length && homeThreadKnowledgeBaseId) {
-        knowledgeBaseIds = [homeThreadKnowledgeBaseId];
+      // Ensure a home-history row exists before the slow chat-message round-trip.
+      let conversationId = homeConversationId;
+      const promptTitle = askText.slice(0, 60);
+      if (!conversationId) {
+        try {
+          const created = await createConversation({ surface: 'home', title: promptTitle });
+          conversationId = created.id;
+          setHomeConversationId(created.id);
+          promoteHomeConversation(created, { title: promptTitle });
+        } catch {
+          // Fall through: server may still create the conversation on send.
+        }
+      } else {
+        promoteHomeConversation({ id: conversationId }, { title: promptTitle });
       }
       const message = await sendChatMessage({
-        content: request.prompt,
+        content: displayQuestion,
+        question: displayQuestion,
+        retrievalContent: askText,
         thinkingMode: request.thinkingMode || 'fast',
+        modelId: request.modelId || (request.thinkingMode === 'deep' ? 'ds-deep' : 'ds-fast'),
         onlineEnabled: scope.online,
         knowledgeBaseIds,
-        tagFilters: resolveTagFilterIds(scope.tags, homeTagOptions),
+        tagFilters,
         surface,
-        conversationId: homeConversationId,
+        conversationId,
         selectedBases: scope.bases,
         selectedTags: scope.tags,
       });
       setHomeMessages((all) => all.map((item) => item.id === pendingId ? message : item));
-      if (message.conversationId) setHomeConversationId(message.conversationId);
-      setHomeThreadSurface(surface);
-      setHomeThreadKnowledgeBaseId(surface === 'knowledge' ? (knowledgeBaseIds[0] || null) : null);
-      await refreshHomeConversations();
-      await refreshKbConversations();
+      if (message.conversationId) {
+        setHomeConversationId(message.conversationId);
+        promoteHomeConversation({ id: message.conversationId }, { title: promptTitle });
+      }
+      setHomeThreadSurface('home');
+      setHomeThreadKnowledgeBaseId(knowledgeBaseIds.length === 1 ? knowledgeBaseIds[0] : null);
+      void refreshHomeConversations();
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'AI 回答生成失败，请稍后重试。';
       setHomeMessages((all) => all.map((item) => (
@@ -979,7 +1164,10 @@ export function App() {
   const submitKbQuestion = async (request) => {
     const question = typeof request === 'string' ? request : request.prompt;
     const thinkingMode = typeof request === 'string' ? 'fast' : request.thinkingMode;
-    const selectedTags = typeof request === 'string' ? [] : (request.selectedTags || []);
+    const selectedTags = mergeSelectedTagNames(
+      typeof request === 'string' ? [] : (request.selectedTags || []),
+      extractTagNamesFromPrompt(question, kbTagOptions),
+    );
     const replaceMessageId = typeof request === 'string' ? undefined : request.replaceMessageId;
     if (replaceMessageId) {
       const index = kbMessages.findIndex((item) => item.id === replaceMessageId);
@@ -995,33 +1183,71 @@ export function App() {
       }
     }
     const scope = { bases: [base], tags: selectedTags, mode: 'rag', online: false };
+    const displayQuestion = formatDisplayAskPrompt(question, selectedTags);
     const pendingId = `pending-kb-${Date.now()}-${crypto.randomUUID()}`;
     const pendingMessage = {
       id: pendingId,
-      question,
+      question: displayQuestion,
       mode: scope.mode,
       online: scope.online,
       selectedBases: scope.bases,
       selectedTags: [...scope.tags],
       citations: [],
+      pending: true,
     };
     setKbMessages((all) => [...all, pendingMessage]);
+    const submitGen = kbThreadLoadGenRef.current;
+    const submitConversationId = kbConversationId;
     try {
+      let conversationId = submitConversationId;
+      const promptTitle = String(displayQuestion || '').trim().slice(0, 60);
+      if (!conversationId && selectedKnowledgeBase?.id) {
+        try {
+          const created = await createConversation({
+            surface: 'knowledge',
+            knowledgeBaseId: selectedKnowledgeBase.id,
+            title: promptTitle,
+          });
+          if (submitGen !== kbThreadLoadGenRef.current) return;
+          conversationId = created.id;
+          setKbConversationId(created.id);
+          promoteKbConversation(created, { title: promptTitle });
+        } catch {
+          // Fall through: server may still create the conversation on send.
+        }
+      } else if (conversationId) {
+        promoteKbConversation({ id: conversationId }, { title: promptTitle });
+      }
+      const tagFilters = resolveTagFilterIds(selectedTags, kbTagOptions);
+      if (selectedTags.length > 0 && tagFilters.length === 0) {
+        throw new Error('所选标签已失效（可能因资料重新解析而更新），请重新输入 # 选择标签。');
+      }
+      const askText = buildRagAskText(question, selectedTags);
+      if (!askText) {
+        throw new Error('请输入要提问的内容。');
+      }
       const message = await sendChatMessage({
-        content: question,
+        content: displayQuestion,
+        question: displayQuestion,
+        retrievalContent: askText,
         thinkingMode: thinkingMode || 'fast',
         onlineEnabled: false,
         knowledgeBaseIds: selectedKnowledgeBase ? [selectedKnowledgeBase.id] : [],
-        tagFilters: resolveTagFilterIds(selectedTags, kbTagOptions),
+        tagFilters,
         surface: 'knowledge',
-        conversationId: kbConversationId,
+        conversationId,
         selectedBases: scope.bases,
         selectedTags,
       });
+      if (submitGen !== kbThreadLoadGenRef.current) return;
       setKbMessages((all) => all.map((item) => item.id === pendingId ? message : item));
-      if (message.conversationId) setKbConversationId(message.conversationId);
-      refreshKbConversations();
+      if (message.conversationId) {
+        setKbConversationId(message.conversationId);
+        promoteKbConversation({ id: message.conversationId }, { title: askText.slice(0, 60) });
+      }
+      void refreshKbConversations();
     } catch (error) {
+      if (submitGen !== kbThreadLoadGenRef.current) return;
       const detail = error instanceof Error ? error.message : 'AI 回答生成失败，请稍后重试。';
       setKbMessages((all) => all.map((item) => (
         item.id === pendingId
@@ -1623,57 +1849,62 @@ export function App() {
                 {historyOpen && (
                   <div className="history-popover" role="menu" aria-label="会话历史">
                     <strong>会话历史</strong>
-                    {groupConversationsByDay(kbConversations).map((group) => (
-                      group.items.map((item) => (
-                        kbRenameDraft?.id === item.id ? (
-                          <div key={item.id} className="is-renaming" role="menuitem">
-                            <input
-                              autoFocus
-                              value={kbRenameDraft.title}
-                              maxLength={80}
-                              aria-label="会话名称"
-                              onChange={(event) => setKbRenameDraft((current) => (
-                                current ? { ...current, title: event.target.value } : current
-                              ))}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter') {
+                    <div className="history-popover__list">
+                      {groupConversationsByDay(kbConversations).map((group) => (
+                        <section key={group.label} className="history-popover__group" aria-label={group.label}>
+                          <h3 className="history-popover__day">{group.label}</h3>
+                          {group.items.map((item) => (
+                            kbRenameDraft?.id === item.id ? (
+                              <div key={item.id} className="is-renaming" role="menuitem">
+                                <input
+                                  autoFocus
+                                  value={kbRenameDraft.title}
+                                  maxLength={80}
+                                  aria-label="会话名称"
+                                  onChange={(event) => setKbRenameDraft((current) => (
+                                    current ? { ...current, title: event.target.value } : current
+                                  ))}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter') {
+                                      event.preventDefault();
+                                      submitKbRename();
+                                    }
+                                    if (event.key === 'Escape') {
+                                      event.preventDefault();
+                                      setKbRenameDraft(null);
+                                    }
+                                  }}
+                                  onBlur={() => { submitKbRename(); }}
+                                  onClick={(event) => event.stopPropagation()}
+                                />
+                              </div>
+                            ) : (
+                              <button
+                                key={item.id}
+                                type="button"
+                                role="menuitem"
+                                className={kbConversationId === item.id ? 'is-active' : ''}
+                                onClick={() => openKbConversation(item.id)}
+                                onContextMenu={(event) => {
                                   event.preventDefault();
-                                  submitKbRename();
-                                }
-                                if (event.key === 'Escape') {
-                                  event.preventDefault();
-                                  setKbRenameDraft(null);
-                                }
-                              }}
-                              onBlur={() => { submitKbRename(); }}
-                              onClick={(event) => event.stopPropagation()}
-                            />
-                          </div>
-                        ) : (
-                          <button
-                            key={item.id}
-                            type="button"
-                            role="menuitem"
-                            className={kbConversationId === item.id ? 'is-active' : ''}
-                            onClick={() => openKbConversation(item.id)}
-                            onContextMenu={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              const width = 128;
-                              const height = 76;
-                              const left = Math.min(Math.max(8, event.clientX), window.innerWidth - width - 8);
-                              const top = Math.min(Math.max(8, event.clientY), window.innerHeight - height - 8);
-                              setKbHistoryMenu({ id: item.id, title: item.title, left, top });
-                            }}
-                          >
-                            {item.title}
-                          </button>
-                        )
-                      ))
-                    ))}
-                    {!kbConversations.length && (
-                      <p className="history-popover__empty">暂无历史会话</p>
-                    )}
+                                  event.stopPropagation();
+                                  const width = 128;
+                                  const height = 76;
+                                  const left = Math.min(Math.max(8, event.clientX), window.innerWidth - width - 8);
+                                  const top = Math.min(Math.max(8, event.clientY), window.innerHeight - height - 8);
+                                  setKbHistoryMenu({ id: item.id, title: item.title, left, top });
+                                }}
+                              >
+                                {item.title}
+                              </button>
+                            )
+                          ))}
+                        </section>
+                      ))}
+                      {!kbConversations.length && (
+                        <p className="history-popover__empty">暂无历史会话</p>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, ChevronRight, LoaderCircle, LogOut } from 'lucide-react';
 import { changePassword } from '../../lib/api/auth.js';
+import { CONVERSATION_HISTORY_RETENTION_DAYS } from '../../lib/api/conversations.js';
 import {
   connectPlatform,
   disconnectPlatform,
@@ -101,8 +102,8 @@ export function SettingsPage({
       if (action === 'connect' || action === 'reconnect') {
         setNotice(
           platformCode === 'zhihu'
-            ? '将弹出独立浏览器（知乎专用配置，可复用上次登录）。请扫码或验证码登录；成功后窗口会自动关闭，Cookie 会写入本机供解析使用。'
-            : '将弹出独立浏览器窗口。请用 App 扫码或手机验证码完成登录；未登录前请勿关闭窗口。成功后窗口会自动关闭。',
+            ? '将打开登录窗口，请扫码或验证码登录；成功后窗口会自动关闭。若此前已登录，通常无需重复扫码。'
+            : '将打开登录窗口，请用 App 扫码或手机验证码完成登录；成功后窗口会自动关闭。登录完成前请勿关闭窗口。',
         );
         const login = await waitForPlatformLogin(platformCode);
         await connectPlatform(platformCode, {
@@ -229,8 +230,7 @@ export function SettingsPage({
       {tab === 'platforms' ? (
         <div className="settings-panel">
           <p className="settings-hint">
-            小红书、抖音、B 站、知乎登录成功后窗口会自动关闭。知乎会复用本机专用浏览器配置：关窗 ≠ 退出拾藏登录态；再点「连接」应仍显示已登录。Cookie 不会同步到日常 Chrome。
-            登录窗口里点开文章常被反爬拦截，请把链接粘贴到知识库导入。微信公众号无需登录。
+            连接账号后，导入对应平台链接时解析更稳定。小红书、抖音、B 站、知乎可扫码登录；微信公众号公开文章无需登录。请将链接粘贴到知识库导入。
           </p>
 
           {loading ? (
@@ -368,6 +368,13 @@ export function SettingsPage({
                 <dd>{email || '—'}</dd>
               </div>
             </dl>
+          </section>
+
+          <section className="settings-section" aria-labelledby="settings-chat-history">
+            <h2 id="settings-chat-history">会话历史</h2>
+            <p className="settings-hint settings-hint--inline">
+              首页与知识库的会话历史保留最近 {CONVERSATION_HISTORY_RETENTION_DAYS} 天；列表按今天、昨天与具体日期（如 2026年3月15日）分组显示。
+            </p>
           </section>
 
           <section className="settings-section" aria-labelledby="settings-account-security">

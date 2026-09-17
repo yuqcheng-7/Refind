@@ -52,12 +52,47 @@ test('normalizes supported request fields and ignores client answer mode', () =>
   }), {
     conversationId: 'conversation-1',
     content: '问题内容',
+    retrievalContent: '问题内容',
+    modelId: 'ds-deep',
     thinkingMode: 'deep',
     onlineEnabled: true,
     knowledgeBaseIds: ['kb-1'],
     tagFilters: ['tag-1'],
     surface: 'home',
   });
+});
+
+test('keeps visible content and a separate retrievalContent for RAG', () => {
+  assert.deepEqual(normalizeRequestBody({
+    content: '#AI办公助手 是怎么做的',
+    retrievalContent: 'AI办公助手\n是怎么做的',
+    surface: 'home',
+    tagFilters: ['tag-1'],
+  }), {
+    content: '#AI办公助手 是怎么做的',
+    retrievalContent: 'AI办公助手\n是怎么做的',
+    modelId: 'ds-fast',
+    thinkingMode: 'fast',
+    onlineEnabled: false,
+    knowledgeBaseIds: [],
+    tagFilters: ['tag-1'],
+    surface: 'home',
+  });
+});
+
+test('normalizes modelId qwen and ds modes', () => {
+  assert.equal(
+    normalizeRequestBody({ content: 'hi', surface: 'home', modelId: 'qwen' }).modelId,
+    'qwen',
+  );
+  assert.equal(
+    normalizeRequestBody({ content: 'hi', surface: 'home', thinkingMode: 'deep' }).modelId,
+    'ds-deep',
+  );
+  assert.equal(
+    normalizeRequestBody({ content: 'hi', surface: 'home' }).modelId,
+    'ds-fast',
+  );
 });
 
 test('knowledge requests require at least one knowledge base', () => {
@@ -200,9 +235,22 @@ test('treats a retrieved RAG answer without citation markers as insufficient', (
     answer: '这是没有引用标记的回答。',
     chunks: chunks.slice(0, 2),
   }), {
-    content: '当前范围内资料不足，暂时无法可靠回答。请补充资料或调整知识库与标签范围。',
+    content: '暂无相关资料',
     isInsufficient: true,
     orders: [],
+    reason: '没有检测到有效[n]引用',
+  });
+});
+
+test('treats empty chunks as insufficient with empty-snippet reason', () => {
+  assert.deepEqual(core.resolveRagAnswerOutcome?.({
+    answer: '任意内容',
+    chunks: [],
+  }), {
+    content: '暂无相关资料',
+    isInsufficient: true,
+    orders: [],
+    reason: '无参考片段',
   });
 });
 
@@ -214,6 +262,118 @@ test('keeps a retrieved RAG answer with a valid citation as sufficient', () => {
     content: '依据第一段资料可知答案。[1]',
     isInsufficient: false,
     orders: [1],
+    reason: 'ok',
+  });
+});
+
+test('repairs broken markdown bold markers in RAG answers but keeps valid ** and [n]', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '根据资料：\n**\n1. 技术选型与方案确认**\n确认本地部署路径。[1]\n**\n2. 项目规划**\n分阶段推进。[2]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.deepEqual(outcome?.orders, [1, 2]);
+  // Broken markers stripped; list text + citations remain
+  assert.doesNotMatch(outcome?.content || '', /(^|\n)\*\*$/m);
+  assert.match(outcome?.content || '', /技术选型与方案确认/);
+  assert.match(outcome?.content || '', /\[1\]/);
+  assert.match(outcome?.content || '', /\[2\]/);
+});
+
+test('keeps well-formed markdown bold in RAG answers', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '结论是 **本地部署** 可行。[1]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.match(outcome?.content || '', /\*\*本地部署\*\*/);
+  assert.match(outcome?.content || '', /\[1\]/);
+});
+
+test('moves citation markers after the period in RAG answers', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '评估需求的可行性与价值 [1]。协作推进 [1] [2]。',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.match(outcome?.content || '', /价值。\[1\]/);
+  assert.match(outcome?.content || '', /推进。\[1\]\[2\]/);
+  assert.doesNotMatch(outcome?.content || '', /\]。/);
+});
+
+test('sanitizeRagAnswer cleans screenshot-like broken formatting', () => {
+  const raw = [
+    '一、核心工作流程（全生命周期） *',
+    '1. 需求调研与分析**：评估可行性 [4]。',
+    '6. 上线运营 [1] [2]。 **',
+    '二、关键支撑能力**',
+    '三、具体产出物示例在整个流程中，AI产品经理需产出关键交付物 [1]。',
+  ].join('\n');
+  const out = core.sanitizeRagAnswer?.(raw) || '';
+  assert.doesNotMatch(out, /周期） \*/);
+  assert.doesNotMatch(out, /分析\*\*/);
+  assert.doesNotMatch(out, /支撑能力\*\*/);
+  assert.match(out, /三、具体产出物示例\n\n在整个流程中/);
+  assert.match(out, /\[4\]/);
+});
+
+test('does not split version numbers like V1.0 / V1.1', () => {
+  const out = core.sanitizeRagAnswer?.(
+    '二、功能模块设计（参考V1.0与V1.1规划）\n5.全能工具（V1.1规划）：集成翻译。[1]',
+  ) || '';
+  assert.match(out, /参考V1\.0与V1\.1规划/);
+  assert.match(out, /全能工具（V1\.1规划）/);
+  assert.doesNotMatch(out, /参考V\n/);
+  assert.doesNotMatch(out, /^1\. 0/m);
+  assert.doesNotMatch(out, /^1\. 1规划/m);
+});
+
+test('splits jammed Chinese section title from numbered list in RAG answers', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '一、核心工作流程（全生命周期）1.需求调研与分析：评估可行性。[1]\n2.产品设计：完成原型。[2]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.match(outcome?.content || '', /一、核心工作流程（全生命周期）\n\n1\. 需求调研/);
+  assert.match(outcome?.content || '', /\[1\]/);
+});
+
+test('splits 。二、 and strips orphan asterisks in RAG answers', () => {
+  const repaired = core.repairAnswerStructure?.(
+    '驱动持续优化 [1][2]。二、关键支撑能力*\n*\n· 技术理解力：沟通 [2]',
+  );
+  assert.match(repaired || '', /。\n\n二、关键支撑能力/);
+  assert.doesNotMatch(repaired || '', /^\*$/m);
+  assert.doesNotMatch(repaired || '', /能力\*/);
+});
+
+test('splits long colon tail off short Chinese section titles', () => {
+  const repaired = core.repairAnswerStructure?.(
+    '一、核心优势：隐私与安全方面需要全程数据不出端并且本地处理用户文档与对话记录。[1]',
+  );
+  assert.match(repaired || '', /^一、核心优势\n\n隐私与安全/);
+});
+
+test('manual case1: grounded answer with valid [n] markers is sufficient', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '资料说明检索应融合多路召回。[1] 最终保留 top 片段。[2]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.deepEqual(outcome?.orders, [1, 2]);
+  assert.match(outcome?.content || '', /\[1\]/);
+  assert.match(outcome?.content || '', /\[2\]/);
+});
+
+test('manual case2: no valid citation forces insufficient fixed copy', () => {
+  assert.deepEqual(core.resolveRagAnswerOutcome?.({
+    answer: '我根据常识编造了一个答案。',
+    chunks: chunks.slice(0, 2),
+  }), {
+    content: '暂无相关资料',
+    isInsufficient: true,
+    orders: [],
+    reason: '没有检测到有效[n]引用',
   });
 });
 
@@ -223,4 +383,45 @@ test('summarizes distinct knowledge bases and materials', () => {
     materialCount: 2,
     chunkCount: 2,
   });
+});
+
+test('uses Qwen for general chat when online even if modelId is DeepSeek', () => {
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: true, modelId: 'ds-fast' }), true);
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: true, modelId: 'ds-deep' }), true);
+});
+
+test('uses Qwen for general chat when modelId is qwen, otherwise DeepSeek', () => {
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: false, modelId: 'qwen' }), true);
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: false, modelId: 'ds-fast' }), false);
+  assert.equal(core.shouldUseQwenGeneralChat({ onlineEnabled: false, modelId: 'ds-deep' }), false);
+});
+
+test('general system prompt enables search when online and never claims search is unavailable', () => {
+  const online = core.buildGeneralChatSystemContent(true);
+  const offline = core.buildGeneralChatSystemContent(false);
+  assert.match(online, /已启用联网搜索/);
+  assert.doesNotMatch(online, /未启用联网搜索/);
+  assert.doesNotMatch(online, /可用 \[n\]/);
+  assert.match(online, /不要在正文里写 \[n\]/);
+  assert.match(online, /来源会由界面单独展示/);
+  assert.doesNotMatch(offline, /已启用联网搜索/);
+  assert.doesNotMatch(offline, /未启用联网搜索/);
+  assert.doesNotMatch(offline, /不要在正文里写 \[n\]/);
+});
+
+test('strips leftover [n] markers from general plain answers', () => {
+  assert.equal(
+    core.stripLeftoverCitationMarkers('今天北京[1]晴，上海[2]有雨。'),
+    '今天北京晴，上海有雨。',
+  );
+  assert.equal(core.stripLeftoverCitationMarkers('没有编号'), '没有编号');
+  assert.equal(core.stripLeftoverCitationMarkers(''), '');
+});
+
+test('keeps web sources only when general online search is enabled', () => {
+  const sources = [{ order: 1, title: '气象台', url: 'https://example.com' }];
+  assert.deepEqual(core.resolveGeneralWebSources(true, sources), sources);
+  assert.deepEqual(core.resolveGeneralWebSources(false, sources), []);
+  assert.equal(core.persistableWebSources(sources), sources);
+  assert.equal(core.persistableWebSources([]), null);
 });

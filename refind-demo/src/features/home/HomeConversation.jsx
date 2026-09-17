@@ -61,11 +61,11 @@ export function HomeConversation({
 }) {
   const endRef = useRef(null);
   const selected = new Set(selectedBubbleIds);
-  const busy = messages.some((message) => !message.answer);
+  const busy = messages.some((message) => message.pending || !message.answer);
   const activeSelectMode = selectMode || (shareMode ? 'share' : null);
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end' });
-  }, [messages.length]);
+  }, [messages.length, busy]);
 
   if (!messages.length && emptyPrompt) {
     return (
@@ -135,6 +135,7 @@ export function HomeConversation({
                       <AnswerContent
                         text={message.answer}
                         citations={isRag ? message.citations : []}
+                        webSources={!isRag ? (message.webSources || []) : []}
                         conversational={!isRag && !message.failed}
                         interactive={!activeSelectMode}
                         onOpenMaterial={onOpenMaterial}
@@ -142,8 +143,10 @@ export function HomeConversation({
                     </AnswerActions>
                   </div>
                 </BubbleRow>
-              ) : String(message.id).startsWith('pending-') ? (
-                <div className="home-answer-message is-pending" role="status">正在生成回答…</div>
+              ) : (message.pending || String(message.id).startsWith('pending-')) ? (
+                <BubbleRow align="answer" selectMode={false} selected={false} label="正在生成回答">
+                  <div className="home-answer-message is-pending" role="status">正在生成回答…</div>
+                </BubbleRow>
               ) : null}
             </article>
           );
