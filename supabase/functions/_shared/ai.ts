@@ -109,6 +109,74 @@ async function chatCompletions(
   return content;
 }
 
+const REWRITE_SYSTEM = `你是检索 query 改写器。只输出 JSON，不要回答用户问题。
+格式：{"queries":["完整检索句"],"is_followup":true或false}
+规则：
+- queries 1～2 条；每条必须是可独立检索的完整中文问句，禁止无主题短句（如单独「具体是什么」）。
+- 追问/指代/展开：is_followup=true，并把实体还原进 query。
+- 独立新问：is_followup=false，query 接近用户原句（可轻微规范化）。
+- 只能重组对话里已出现的实体与主题，禁止编造。`;
+
+/**
+ * Lightweight LLM query rewrite. Aborts the upstream DashScope request on timeout.
+ */
+export async function rewriteQueriesWithLlm(
+  input: {
+    current: string;
+    recent_user?: string[];
+    recent_assistant?: string;
+  },
+  opts: { timeoutMs?: number; model?: string } = {},
+): Promise<string> {
+  const key = Deno.env.get('DASHSCOPE_API_KEY');
+  if (!key) throw new Error('DASHSCOPE_API_KEY missing');
+
+  const timeoutMs = Number(
+    opts.timeoutMs
+      ?? Deno.env.get('RAG_REWRITE_TIMEOUT_MS')
+      ?? 800,
+  );
+  const model = String(
+    opts.model
+      || Deno.env.get('RAG_REWRITE_MODEL')
+      || 'qwen-turbo',
+  );
+
+  const userPayload = {
+    current: input?.current || '',
+    recent_user: Array.isArray(input?.recent_user) ? input.recent_user : [],
+    ...(input?.recent_assistant ? { recent_assistant: input.recent_assistant } : {}),
+  };
+
+  const res = await fetch('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      max_tokens: 256,
+      messages: [
+        { role: 'system', content: REWRITE_SYSTEM },
+        { role: 'user', content: JSON.stringify(userPayload) },
+      ],
+    }),
+    signal: AbortSignal.timeout(Math.max(100, timeoutMs)),
+  });
+
+  if (!res.ok) {
+    throw new Error(`rewrite failed: ${res.status} ${await res.text()}`);
+  }
+  const json = await res.json();
+  const content = json?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('rewrite failed: empty content');
+  }
+  return content;
+}
+
 export async function deepseekChat(
   messages: { role: string; content: string }[],
   opts: { model: 'deepseek-chat' | 'deepseek-reasoner'; temperature?: number },

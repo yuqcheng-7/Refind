@@ -53,11 +53,11 @@ export function KbConversation({
 }) {
   const endRef = useRef(null);
   const selected = new Set(selectedBubbleIds);
-  const busy = messages.some((message) => !message.answer);
+  const busy = messages.some((message) => message.pending || !message.answer);
   const activeSelectMode = selectMode || (shareMode ? 'share' : null);
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: 'end' });
-  }, [messages.length]);
+  }, [messages.length, busy]);
 
   return (
     <div className={`kb-conversation ${activeSelectMode ? 'is-share-mode' : ''}`} aria-label="知识库问答">
@@ -119,8 +119,10 @@ export function KbConversation({
                   </AnswerActions>
                 </div>
               </BubbleRow>
-            ) : String(message.id).startsWith('pending-') ? (
-              <div className="answer-message is-pending" role="status">正在生成回答…</div>
+            ) : (message.pending || String(message.id).startsWith('pending-')) ? (
+              <BubbleRow align="answer" selectMode={false} selected={false} label="正在生成回答">
+                <div className="answer-message is-pending" role="status">正在生成回答…</div>
+              </BubbleRow>
             ) : null}
           </article>
         );

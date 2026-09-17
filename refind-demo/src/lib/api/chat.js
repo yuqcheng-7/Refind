@@ -57,6 +57,8 @@ async function readFunctionError(error, data) {
 
 export async function sendChatMessage({
   content,
+  question,
+  retrievalContent,
   thinkingMode = 'fast',
   onlineEnabled = false,
   modelId,
@@ -77,6 +79,9 @@ export async function sendChatMessage({
   };
   if (conversationId) body.conversationId = conversationId;
   if (modelId) body.modelId = modelId;
+  if (retrievalContent != null && String(retrievalContent).trim()) {
+    body.retrievalContent = String(retrievalContent).trim();
+  }
 
   const { data, error } = await supabase.functions.invoke('chat-message', {
     body,
@@ -84,7 +89,7 @@ export async function sendChatMessage({
   if (error) throw new Error(await readFunctionError(error, data));
 
   return mapChatResponseToMessage({
-    question: content,
+    question: question == null ? content : question,
     selectedBases,
     selectedTags,
     online: onlineEnabled,

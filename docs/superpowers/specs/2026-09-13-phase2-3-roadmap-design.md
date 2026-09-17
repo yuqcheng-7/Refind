@@ -1,7 +1,7 @@
 # Refind 阶段二 / 阶段三路线图（2026-09-13）
 
 > 状态：已与产品确认（方案 A）  
-> 最近修订：2026-09-15（平台连接 A/B/C、东京 Supabase、侧栏知识库常显、托管解析与部署备注）  
+> 最近修订：2026-09-17（RAG/回答打磨切片收口；下一阶段 = 笔记智能化 → 上线）  
 > 前置：阶段一 = `refind-demo` 高保真原型（首页 / 知识库 / 笔记·灵感卡片交互已落地）  
 > 目标产品：PRD / Spec 定义的 **V1.0 个人知识库基础闭环**（真实后端 + 真实 AI/RAG + 部署）
 
@@ -14,6 +14,21 @@
 | **三** | 智能与上线 | DeepSeek RAG、引用、笔记 AI 生成、笔记↔知识库同步、**真实平台登录 B**、**托管解析**、部署 | **智能化**：生成笔记、内联引用回链、同步资料、生产环境 |
 
 **方案 A 原则：** 笔记不单独成阶段；二阶段「存得住、改得动」，三阶段「生成得对、引用可溯、同步可上线」。
+
+### 1.0 阶段三执行切片状态（2026-09-17）
+
+| 切片 | 内容 | 状态 |
+| --- | --- | --- |
+| RAG 基础 | embedding + `chat-message` + 引用浮卡 | **已落地** |
+| A′ 准确度 | 多路召回 + Bailian/light rerank + 不足闸门 | **已落地** |
+| LLM query rewrite | 检索前语义改写（追问「具体是什么」等） | **已落地** |
+| 回答结构 | 大标题/有序递增/· 并列 + 短标题 2～12 字 | **已落地** |
+| 首页联网 | QW + 百炼网页搜索 | **已落地** |
+| DeepSeek 摘要/标签 | 解析后真摘要与标签 | **已落地** |
+| **下一阶段** | **笔记智能化**：灵感收藏落库 → 整理生成 → `[n]` 回链 → 同步知识库 | **待开工** |
+| 上线 | 托管解析 + 平台连接 B + 自定义域名部署 | **笔记闭环后** |
+
+产品确认顺序：**先基于已调好的 AI 回答完成笔记模块，最终再上线。**
 
 ### 1.1 平台连接与解析子路线（2026-09-15 确认）
 
@@ -107,15 +122,16 @@
 
 ### 4.2 阶段三可顺延（V1.5）
 
-- 混合检索 / rerank；
-- 平台 MediaCrawler / 匿名网页抽取质量深化；
-- 笔记生成后可编辑策略深化（sections vs contentEditable 统一）；
-- 邮箱验证、手机号登录；
-- 大陆正式合规部署（国内云 + 备案）若需面向大陆正式商用。
+- ~~混合检索 / rerank~~（A′ 已落地；LLM query rewrite 已落地）
+- 平台 MediaCrawler / 匿名网页抽取质量深化
+- 笔记生成后可编辑策略深化（sections vs contentEditable 统一）
+- 邮箱验证、手机号登录
+- 大陆正式合规部署（国内云 + 备案）若需面向大陆正式商用
 
 ### 4.3 阶段三验收
 
 - 严格 RAG 回答仅引用 ready 资料；资料不足时有明确边界说明；
+- 回答结构层级与短标题可读（与 `answer-inline-citations` 一致）；追问检索不因裸指代落空；
 - 生成笔记后引用可打开卡片与资料上下文；
 - 笔记同步至知识库后，任一端编辑另端一致；
 - 生产环境可完成注册 → 入库 → 提问 → 收藏 → 整理笔记 → 生成 → 同步 全链路；
@@ -132,10 +148,14 @@
 ## 6. 实施计划文档
 
 - `docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md`（含 2026-09-14 Task 8 解析补强）
-- `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md`（已写；含部署与托管解析）
+- `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md`（含部署与托管解析；**下一执行重点 = 笔记 Task**）
+- `docs/superpowers/plans/2026-09-16-ai-accuracy-multi-recall-rerank.md`（A′ · 已完成）
+- `docs/superpowers/plans/2026-09-17-llm-query-rewrite.md`（检索改写 · 已完成）
+- `docs/superpowers/specs/2026-09-15-answer-inline-citations-design.md`（回答结构 · 已落地）
 - `docs/superpowers/specs/2026-09-14-platform-connection-settings-ui.md`
 - `docs/superpowers/specs/2026-09-14-link-parse-pipeline-trial.md`
 - `docs/superpowers/specs/2026-09-15-sidebar-kb-empty-states.md`
+- `docs/superpowers/specs/2026-09-13-notes-workspace-remediation-design.md`（笔记 UI 原型规则 · 智能化时复用）
 
 ## 7. 非目标
 

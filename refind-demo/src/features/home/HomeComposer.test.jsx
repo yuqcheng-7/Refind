@@ -22,11 +22,12 @@ const { deleteAccount, demoSession, sendChatMessage, supabase, conversationStore
     conversationStore: store,
     sendChatMessage: vi.fn(async (payload) => {
       const conversationId = payload.conversationId || `conv-test-${Object.keys(store.turnsById).length + 1}`;
+      const askText = payload.retrievalContent || payload.content;
       const message = {
-        id: `assistant-${payload.content}`,
+        id: `assistant-${askText}`,
         conversationId,
-        question: payload.content,
-        answer: `API 回答：${payload.content}${payload.knowledgeBaseIds.length ? '[1]' : ''}`,
+        question: payload.question || payload.content,
+        answer: `API 回答：${askText}${payload.knowledgeBaseIds.length ? '[1]' : ''}`,
         mode: payload.surface === 'knowledge' || payload.knowledgeBaseIds.length ? 'rag' : 'general',
         online: payload.onlineEnabled,
         selectedBases: payload.selectedBases,
@@ -39,7 +40,7 @@ const { deleteAccount, demoSession, sendChatMessage, supabase, conversationStore
       if (payload.surface !== 'knowledge') {
         store.homeItems = [{
           id: conversationId,
-          title: `会话 · ${String(payload.content || '未命名').slice(0, 24)}`,
+          title: `会话 · ${String(payload.question || payload.content || '未命名').slice(0, 24)}`,
           updatedAt: new Date().toISOString(),
         }, ...store.homeItems.filter((item) => item.id !== conversationId)];
       }
@@ -115,6 +116,7 @@ vi.mock('../../lib/api/conversations.js', () => ({
   groupConversationsByDay: (items = []) => (items.length ? [{ label: '今天', items }] : []),
   groupLabelForDate: () => '今天',
   pairChatTurns: () => [],
+  CONVERSATION_HISTORY_RETENTION_DAYS: 90,
 }));
 
 vi.mock('../../lib/api/knowledge.js', () => {
@@ -272,6 +274,30 @@ describe('HomeComposer', () => {
     expect(screen.getByPlaceholderText(homePlaceholder)).toHaveValue('#增长策略 ');
   });
 
+  it('opens # tag suggestions mid-prompt and clears tags from the input after send', async () => {
+    const onSubmit = vi.fn();
+    render(
+      <HomeComposer
+        bases={bases}
+        availableTags={[{ id: '1', name: '增长策略' }]}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const input = screen.getByPlaceholderText(homePlaceholder);
+    fireEvent.change(input, { target: { value: '先问一句#', selectionStart: 5, selectionEnd: 5 } });
+    expect(screen.getByRole('listbox', { name: '选择标签' })).toBeVisible();
+    await userEvent.click(screen.getByRole('option', { name: '#增长策略' }));
+    expect(input).toHaveValue('先问一句#增长策略 ');
+
+    await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: '先问一句#增长策略',
+      selectedTags: ['增长策略'],
+    }));
+    expect(input).toHaveValue('');
+  });
+
   it('removes #tag from the prompt when deselecting a selected tag', async () => {
     render(<HomeComposer bases={bases} availableTags={[{ id: '1', name: '增长策略' }]} onSubmit={vi.fn()} />);
 
@@ -400,46 +426,50 @@ describe('HomeComposer', () => {
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '带标签提问');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
 
-    expect(await screen.findByText('API 回答：带标签提问')).toBeVisible();
-    expect(sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({
-      content: '带标签提问',
+    await vi.waitFor(() => expect(sendChatMessage).toHaveBeenCalledWith(expect.objectContaining({
+      content: '#产品灵感 带标签提问',
+      question: '#产品灵感 带标签提问',
+      retrievalContent: '带标签提问\n产品灵感',
       tagFilters: ['tag-product'],
       selectedTags: ['产品灵感'],
-    }));
+    })));
   });
 
-  it('clears KB composer selectedTags after each send', async () => {
+  it('clears KB composer selectedTags after send so the next ask is not stuck on old tags', async () => {
     render(<App />);
 
     await userEvent.click(screen.getByRole('button', { name: '知识库' }));
     const kbInput = await screen.findByPlaceholderText('基于当前知识库提问，输入 # 可选择标签');
+    await vi.waitFor(() => expect(listMaterialTags).toHaveBeenCalled());
     await userEvent.type(kbInput, '#');
     await userEvent.click(await screen.findByRole('option', { name: '#产品灵感' }));
     await userEvent.clear(kbInput);
     await userEvent.type(kbInput, '第一次带标签');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
 
-    expect(await screen.findByText('API 回答：第一次带标签')).toBeVisible();
-    expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
-      content: '第一次带标签',
+    await vi.waitFor(() => expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '#产品灵感 第一次带标签',
+      question: '#产品灵感 第一次带标签',
+      retrievalContent: '第一次带标签\n产品灵感',
       tagFilters: ['tag-product'],
       selectedTags: ['产品灵感'],
       surface: 'knowledge',
-    }));
+    })));
+
+    expect(screen.getByPlaceholderText('基于当前知识库提问，输入 # 可选择标签')).toHaveValue('');
 
     await userEvent.type(
       screen.getByPlaceholderText('基于当前知识库提问，输入 # 可选择标签'),
-      '第二次不带标签',
+      '第二次追问',
     );
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
 
-    expect(await screen.findByText('API 回答：第二次不带标签')).toBeVisible();
-    expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
-      content: '第二次不带标签',
+    await vi.waitFor(() => expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '第二次追问',
       tagFilters: [],
       selectedTags: [],
       surface: 'knowledge',
-    }));
+    })));
   });
 
   it('submits the homepage prompt when Enter is pressed', async () => {
@@ -734,7 +764,7 @@ describe('HomeComposer', () => {
     expect(screen.getByRole('button', { name: '不联网' })).toBeDisabled();
   });
 
-  it('keeps multi-base and tag scope for homepage conversation follow-ups', async () => {
+  it('clears homepage tags after send while keeping selected knowledge bases', async () => {
     render(<App />);
 
     await userEvent.click(screen.getByRole('button', { name: '选择知识库' }));
@@ -747,10 +777,27 @@ describe('HomeComposer', () => {
     await userEvent.clear(screen.getByPlaceholderText(homePlaceholder));
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '首个问题');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
+
+    await vi.waitFor(() => expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '#产品灵感 首个问题',
+      question: '#产品灵感 首个问题',
+      retrievalContent: '首个问题\n产品灵感',
+      tagFilters: ['tag-product'],
+      selectedTags: ['产品灵感'],
+    })));
+    expect(screen.getByPlaceholderText(homePlaceholder)).toHaveValue('');
+    expect(screen.getByText(/默认知识库、产品与设计资料、#产品灵感/)).toBeVisible();
+
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '后续问题');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
 
-    expect(screen.getAllByText(/默认知识库、产品与设计资料、#产品灵感/)).toHaveLength(2);
+    await vi.waitFor(() => expect(sendChatMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      content: '后续问题',
+      tagFilters: [],
+      selectedTags: [],
+    })));
+    expect(screen.getAllByText(/默认知识库、产品与设计资料、#产品灵感/)).toHaveLength(1);
+    expect(screen.getByText(/^默认知识库、产品与设计资料$/)).toBeVisible();
   });
 
   it('clears active conversation scope when homepage bases are deselected', async () => {
@@ -777,7 +824,7 @@ describe('HomeComposer', () => {
     expect(screen.getByText(/默认知识库、#产品灵感/)).toBeVisible();
     expect(screen.queryAllByText(/默认知识库、#产品灵感/)).toHaveLength(1);
     expect(screen.getByText('范围已清后的追问').closest('.home-conversation-turn')).toBeTruthy();
-    expect(await screen.findByText('API 回答：范围已清后的追问')).toBeVisible();
+    expect(await screen.findByText(/API 回答：范围已清后的追问/)).toBeVisible();
   });
 
   it('switches from online general to RAG after selecting a knowledge base', async () => {

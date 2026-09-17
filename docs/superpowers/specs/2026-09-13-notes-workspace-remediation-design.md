@@ -1,8 +1,10 @@
 # 笔记工作台收紧与全屏入口设计（2026-09-13）
 
 > 状态：已与产品确认（含选择条弱渐变圆角、笔记引用 hover 预览）  
+> 最近修订：2026-09-17（阶段三下一执行重点：基于已调好的 AI 回答做笔记智能化）  
 > 适用范围：`refind-demo` 笔记 / 灵感卡片模块；同步回写 PRD / Spec / `design.md`  
-> 开发计划：`docs/superpowers/plans/2026-09-13-notes-workspace-remediation.md`
+> 开发计划：`docs/superpowers/plans/2026-09-13-notes-workspace-remediation.md`（原型 UI · 已完成）  
+> **下一阶段计划：** `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` Task 3–5（真实灵感落库 / 生成笔记 / 同步）
 
 ## 1. 背景
 

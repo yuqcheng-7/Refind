@@ -7,7 +7,7 @@
 > V1.0｜个人知识库 · RAG 对话 · 来源溯源
 >
 > 文档日期：2026-08-13  
-> 最近修订：2026-09-17（见第九章 §9.11：A′ 多路召回/rerank、不足文案、首页留白与知识库默认最新会话；§9.1–§9.10 仍有效）
+> 最近修订：2026-09-17（见第九章 §9.11–§9.12：A′/LLM 检索改写、回答结构与短标题、下一阶段笔记智能化；§9.1–§9.10 仍有效）
 
 ---
 
@@ -394,13 +394,13 @@ Refind V1 采用 RAG（检索增强生成）架构。有知识库/标签范围�
 
 ```text
 用户保存链接 → 解析网页内容 → DeepSeek 生成摘要与标签 → 正文切分为资料片段 → Embedding 向量化 → pgvector 建立索引
-用户提问（RAG）→ 解析 #标签 → 问题向量化
-  → 并行：向量召回 + 关键词/标题召回 → RRF 融合 → 按资料多样性截断
+用户提问（RAG）→ 解析 #标签 → 检索前 LLM 语义改写（失败则规则 fallback）
+  → 并行：向量召回 + 关键词/标题召回 → 最高 similarity 去重 → RRF 融合 → 按资料多样性截断
   → 百炼 qwen3-rerank（失败则本地 light rerank）→ topK≈8 片段
-  → 过弱则直接「暂无相关资料」；否则 DeepSeek 基于片段回答 → 绑定 [n] 引用
+  → 过弱则直接「暂无相关资料」；否则 DeepSeek 基于片段回答 → sanitize 结构 → 绑定 [n] 引用
 ```
 
-详细参数与 as-built：`docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`。
+详细参数与 as-built：`docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`、`2026-09-17-llm-query-rewrite-design.md`、`2026-09-15-answer-inline-citations-design.md`。
 
 ## 7.2 模型与技术组件分工
 
@@ -408,6 +408,7 @@ Refind V1 采用 RAG（检索增强生成）架构。有知识库/标签范围�
 | --- | --- | --- |
 | 生成模型 | DeepSeek Chat / Reasoner | 生成资料摘要、标签，以及基于检索片段生成最终回答（快速/深度）。 |
 | 向量模型 | 阿里云百炼 text-embedding-v4 | 将资料片段与用户问题转换为向量，用于中文语义检索。 |
+| 检索改写 | 阿里云百炼 qwen-turbo（轻量） | 多轮追问语义改写为完整检索句；超时/失败回退规则改写。 |
 | 重排序 | 阿里云百炼 qwen3-rerank（light 兜底） | 对融合候选二次排序；失败时本地加权 light rerank。 |
 | 向量存储与检索 | Supabase Postgres + pgvector | 存储向量；向量 RPC + 关键词 RPC + RRF 融合。 |
 | 关系数据存储 | Supabase Postgres | 保存知识库、资料、标签、资料片段、引用关系与对话记录。 |
@@ -427,9 +428,9 @@ Refind V1 采用 RAG（检索增强生成）架构。有知识库/标签范围�
 
 ## 7.4 提问理解与检索规则
 
-系统将用户问题转换为向量，并与关键词路并行召回，经 RRF 与 rerank 后取约 8 条片段进生成。含 #标签时，先按资料标签过滤（AND），范围内资料不足时不扩大范围。不含 #标签时，在所选知识库（或多库并集 / 仅标签时全库）可用片段中检索。
+系统将用户问题（含多轮追问）先做**检索前语义改写**（轻量 LLM，失败则规则），再与关键词路并行召回，经最高 similarity 去重、RRF 与 rerank 后取约 8 条片段进生成。含 #标签时，先按资料标签过滤（AND），范围内资料不足时不扩大范围。不含 #标签时，在所选知识库（或多库并集 / 仅标签时全库）可用片段中检索。
 
-**多轮：** 生成侧携带近期对话；检索侧对独立问题只用当前句，对短句/指代跟进使用上一轮用户问的关键词软提示，避免整句拼接污染召回。
+**多轮：** 生成侧按 `is_followup` 携带近期对话；检索侧优先用改写后的完整 query（1～2 条），避免「具体是什么」等裸追问单独 embedding。
 
 ## 7.5 回答生成规则
 
@@ -438,6 +439,8 @@ Refind V1 采用 RAG（检索增强生成）架构。有知识库/标签范围�
 - 对未直接说明的推断，使用“根据现有资料可推断”“可进一步考虑”等表达。
 - 对资料间明显冲突说明差异，不强行给唯一结论。
 - 每个关键事实、案例、观点或结论必须关联至少一条来源；不得将资料中不存在的内容描述为既有事实。
+- **结构层级：** 大标题用「一、二、三、」；有序小分点用递增「1. 2. 3. 4.」；并列用「· 」；禁止多个「1.」并列。
+- **短标题：** 仅当需要先命名再展开时使用，2～12 字，格式 `**短标题：**` + 正文；不要硬造短标题。
 
 ## 7.6 来源引用与溯源
 
@@ -518,7 +521,7 @@ V1 数据指标用于评估 Refind 是否帮助用户完成“资料沉淀、知
 | --- | --- | --- |
 | **阶段一**（已完成） | 高保真原型 `refind-demo`：首页 / 知识库 / 笔记·灵感卡片交互 | 既有 2026-09-12/13 原型计划 |
 | **阶段二** | 真实后端地基：Auth（含用户名）、Postgres、RLS、Storage、上传解析、KB/资料 CRUD、**笔记/卡片持久化（无 AI 生成）**；解析补强：文档提取 → OCR → 链接双路径 | `docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md` |
-| **阶段三** | 真实 AI/RAG（含 A′ 多路召回+rerank）、引用、灵感收藏落库、**笔记 AI 生成 + 引用回链**、笔记↔知识库同步、部署上线 | `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` + A′ 设计 |
+| **阶段三** | 真实 AI/RAG（含 A′ 多路召回+rerank、LLM 检索改写、回答结构/短标题）、引用、灵感收藏落库、**笔记 AI 生成 + 引用回链**、笔记↔知识库同步、部署上线 | `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` + A′ / rewrite / 引用设计 |
 
 路线图设计：`docs/superpowers/specs/2026-09-13-phase2-3-roadmap-design.md`。  
 PRD「V1.0 产品闭环」= **阶段二 + 阶段三**。
@@ -611,8 +614,10 @@ PRD「V1.0 产品闭环」= **阶段二 + 阶段三**。
 | 真实会话历史分面（首页 / 各知识库独立） | 已完成 — `docs/superpowers/specs/2026-09-15-chat-history-surfaces-design.md` |
 | 笔记工作台收紧 + 全屏入口分流 | 已完成（含 Task 6：选择条弱渐变圆角 + 笔记引用 hover 预览；见 `docs/superpowers/plans/2026-09-13-notes-workspace-remediation.md`） |
 | 阶段二 | 已推进；解析补强 Task 8 进行中 — `docs/superpowers/plans/2026-09-13-phase2-backend-foundation.md` |
-| 阶段三 | 计划推进中：RAG/引用/A′ 已落地；笔记生成与托管上线待做 — `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` |
-| A′ 多路召回 + rerank | 已实现 · 待手工验收后 commit — `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md` |
+| 阶段三 | **RAG/引用/A′/检索改写/回答结构已落地**；**下一阶段 = 笔记智能化 → 再托管上线** — `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` |
+| A′ 多路召回 + rerank | 已落地 — `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md` |
+| LLM 检索语义改写 | 已落地 — `docs/superpowers/specs/2026-09-17-llm-query-rewrite-design.md` |
+| 回答结构层级 + 短标题 | 已落地 — `docs/superpowers/specs/2026-09-15-answer-inline-citations-design.md` |
 
 ## 9.8 笔记工作台修订（已完成）
 
@@ -677,19 +682,41 @@ PRD「V1.0 产品闭环」= **阶段二 + 阶段三**。
 - 重命名为列表内联编辑（无弹窗）；删除仍需二次确认。
 - 首页空对话提示：「有什么想聊的？直接提问，或在输入框里选择知识库。」
 
-## 9.11 2026-09-16/17 AI 准确度与对话 UX（已落地 · 待正式 commit）
+## 9.11 2026-09-16/17 AI 准确度与对话 UX（已落地）
 
-> 对齐 `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`、`2026-09-15-chat-history-surfaces-design.md`、`2026-09-15-answer-inline-citations-design.md`。
+> 对齐 `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`、`2026-09-17-llm-query-rewrite-design.md`、`2026-09-15-chat-history-surfaces-design.md`、`2026-09-15-answer-inline-citations-design.md`。
 
-### RAG A′
+### RAG A′ + 检索改写
 
-- 严格 RAG：向量 + 关键词并行召回 → RRF → 每资料 ≤3 多样性 → 百炼 `qwen3-rerank`（失败则 light）→ 默认 topK=8（运维 6–10）。
+- 严格 RAG：向量 + 关键词并行召回 → 最高 similarity 去重 → RRF → 每资料 ≤3 多样性 → 百炼 `qwen3-rerank`（失败则 light）→ 默认 topK=8（运维 6–10）。
+- **检索前 LLM 语义改写**（`qwen-turbo`，超时 800ms 真 abort）：追问如「具体是什么」改写为带实体完整 query；失败/全非法回退规则改写。
 - 不足固定文案：**「暂无相关资料」**；过弱检索可跳过 LLM。
 - 引用：句末 `[n]`；多文档冲突分别标注；浮卡 portal，避开底部输入框。
-- 多轮：生成带近期对话；检索对指代/短句用软提示，独立问题不拼接上文整句。
+- 多轮：生成带近期对话（受 `is_followup`）；检索用改写后 query，避免裸追问污染。
+
+### 回答结构与短标题
+
+- 大标题「一、二、三、」→ 有序「1. 2. 3. 4.」（必须递增）或无序「· 」；前端修复并行全为「1.」的情况。
+- 短标题仅用于「先命名再展开」：2～12 字，`**短标题：**` + 正文；不要硬造短标题。
+- 全局清洗残缺 Markdown，界面不露出残余 `*`/`**`。
 
 ### 对话 UX
 
 - 侧栏「· 拾藏」纯黑实色。
 - 首页历史展开/折叠时，对话列与输入框左右外边距一致并居中于可用区域。
 - 进入 / 切换知识库：默认打开该库最新历史会话。
+
+## 9.12 下一阶段：笔记智能化 → 上线（产品确认 · 2026-09-17）
+
+> 对齐路线图 §1.0 / `docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md` Task 3–7；笔记 UI 规则见 `2026-09-13-notes-workspace-remediation-design.md`。
+
+**前提：** AI 回答链路（检索、结构、引用）已调好，作为灵感卡片与生成笔记的输入质量基线。
+
+**下一阶段交付顺序：**
+
+1. 回答划选/整答 → 灵感卡片真实落库（含 RAG 引用快照）
+2. 整理为笔记 → `generate-note`（修订记录 + 内联 `[n]` 回链卡片）
+3. 笔记 ↔ 多知识库同步
+4. （可选）脑图；**最后**托管解析 + 平台连接 B + 自定义域名上线
+
+本阶段不回头大改 RAG 主链路，除非笔记开发暴露阻塞性问题。

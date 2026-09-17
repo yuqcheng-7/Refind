@@ -52,10 +52,29 @@ test('normalizes supported request fields and ignores client answer mode', () =>
   }), {
     conversationId: 'conversation-1',
     content: '问题内容',
+    retrievalContent: '问题内容',
     modelId: 'ds-deep',
     thinkingMode: 'deep',
     onlineEnabled: true,
     knowledgeBaseIds: ['kb-1'],
+    tagFilters: ['tag-1'],
+    surface: 'home',
+  });
+});
+
+test('keeps visible content and a separate retrievalContent for RAG', () => {
+  assert.deepEqual(normalizeRequestBody({
+    content: '#AI办公助手 是怎么做的',
+    retrievalContent: 'AI办公助手\n是怎么做的',
+    surface: 'home',
+    tagFilters: ['tag-1'],
+  }), {
+    content: '#AI办公助手 是怎么做的',
+    retrievalContent: 'AI办公助手\n是怎么做的',
+    modelId: 'ds-fast',
+    thinkingMode: 'fast',
+    onlineEnabled: false,
+    knowledgeBaseIds: [],
     tagFilters: ['tag-1'],
     surface: 'home',
   });
@@ -245,6 +264,94 @@ test('keeps a retrieved RAG answer with a valid citation as sufficient', () => {
     orders: [1],
     reason: 'ok',
   });
+});
+
+test('repairs broken markdown bold markers in RAG answers but keeps valid ** and [n]', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '根据资料：\n**\n1. 技术选型与方案确认**\n确认本地部署路径。[1]\n**\n2. 项目规划**\n分阶段推进。[2]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.deepEqual(outcome?.orders, [1, 2]);
+  // Broken markers stripped; list text + citations remain
+  assert.doesNotMatch(outcome?.content || '', /(^|\n)\*\*$/m);
+  assert.match(outcome?.content || '', /技术选型与方案确认/);
+  assert.match(outcome?.content || '', /\[1\]/);
+  assert.match(outcome?.content || '', /\[2\]/);
+});
+
+test('keeps well-formed markdown bold in RAG answers', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '结论是 **本地部署** 可行。[1]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.match(outcome?.content || '', /\*\*本地部署\*\*/);
+  assert.match(outcome?.content || '', /\[1\]/);
+});
+
+test('moves citation markers after the period in RAG answers', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '评估需求的可行性与价值 [1]。协作推进 [1] [2]。',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.match(outcome?.content || '', /价值。\[1\]/);
+  assert.match(outcome?.content || '', /推进。\[1\]\[2\]/);
+  assert.doesNotMatch(outcome?.content || '', /\]。/);
+});
+
+test('sanitizeRagAnswer cleans screenshot-like broken formatting', () => {
+  const raw = [
+    '一、核心工作流程（全生命周期） *',
+    '1. 需求调研与分析**：评估可行性 [4]。',
+    '6. 上线运营 [1] [2]。 **',
+    '二、关键支撑能力**',
+    '三、具体产出物示例在整个流程中，AI产品经理需产出关键交付物 [1]。',
+  ].join('\n');
+  const out = core.sanitizeRagAnswer?.(raw) || '';
+  assert.doesNotMatch(out, /周期） \*/);
+  assert.doesNotMatch(out, /分析\*\*/);
+  assert.doesNotMatch(out, /支撑能力\*\*/);
+  assert.match(out, /三、具体产出物示例\n\n在整个流程中/);
+  assert.match(out, /\[4\]/);
+});
+
+test('does not split version numbers like V1.0 / V1.1', () => {
+  const out = core.sanitizeRagAnswer?.(
+    '二、功能模块设计（参考V1.0与V1.1规划）\n5.全能工具（V1.1规划）：集成翻译。[1]',
+  ) || '';
+  assert.match(out, /参考V1\.0与V1\.1规划/);
+  assert.match(out, /全能工具（V1\.1规划）/);
+  assert.doesNotMatch(out, /参考V\n/);
+  assert.doesNotMatch(out, /^1\. 0/m);
+  assert.doesNotMatch(out, /^1\. 1规划/m);
+});
+
+test('splits jammed Chinese section title from numbered list in RAG answers', () => {
+  const outcome = core.resolveRagAnswerOutcome?.({
+    answer: '一、核心工作流程（全生命周期）1.需求调研与分析：评估可行性。[1]\n2.产品设计：完成原型。[2]',
+    chunks: chunks.slice(0, 2),
+  });
+  assert.equal(outcome?.isInsufficient, false);
+  assert.match(outcome?.content || '', /一、核心工作流程（全生命周期）\n\n1\. 需求调研/);
+  assert.match(outcome?.content || '', /\[1\]/);
+});
+
+test('splits 。二、 and strips orphan asterisks in RAG answers', () => {
+  const repaired = core.repairAnswerStructure?.(
+    '驱动持续优化 [1][2]。二、关键支撑能力*\n*\n· 技术理解力：沟通 [2]',
+  );
+  assert.match(repaired || '', /。\n\n二、关键支撑能力/);
+  assert.doesNotMatch(repaired || '', /^\*$/m);
+  assert.doesNotMatch(repaired || '', /能力\*/);
+});
+
+test('splits long colon tail off short Chinese section titles', () => {
+  const repaired = core.repairAnswerStructure?.(
+    '一、核心优势：隐私与安全方面需要全程数据不出端并且本地处理用户文档与对话记录。[1]',
+  );
+  assert.match(repaired || '', /^一、核心优势\n\n隐私与安全/);
 });
 
 test('manual case1: grounded answer with valid [n] markers is sufficient', () => {

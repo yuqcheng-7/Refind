@@ -15,12 +15,12 @@ describe('resolveAnswerMode', () => {
 });
 
 describe('resolveChatSurface', () => {
-  it('keeps an existing thread on its surface', () => {
+  it('keeps an existing thread on its surface when preferred', () => {
     expect(resolveChatSurface({ knowledgeBaseIds: ['kb1'], preferredSurface: 'home' })).toBe('home');
     expect(resolveChatSurface({ knowledgeBaseIds: [], preferredSurface: 'knowledge' })).toBe('knowledge');
   });
-  it('routes a new single-kb home chat into knowledge history', () => {
-    expect(resolveChatSurface({ knowledgeBaseIds: ['kb1'] })).toBe('knowledge');
+  it('keeps home-originated chats on home history even with a single KB', () => {
+    expect(resolveChatSurface({ knowledgeBaseIds: ['kb1'] })).toBe('home');
     expect(resolveChatSurface({ knowledgeBaseIds: [] })).toBe('home');
     expect(resolveChatSurface({ knowledgeBaseIds: ['kb1', 'kb2'] })).toBe('home');
   });

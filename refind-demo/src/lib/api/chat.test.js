@@ -102,6 +102,37 @@ describe('sendChatMessage', () => {
     });
   });
 
+  it('keeps a display question with #tags even when API content is stripped', async () => {
+    invoke.mockResolvedValue({
+      data: {
+        conversationId: 'conv-3',
+        assistantMessageId: 'assistant-2',
+        answerMode: 'rag',
+        content: '回答',
+        insufficient: false,
+        citations: [],
+      },
+      error: null,
+    });
+
+    const message = await sendChatMessage({
+      content: '#AI办公助手 是怎么做的',
+      question: '#AI办公助手 是怎么做的',
+      retrievalContent: 'AI办公助手\n是怎么做的',
+      selectedTags: ['AI办公助手'],
+      surface: 'home',
+    });
+
+    expect(invoke).toHaveBeenCalledWith('chat-message', {
+      body: expect.objectContaining({
+        content: '#AI办公助手 是怎么做的',
+        retrievalContent: 'AI办公助手\n是怎么做的',
+      }),
+    });
+    expect(message.question).toBe('#AI办公助手 是怎么做的');
+    expect(message.selectedTags).toEqual(['AI办公助手']);
+  });
+
   it('throws the function error instead of creating a demo response', async () => {
     const error = new Error('AI unavailable');
     invoke.mockResolvedValue({ data: null, error });

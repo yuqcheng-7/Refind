@@ -2,10 +2,12 @@
 
 > 日期：2026-09-15  
 > 最近修订：2026-09-17  
-> 状态：**已落地**（基础 RAG）；准确度增强见 A′  
+> 状态：**已落地**（基础 RAG）；准确度增强见 A′；检索改写见 LLM rewrite；回答结构见引用设计  
 > 前置：阶段二后端基础（资料解析、`material_chunks`、会话表）已落地  
 > 关联计划：`docs/superpowers/plans/2026-09-13-phase3-ai-rag-launch.md`（本切片对应 Task 1–2）  
 > 后续准确度：`docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`（多路召回 + Bailian/light rerank + 多轮）  
+> 检索改写：`docs/superpowers/specs/2026-09-17-llm-query-rewrite-design.md`（已落地）  
+> 回答可读性：`docs/superpowers/specs/2026-09-15-answer-inline-citations-design.md`（结构层级 + 短标题已确认）  
 > 联网真实搜索：`docs/superpowers/specs/2026-09-17-home-online-qwen-search-design.md`（已落地，替代本切片「联网占位」）
 > 用户确认：2026-09-15「可以」
 
@@ -57,20 +59,21 @@
 
 用户发消息
   → chat-message（Edge）
-  → general: DeepSeek(chat|reasoner)
-  → rag:（A′）多路召回 → RRF → diversify → Bailian/light rerank → 编号片段 prompt → DeepSeek
+  → general: DeepSeek(chat|reasoner)（开联网见 QW 切片）
+  → rag: LLM query rewrite → 多路召回 → RRF/最高 similarity → diversify
+       → Bailian/light rerank → 编号片段 prompt → DeepSeek → sanitize
   → 持久化 chat_messages +（rag 时）message_citations
-  → 前端渲染回答与引用
+  → 前端 AnswerContent（结构层级 / 短标题 / 行内 [n] 浮卡）
 ```
 
 | 组件 | 职责 |
 | --- | --- |
-| `supabase/functions/_shared/ai.ts` | `embedTexts`、`deepseekChat`、`rerankDocuments`（qwen3-rerank） |
-| `supabase/functions/_shared/rag.ts` / `ragRetrieve.js` | 多路融合、rerank、组 prompt、解析 `[n]` |
+| `supabase/functions/_shared/ai.ts` | `embedTexts`、`deepseekChat`、`rerankDocuments`、`rewriteQueriesWithLlm` |
+| `supabase/functions/_shared/rag.ts` / `ragRetrieve.js` | 改写编排、多路融合、rerank、组 prompt、解析 `[n]` |
 | `supabase/functions/embed-material` | 单条资料批次写 embedding |
 | `supabase/functions/chat-message` | 一轮对话 |
 | `match_material_chunks` / `match_material_chunks_keyword` | 向量 / 关键词 RPC |
-| `refind-demo` chat API + Home/KB UI | 调真实接口；行内 `[n]` 浮卡 |
+| `refind-demo` chat API + Home/KB UI | 调真实接口；`formatAnswerText` + 行内 `[n]` 浮卡 |
 
 密钥（Supabase Edge secrets，勿提交仓库、勿贴聊天）：
 
@@ -107,7 +110,9 @@
 
 - ~~C：DeepSeek 真摘要与标签~~（已落地）
 - ~~A′：多路召回 + rerank + 多轮~~（已落地，见 2026-09-16 设计）
-- 笔记生成 + 引用进卡片
+- ~~LLM 检索语义改写~~（已落地，见 2026-09-17 llm-query-rewrite）
+- ~~回答结构层级 + 短标题标准~~（已落地，见 answer-inline-citations）
+- **下一阶段：笔记生成 + 灵感收藏落库 + 引用进卡片**（产品确认：基于已调好的 AI 回答推进）
 - 笔记 ↔ KB 同步
 - ~~联网真实检索~~（已落地，见 `2026-09-17-home-online-qwen-search-design.md`）
-- 托管上线与生产密钥轮换
+- 托管上线与生产密钥轮换（笔记闭环后再做）

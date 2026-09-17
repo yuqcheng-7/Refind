@@ -112,6 +112,8 @@ describe('SettingsPage', () => {
     await userEvent.click(screen.getByRole('tab', { name: '账户与安全' }));
     expect(screen.getByText('demo@refind.test')).toBeVisible();
     expect(screen.getByText('拾藏用户')).toBeVisible();
+    expect(screen.getByRole('heading', { name: '会话历史' })).toBeVisible();
+    expect(screen.getByText(/会话历史保留最近 90 天/)).toBeVisible();
 
     await userEvent.click(screen.getByRole('button', { name: '返回' }));
     expect(onBack).toHaveBeenCalled();

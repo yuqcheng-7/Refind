@@ -1,6 +1,11 @@
 import { useRef, useState } from 'react';
 import { ArrowRight, ArrowUp, BookOpen, Check, ChevronDown, Globe2, WifiOff } from 'lucide-react';
 import { useDismissable } from '../../hooks/useDismissable.js';
+import {
+  matchHashTagQuery,
+  replaceHashTagToken,
+} from '../../lib/api/tagFilters.js';
+import { ComposerTagSuggest } from '../chat/ComposerTagSuggest.jsx';
 
 const MODEL_IDS = ['ds-fast', 'ds-deep', 'qwen'];
 
@@ -56,9 +61,13 @@ export function HomeComposer({
   const [modelMenu, setModelMenu] = useState(false);
   const [tagMenu, setTagMenu] = useState(false);
   const [tagQuery, setTagQuery] = useState('');
+  const [hashCaret, setHashCaret] = useState(0);
   const baseMenuRef = useRef(null);
   const modelMenuRef = useRef(null);
   const tagMenuRef = useRef(null);
+  const tagAnchorRef = useRef(null);
+  const textareaRef = useRef(null);
+  const caretRef = useRef(0);
   const playIntroBeamRef = useRef(null);
   if (playIntroBeamRef.current === null) {
     playIntroBeamRef.current = Boolean(introBeam) && !composerIntroBeamPlayed && !prefersReducedMotion();
@@ -97,13 +106,20 @@ export function HomeComposer({
   });
   useDismissable({ open: baseMenu, onClose: () => setBaseMenu(false), rootRef: baseMenuRef });
   useDismissable({ open: modelMenu, onClose: () => setModelMenu(false), rootRef: modelMenuRef });
-  useDismissable({ open: tagMenu, onClose: () => setTagMenu(false), rootRef: tagMenuRef });
+  useDismissable({
+    open: tagMenu,
+    onClose: () => setTagMenu(false),
+    rootRef: tagMenuRef,
+    triggerRef: tagAnchorRef,
+  });
 
-  const syncHashMenu = (value) => {
-    const match = /(^|\s)#([^\s#]*)$/.exec(value);
+  const syncHashMenu = (value, caret = value.length) => {
+    caretRef.current = caret;
+    const match = matchHashTagQuery(value, caret);
     if (match) {
       setTagMenu(true);
-      setTagQuery(match[2] || '');
+      setTagQuery(match.query || '');
+      setHashCaret(match.start);
       setBaseMenu(false);
       setModelMenu(false);
       return;
@@ -123,15 +139,18 @@ export function HomeComposer({
       return scoped ? withScopedOffline(next) : next;
     });
     setPrompt((value) => {
+      const caret = caretRef.current;
       if (removing) {
         const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return value
-          .replace(/(^|\s)#[^\s#]*$/, '$1')
-          .replace(new RegExp(`(^|\\s)#${escaped}(?=\\s|$)`, 'g'), '$1')
+        const withoutActive = replaceHashTagToken(value, tag, caret, { remove: true });
+        return withoutActive
+          .replace(new RegExp(`#${escaped}(?=\\s|$)`, 'g'), '')
           .replace(/[ \t]{2,}/g, ' ')
           .trim();
       }
-      return value.replace(/(^|\s)#[^\s#]*$/, `$1#${tag} `);
+      const next = replaceHashTagToken(value, tag, caret);
+      caretRef.current = next.length;
+      return next;
     });
     setTagMenu(false);
     setTagQuery('');
@@ -185,6 +204,11 @@ export function HomeComposer({
       selectedTags: [...selectedTags],
     });
     setPrompt('');
+    caretRef.current = 0;
+    setScope((current) => {
+      const next = { ...current, selectedTags: [] };
+      return next;
+    });
     setTagMenu(false);
     setTagQuery('');
   };
@@ -210,33 +234,36 @@ export function HomeComposer({
           onAnimationEnd={endOrbitBeam}
         />
       )}
-      <div className="composer-input-wrap" ref={tagMenuRef}>
+      <div className="composer-input-wrap" ref={tagAnchorRef}>
         <textarea
+          ref={textareaRef}
           value={prompt}
           onChange={(event) => {
             const value = event.target.value;
+            const caret = event.target.selectionStart ?? value.length;
             setPrompt(value);
-            syncHashMenu(value);
+            syncHashMenu(value, caret);
+          }}
+          onSelect={(event) => {
+            syncHashMenu(event.target.value, event.target.selectionStart ?? event.target.value.length);
+          }}
+          onClick={(event) => {
+            syncHashMenu(event.target.value, event.target.selectionStart ?? event.target.value.length);
           }}
           onFocus={startOrbitBeam}
           onKeyDown={onPromptKeyDown}
           placeholder="请输入内容进行提问，输入 # 可选择标签"
         />
-        {tagMenu && (
-          <div className="composer-menu composer-tag-suggest" role="listbox" aria-label="选择标签">
-            {filteredTags.length ? filteredTags.map((item) => (
-              <button key={item} type="button" role="option" onClick={() => insertTag(item)}>
-                <span className="tag-text">
-                  <span className="tag-hash">#</span>
-                  <span className="tag-label">{item}</span>
-                </span>
-                {selectedTags.includes(item) && <Check size={14} />}
-              </button>
-            )) : (
-              <div className="composer-tag-suggest__empty">暂无标签</div>
-            )}
-          </div>
-        )}
+        <ComposerTagSuggest
+          open={tagMenu}
+          anchorRef={tagAnchorRef}
+          textareaRef={textareaRef}
+          caretIndex={hashCaret}
+          menuRef={tagMenuRef}
+          tags={filteredTags}
+          selectedTags={selectedTags}
+          onPick={insertTag}
+        />
       </div>
       <div className="composer-footer">
         <div className="composer-actions">

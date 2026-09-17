@@ -1,8 +1,19 @@
 import { focusExcerpt } from '../_shared/chunkText.js';
 import { RAG_INSUFFICIENT_CONTENT } from '../_shared/ragRetrieve.js';
+import {
+  repairAnswerStructure,
+  sanitizeRagAnswer,
+} from '../_shared/answerFormat.js';
 
 export const SOFT_SIMILARITY_FLOOR = 0.2;
 export { RAG_INSUFFICIENT_CONTENT };
+export {
+  repairAnswerStructure,
+  sanitizeRagAnswer,
+  sanitizeInlineMarkdown,
+  normalizeCitationPlacement,
+} from '../_shared/answerFormat.js';
+
 
 function uniqueStrings(value) {
   if (!Array.isArray(value)) return [];
@@ -37,8 +48,13 @@ export function normalizeRequestBody(value) {
   }
 
   const modelId = resolveModelId(value);
+  const retrievalContent = typeof value.retrievalContent === 'string'
+    ? value.retrievalContent.trim()
+    : '';
   const body = {
     content,
+    // Ask text used for embedding / rewrite; falls back to visible content.
+    retrievalContent: retrievalContent || content,
     modelId,
     thinkingMode: modelId === 'ds-deep' ? 'deep' : 'fast',
     onlineEnabled: value.onlineEnabled === true,
@@ -116,7 +132,8 @@ export function sanitizeAnswerCitations(answer, maxOrder) {
 
 export function resolveRagAnswerOutcome({ answer, chunks }) {
   const list = Array.isArray(chunks) ? chunks : [];
-  const text = String(answer || '').trim();
+  // Global sanitize: structure + safe short bold only; never leave raw * / **.
+  const text = sanitizeRagAnswer(String(answer || '').trim());
   if (list.length === 0) {
     return {
       content: RAG_INSUFFICIENT_CONTENT,
@@ -186,8 +203,11 @@ export function buildGeneralChatSystemContent(onlineEnabled) {
   return `你是拾藏助手，像懂行的朋友用自然中文聊天。
 要求：
 - 直接把话说清楚，像人与人交流，不要用 Markdown（禁止 **加粗**、# 标题、\`代码\`、--- 分隔线等符号残留在正文里）。
-- 若要分点，用「1. 2. 3.」且序号与内容写在同一行。
-- 不要伪造知识库引用或「根据资料」字样。
+- 大标题：只用「一、二、三、」（单独成行，约 12 字）。大标题下才能跟小分点；禁止小分点后再出现「一、二、三、」。
+- 小分点：有序用「1. 2. 3. 4.」（必须递增）；无序用「· 」。禁止多个「1.」并列。
+- 短标题：仅当需要先命名再展开时使用；2～12 字，写成 **短标题：** 后接正文（正文不加粗）。整句说明不要硬拆成短标题。
+- 禁止「一、标题1.」或「……。二、」粘行；换段必须换行。
+- 可以承接上文对话（包括用户刚在知识库模式问过的内容）做连续追问；不要伪造知识库引用或「根据资料」字样。
 ${onlineEnabled ? '- 已启用联网搜索；可依据检索结果回答。不要在正文里写 [n] 编号；来源会由界面单独展示。' : ''}`;
 }
 
@@ -211,8 +231,8 @@ export function persistableWebSources(webSources) {
 
 /** Strip markdown so general chat reads like plain conversation. */
 export function stripMarkdownForReading(text = '') {
-  let value = String(text).replace(/\r\n/g, '\n');
-  if (!value.trim()) return '';
+  let value = String(text || '').replace(/\r\n/g, '\n').replace(/\u2022/g, '·').replace(/\u00B7/g, '·').trim();
+  if (!value) return '';
   value = value.replace(/^#{1,6}\s+/gm, '');
   value = value.replace(/^\s*[-*_]{3,}\s*$/gm, '');
   value = value.replace(/\*\*([^*]+)\*\*/g, '$1');
@@ -221,9 +241,16 @@ export function stripMarkdownForReading(text = '') {
   value = value.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '$1');
   value = value.replace(/`+/g, '');
   value = value.replace(/\*{1,2}/g, '');
-  value = value.replace(/^(\d+)\.\s*\n+(?=\S)/gm, '$1. ');
-  value = value.replace(/(\n)(\d+)\.\s*\n+(?=\S)/g, '$1$2. ');
-  value = value.replace(/[ \t]+\n/g, '\n');
-  value = value.replace(/\n{3,}/g, '\n\n');
-  return value.trim();
+  value = repairAnswerStructure(value);
+  return value.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** @deprecated use sanitizeRagAnswer */
+export function repairBrokenMarkdown(text = '') {
+  return sanitizeRagAnswer(text);
+}
+
+/** @deprecated alias */
+export function repairSectionStructure(text = '') {
+  return repairAnswerStructure(text);
 }

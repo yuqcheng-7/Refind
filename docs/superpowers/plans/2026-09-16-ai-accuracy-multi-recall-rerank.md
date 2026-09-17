@@ -8,7 +8,9 @@
 
 **Tech Stack:** Supabase Edge (Deno), Postgres RPC, DashScope embed + **qwen3-rerank**, DeepSeek chat, Node `node:test` for pure helpers.
 
-**As-built note (2026-09-17):** Design originally targeted local-only light rerank + top≈5 + copy「知识库暂未查询到相关内容」. Shipped deltas: Bailian rerank + light fallback, topK=8, copy「暂无相关资料」, pre-rerank diversify ≤3/material, deixis soft retrieval query. Spec: `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`.
+**As-built note (2026-09-17):** Design originally targeted local-only light rerank + top≈5 + copy「知识库暂未查询到相关内容」. Shipped deltas: Bailian rerank + light fallback, topK=8, copy「暂无相关资料」, pre-rerank diversify ≤3/material, deixis soft retrieval query. **Further shipped:** LLM query rewrite (`2026-09-17-llm-query-rewrite`) + answer structure/short-title (`answer-inline-citations`). Spec: `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`.
+
+**Status:** Tasks 1–4 实现完成；产品 Case 可与笔记阶段并行 spot-check。下一产品重点见 phase3 笔记 Task。
 
 ## Global Constraints
 

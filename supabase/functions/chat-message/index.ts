@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { deepseekChat, embedTexts, rerankDocuments } from '../_shared/ai.ts';
+import { deepseekChat, embedTexts, rerankDocuments, rewriteQueriesWithLlm } from '../_shared/ai.ts';
 import { qwenChatWithOptionalSearch } from '../_shared/webSearch.js';
 import { focusExcerpt } from '../_shared/chunkText.js';
 import {
@@ -19,6 +19,13 @@ import {
   extractQueryTerms,
   fuseByRrf,
   explainRetrievalWeakness,
+  listRetrievalQueries,
+  resolveRetrievalQueries,
+  summarizeAssistantForRewrite,
+  normalizeAnswerMode,
+  userQuestionsForRetrievalRewrite,
+  historyMessagesForRagLlm,
+  historyMessagesForGeneralLlm,
   logRagDebug,
   rerankCandidatesWithFallback,
 } from '../_shared/ragRetrieve.js';
@@ -55,6 +62,7 @@ type MatchedChunk = {
 type ChatHistoryMessage = {
   role: 'user' | 'assistant' | string;
   content: string;
+  answer_mode?: string | null;
 };
 
 const corsHeaders = {
@@ -220,6 +228,8 @@ Deno.serve(async (req) => {
     }
 
     const answerMode = resolveAnswerMode(body);
+    // Visible bubble / DB may keep #tags; retrieval & LLM use ask text.
+    const askText = String(body.retrievalContent || body.content || '').trim() || body.content;
 
     await admin
       .from('chat_conversations')
@@ -229,15 +239,13 @@ Deno.serve(async (req) => {
     // Load prior turns before inserting the current user message.
     const { data: priorMessages, error: priorError } = await admin
       .from('chat_messages')
-      .select('role, content')
+      .select('role, content, answer_mode')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .limit(RAG_HISTORY_MESSAGES_FOR_LLM);
     if (priorError) throw priorError;
     const historyAsc = ([...(priorMessages || [])] as ChatHistoryMessage[]).reverse();
-    const recentUserQuestions = historyAsc
-      .filter((msg) => msg.role === 'user')
-      .map((msg) => msg.content);
+    const recentUserQuestions = userQuestionsForRetrievalRewrite(historyAsc, askText);
 
     const messageBase = {
       conversation_id: conversationId,
@@ -258,9 +266,14 @@ Deno.serve(async (req) => {
       let plainAnswer: string;
       let webSources: { order: number; title: string; url: string }[] = [];
 
+      const generalHistory = historyMessagesForGeneralLlm(historyAsc, askText);
       const messages = [
         { role: 'system', content: buildGeneralChatSystemContent(body.onlineEnabled) },
-        { role: 'user', content: body.content },
+        ...generalHistory.map((msg) => ({
+          role: (msg.role === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
+          content: msg.content,
+        })),
+        { role: 'user', content: askText },
       ];
 
       if (useQwen) {
@@ -299,23 +312,60 @@ Deno.serve(async (req) => {
       });
     }
 
-    const retrievalQuery = buildRetrievalQuery(body.content, recentUserQuestions);
-    const queryTerms = extractQueryTerms(retrievalQuery);
-    const [queryEmbedding] = await embedTexts([retrievalQuery]);
-    if (!queryEmbedding) throw new Error('query embedding was not returned');
+    const recentAssistantRaw = [...historyAsc]
+      .reverse()
+      .find((msg) => msg?.role === 'assistant' && normalizeAnswerMode(msg?.answer_mode) === 'rag');
+    const recentAssistant = summarizeAssistantForRewrite(recentAssistantRaw?.content || '');
+
+    const rewriteResult = await resolveRetrievalQueries({
+      current: askText,
+      recentUser: recentUserQuestions,
+      recentAssistant,
+      rewriteFn: rewriteQueriesWithLlm,
+    });
+    const retrievalQueries = rewriteResult.queries.length
+      ? rewriteResult.queries
+      : listRetrievalQueries(askText, recentUserQuestions);
+    const retrievalQuery = retrievalQueries[0] || buildRetrievalQuery(askText, recentUserQuestions);
+    const parentScopeFallback = rewriteResult.source === 'rules_fallback'
+      && rewriteResult.kind === 'submodule_attribute';
+
+    console.log('[rag-debug] query_rewrite_input=', JSON.stringify(rewriteResult.input));
+    console.log('[rag-debug] query_rewrite_output=', JSON.stringify({
+      queries: rewriteResult.queries,
+      is_followup: rewriteResult.is_followup,
+      source: rewriteResult.source,
+      kind: rewriteResult.kind,
+    }));
+    if (rewriteResult.fallback) {
+      console.log('[rag-debug] query_rewrite_fallback=', JSON.stringify(rewriteResult.fallback));
+    }
+    if (rewriteResult.dropped?.length) {
+      console.log('[rag-debug] query_rewrite_dropped=', JSON.stringify(rewriteResult.dropped));
+    }
+    console.log('[rag-debug] rewrite_latency_ms=', rewriteResult.rewrite_latency_ms);
+    const queryEmbeddings = await embedTexts(retrievalQueries);
+    if (!queryEmbeddings.length || queryEmbeddings.some((item) => !item)) {
+      throw new Error('query embedding was not returned');
+    }
 
     const filterKbIds = body.knowledgeBaseIds.length ? body.knowledgeBaseIds : null;
-    const filterTagIds = body.tagFilters.length ? body.tagFilters : null;
+    const requestedTagIds = body.tagFilters.length ? body.tagFilters : null;
+    const queryTerms = [...new Set(retrievalQueries.flatMap((query) => extractQueryTerms(query)))];
 
-    const [vectorResult, keywordResult] = await Promise.all([
-      admin.rpc('match_material_chunks', {
+    // User asked with #tags: keep the looser gate even after soft-fallback drops the
+    // hard tag filter. Otherwise fallback chunks get judged with the strict floor and
+    // flip to「暂无相关资料」on the first try (second try often "works" via history noise).
+    const userTagScoped = Boolean(requestedTagIds?.length);
+    const runRecall = async (filterTagIds: string[] | null) => {
+      const vectorRequests = queryEmbeddings.map((queryEmbedding) => admin.rpc('match_material_chunks', {
         query_embedding: queryEmbedding,
         match_count: RAG_VECTOR_RECALL_K,
         filter_user: user.id,
         filter_kb_ids: filterKbIds,
         filter_tag_ids: filterTagIds,
-      }),
-      queryTerms.length
+      }));
+      const keywordRequest = queryTerms.length
         ? admin.rpc('match_material_chunks_keyword', {
           query_terms: queryTerms,
           match_count: RAG_KEYWORD_RECALL_K,
@@ -323,37 +373,95 @@ Deno.serve(async (req) => {
           filter_kb_ids: filterKbIds,
           filter_tag_ids: filterTagIds,
         })
-        : Promise.resolve({ data: [], error: null }),
-    ]);
-    if (vectorResult.error) throw vectorResult.error;
-    if (keywordResult.error) throw keywordResult.error;
+        : Promise.resolve({ data: [], error: null });
 
-    const vectorHits = (vectorResult.data || []) as MatchedChunk[];
-    const keywordHits = (keywordResult.data || []) as MatchedChunk[];
-    const rrfFused = fuseByRrf([vectorHits, keywordHits]) as MatchedChunk[];
-    const rrfDiversified = diversifyByMaterial(rrfFused) as MatchedChunk[];
-    const { ranked: reranked, provider: rerankProvider } = await rerankCandidatesWithFallback(
+      const settled = await Promise.all([...vectorRequests, keywordRequest]);
+      const keywordResult = settled[settled.length - 1];
+      const vectorResults = settled.slice(0, -1);
+      for (const result of vectorResults) {
+        if (result.error) throw result.error;
+      }
+      if (keywordResult.error) throw keywordResult.error;
+
+      const vectorHits = vectorResults.flatMap((result) => (result.data || []) as MatchedChunk[]);
+      const keywordHits = (keywordResult.data || []) as MatchedChunk[];
+      const vectorRankLists = vectorResults.map((result) => (result.data || []) as MatchedChunk[]);
+      const rrfFused = fuseByRrf([...vectorRankLists, keywordHits]) as MatchedChunk[];
+      const rrfDiversified = diversifyByMaterial(rrfFused) as MatchedChunk[];
+      const { ranked: reranked, provider: rerankProvider } = await rerankCandidatesWithFallback(
+        rrfDiversified,
+        retrievalQuery,
+        {
+          topK: RAG_FINAL_TOP_K,
+          rerankFn: rerankDocuments,
+        },
+      ) as { ranked: MatchedChunk[]; provider: string };
+      const chunks = reranked.slice(0, RAG_FINAL_TOP_K);
+      const tooWeakInfo = explainRetrievalWeakness(chunks, {
+        queryText: retrievalQuery,
+        tagScoped: userTagScoped || Boolean(filterTagIds?.length),
+      });
+      return {
+        filterTagIds,
+        vectorHits,
+        keywordHits,
+        rrfFused,
+        rrfDiversified,
+        reranked,
+        rerankProvider,
+        chunks,
+        tooWeakInfo,
+      };
+    };
+
+    let recall = await runRecall(requestedTagIds);
+    // Soft fallback: #tags hard-filter can miss when materials aren't tagged that way.
+    // Retry once inside the same KB without tag filters so tagged asks still answer.
+    if (
+      requestedTagIds?.length
+      && (!recall.chunks.length || recall.tooWeakInfo.weak)
+    ) {
+      console.log('[rag-debug] tag_filter_fallback=without_tags', recall.tooWeakInfo);
+      const fallback = await runRecall(null);
+      // Prefer whichever recall is usable; only replace when fallback is at least as good.
+      if (
+        (!fallback.tooWeakInfo.weak && recall.tooWeakInfo.weak)
+        || (fallback.chunks.length > 0 && recall.chunks.length === 0)
+        || (
+          !fallback.tooWeakInfo.weak
+          && !recall.tooWeakInfo.weak
+          && fallback.chunks.length >= recall.chunks.length
+        )
+      ) {
+        recall = fallback;
+      }
+    }
+
+    const {
+      vectorHits,
+      keywordHits,
+      rrfFused,
       rrfDiversified,
-      retrievalQuery,
-      {
-        topK: RAG_FINAL_TOP_K,
-        rerankFn: rerankDocuments,
-      },
-    ) as { ranked: MatchedChunk[]; provider: string };
+      reranked,
+      rerankProvider,
+      chunks,
+      tooWeakInfo,
+      filterTagIds: effectiveTagIds,
+    } = recall;
     console.log('[rag-debug] rerank_provider=', rerankProvider);
-    const chunks = reranked.slice(0, RAG_FINAL_TOP_K);
+    console.log('[rag-debug] retrieval_queries=', JSON.stringify(retrievalQueries));
+    console.log('[rag-debug] tag_filter_effective=', JSON.stringify(effectiveTagIds));
     const retrievalSummary = buildRetrievalSummary(chunks);
     const rrfByTitle = countByMaterialTitle(rrfFused);
     const rrfDiversifiedByTitle = countByMaterialTitle(rrfDiversified);
     const rerankedByTitle = countByMaterialTitle(reranked);
     const topByTitle = countByMaterialTitle(chunks);
 
-    const tooWeakInfo = explainRetrievalWeakness(chunks, { queryText: retrievalQuery });
     if (!chunks.length || tooWeakInfo.weak) {
       const gateReason = !chunks.length ? '无参考片段' : (tooWeakInfo.reason || 'retrieval_too_weak');
       console.log('[rag-debug] outcome_reason=', gateReason, tooWeakInfo.detail || '');
       logRagDebug({
-        userQuestion: body.content,
+        userQuestion: askText,
         retrievalQuery,
         vectorHits,
         keywordHits,
@@ -385,18 +493,26 @@ Deno.serve(async (req) => {
       index: index + 1,
       content: chunk.content,
       title: chunk.material_title,
-    })));
+    })), {
+      // Only submodule-attribute follow-ups may use the「该模块没有…整体技术」opener.
+      parentScopeFallback,
+    });
+    const ragHistory = historyMessagesForRagLlm(
+      historyAsc,
+      askText,
+      rewriteResult.source === 'llm' ? { forceFollowUp: rewriteResult.is_followup } : {},
+    );
     const llmMessages = [
       { role: 'system' as const, content: systemPrompt },
-      ...historyAsc.map((msg) => ({
+      ...ragHistory.map((msg) => ({
         role: (msg.role === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
         content: msg.content,
       })),
-      { role: 'user' as const, content: body.content },
+      { role: 'user' as const, content: askText },
     ];
-    const fullLlmPrompt = formatFullPrompt(systemPrompt, historyAsc, body.content);
+    const fullLlmPrompt = formatFullPrompt(systemPrompt, ragHistory, askText);
     logRagDebug({
-      userQuestion: body.content,
+      userQuestion: askText,
       retrievalQuery,
       vectorHits,
       keywordHits,
@@ -412,10 +528,42 @@ Deno.serve(async (req) => {
       llmRaw: null,
     });
 
-    const answer = await deepseekChat(llmMessages, { model: mapThinkingMode(body.thinkingMode) });
+    let activeChunks = chunks;
+    let answer = await deepseekChat(llmMessages, { model: mapThinkingMode(body.thinkingMode) });
     console.log('[rag-debug] llm_raw=\n', answer);
+    let answerOutcome = resolveRagAnswerOutcome({ answer, chunks: activeChunks });
 
-    const answerOutcome = resolveRagAnswerOutcome({ answer, chunks });
+    // Tagged ask retrieved something the model still refused: broaden once without tags.
+    if (
+      answerOutcome.isInsufficient
+      && requestedTagIds?.length
+      && effectiveTagIds != null
+    ) {
+      console.log('[rag-debug] llm_insufficient_tag_retry=without_tags');
+      const broadened = await runRecall(null);
+      if (!broadened.tooWeakInfo.weak && broadened.chunks.length) {
+        activeChunks = broadened.chunks;
+        const retryPrompt = buildRagSystemPrompt(activeChunks.map((chunk, index) => ({
+          index: index + 1,
+          content: chunk.content,
+          title: chunk.material_title,
+        })), {
+          parentScopeFallback,
+        });
+        const retryMessages = [
+          { role: 'system' as const, content: retryPrompt },
+          ...ragHistory.map((msg) => ({
+            role: (msg.role === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
+            content: msg.content,
+          })),
+          { role: 'user' as const, content: askText },
+        ];
+        answer = await deepseekChat(retryMessages, { model: mapThinkingMode(body.thinkingMode) });
+        console.log('[rag-debug] llm_raw_retry=\n', answer);
+        answerOutcome = resolveRagAnswerOutcome({ answer, chunks: activeChunks });
+      }
+    }
+
     console.log(
       '[rag-debug] outcome_reason=',
       answerOutcome.reason,
@@ -424,13 +572,14 @@ Deno.serve(async (req) => {
       '| orders=',
       answerOutcome.orders,
     );
+    const finalRetrievalSummary = buildRetrievalSummary(activeChunks);
     const { data: assistantMessage, error: assistantError } = await admin
       .from('chat_messages')
       .insert({
         ...messageBase,
         role: 'assistant',
         content: answerOutcome.content,
-        retrieval_summary: retrievalSummary,
+        retrieval_summary: finalRetrievalSummary,
         is_insufficient: answerOutcome.isInsufficient,
       })
       .select('id')
@@ -442,7 +591,7 @@ Deno.serve(async (req) => {
     const citationRows = buildCitationRows(
       assistantMessage.id,
       citationOrders,
-      chunks,
+      activeChunks,
       answerOutcome.content,
     );
     if (citationRows.length) {
@@ -457,7 +606,7 @@ Deno.serve(async (req) => {
       answerMode,
       content: answerOutcome.content,
       insufficient: answerOutcome.isInsufficient,
-      citations: citationOrders.map((order) => citationResponse(order, chunks[order - 1], answerOutcome.content)),
+      citations: citationOrders.map((order) => citationResponse(order, activeChunks[order - 1], answerOutcome.content)),
     });
   } catch (error) {
     // Best-effort rollback keeps retries from accumulating a partial exchange.

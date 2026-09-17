@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   citationByOrder,
+  parseListItemLead,
   splitAnswerBlocks,
   tokenizeInline,
 } from './formatAnswerText.js';
@@ -25,14 +26,32 @@ function InlineText({
   onShowCitation,
   onHideCitation,
   onOpenMaterial,
+  tokens: presetTokens,
 }) {
-  return tokenizeInline(text, { allowMarkdown }).map((token, index) => {
+  const tokens = presetTokens || tokenizeInline(text, { allowMarkdown });
+
+  const renderTokens = (list, nestKey) => list.map((token, index) => {
+    const key = `${nestKey}-${index}`;
     if (token.type === 'bold') {
-      return <strong key={`b-${index}`}>{token.value}</strong>;
+      return (
+        <strong key={key}>
+          {renderTokens(token.children || [{ type: 'text', value: token.value || '' }], `${key}-b`)}
+        </strong>
+      );
+    }
+    if (token.type === 'italic') {
+      return (
+        <em key={key}>
+          {renderTokens(token.children || [{ type: 'text', value: token.value || '' }], `${key}-i`)}
+        </em>
+      );
+    }
+    if (token.type === 'code') {
+      return <code className="answer-content__code" key={key}>{token.value}</code>;
     }
     if (token.type === 'citation') {
       const meta = citationByOrder(citations, token.order);
-      const instanceKey = `${keyPrefix}-c${index}-${token.order}`;
+      const instanceKey = `${keyPrefix}-${key}-c${token.order}`;
       if (!meta) {
         return <span key={instanceKey} className="answer-cite answer-cite--missing">[{token.order}]</span>;
       }
@@ -53,8 +72,29 @@ function InlineText({
         />
       );
     }
-    return <span key={`t-${index}`}>{token.value}</span>;
+    return <span key={key}>{token.value}</span>;
   });
+
+  return renderTokens(tokens, 't');
+}
+
+function ListItemText(props) {
+  const lead = parseListItemLead(props.text);
+  if (!lead) {
+    return <InlineText {...props} />;
+  }
+  return (
+    <>
+      <strong className="answer-content__list-label">{lead.title}{lead.colon}</strong>
+      {lead.rest ? (
+        <InlineText
+          {...props}
+          text={lead.rest}
+          keyPrefix={`${props.keyPrefix}-rest`}
+        />
+      ) : null}
+    </>
+  );
 }
 
 function CitationChip({ order, citation, open, onShow, onHide, onOpenMaterial }) {
@@ -194,12 +234,37 @@ export function AnswerContent({
   return (
     <div className={`answer-content ${conversational ? 'is-conversational' : ''}`}>
       {blocks.map((block, index) => {
-        if (block.type === 'list') {
+        if (block.type === 'hr') {
+          return <hr className="answer-content__hr" key={`hr-${index}`} />;
+        }
+        if (block.type === 'heading') {
+          const HeadingTag = block.level >= 3 ? 'h4' : block.level === 1 ? 'h2' : 'h3';
           return (
-            <ol className="answer-content__list" key={`list-${index}`}>
+            <HeadingTag className={`answer-content__heading answer-content__heading--h${block.level}`} key={`h-${index}`}>
+              <InlineText
+                text={block.text}
+                citations={citations}
+                interactive={interactive}
+                allowMarkdown={allowMarkdown}
+                openKey={openKey}
+                keyPrefix={`b${index}`}
+                onShowCitation={setOpenKey}
+                onHideCitation={(key) => setOpenKey((current) => (current === key ? null : current))}
+                onOpenMaterial={onOpenMaterial}
+              />
+            </HeadingTag>
+          );
+        }
+        if (block.type === 'list') {
+          const ListTag = block.ordered ? 'ol' : 'ul';
+          return (
+            <ListTag
+              className={`answer-content__list ${block.ordered ? 'is-ordered' : 'is-unordered'}`}
+              key={`list-${index}`}
+            >
               {block.items.map((item, itemIndex) => (
                 <li key={`li-${index}-${itemIndex}`}>
-                  <InlineText
+                  <ListItemText
                     text={item}
                     citations={citations}
                     interactive={interactive}
@@ -212,7 +277,7 @@ export function AnswerContent({
                   />
                 </li>
               ))}
-            </ol>
+            </ListTag>
           );
         }
         return (

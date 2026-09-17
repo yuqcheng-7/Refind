@@ -1,6 +1,31 @@
 import { Pencil } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
+/** Render `#tag` tokens with a distinct style inside user bubbles. */
+export function renderQuestionWithHashTags(question = '') {
+  const text = String(question || '');
+  if (!text.includes('#')) return text;
+  const nodes = [];
+  const pattern = /#([^\s#]+)/g;
+  let lastIndex = 0;
+  let match;
+  let key = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(text.slice(lastIndex, match.index));
+    }
+    nodes.push(
+      <span key={`tag-${key}`} className="user-message-hash-tag">
+        #{match[1]}
+      </span>,
+    );
+    key += 1;
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes.length ? nodes : text;
+}
+
 export function EditableUserMessage({
   message,
   bubbleClassName,
@@ -25,7 +50,7 @@ export function EditableUserMessage({
   }, [editing]);
 
   if (shareMode || !onResend) {
-    return <div className={bubbleClassName}>{message.question}</div>;
+    return <div className={bubbleClassName}>{renderQuestionWithHashTags(message.question)}</div>;
   }
 
   if (editing) {
@@ -97,7 +122,7 @@ export function EditableUserMessage({
 
   return (
     <div className="user-message-edit">
-      <div className={bubbleClassName}>{message.question}</div>
+      <div className={bubbleClassName}>{renderQuestionWithHashTags(message.question)}</div>
       <button
         type="button"
         className="user-message-edit__trigger"

@@ -1,27 +1,85 @@
 import { supabase } from '../supabaseClient.js';
 
-export function groupLabelForDate(value) {
+/** Home / knowledge chat history is only listed within this window. */
+export const CONVERSATION_HISTORY_RETENTION_DAYS = 90;
+
+function startOfLocalDay(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '更早';
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-  if (date.toDateString() === today.toDateString()) return '今天';
-  if (date.toDateString() === yesterday.toDateString()) return '昨天';
-  return '更早';
+  date.setHours(0, 0, 0, 0);
+  return date;
 }
 
-export function groupConversationsByDay(conversations = []) {
+export function conversationHistoryCutoffIso(
+  now = new Date(),
+  days = CONVERSATION_HISTORY_RETENTION_DAYS,
+) {
+  const cutoff = startOfLocalDay(now);
+  cutoff.setDate(cutoff.getDate() - Math.max(1, Number(days) || CONVERSATION_HISTORY_RETENTION_DAYS));
+  return cutoff.toISOString();
+}
+
+export function isWithinConversationHistoryRetention(
+  value,
+  now = new Date(),
+  days = CONVERSATION_HISTORY_RETENTION_DAYS,
+) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  return date.getTime() >= new Date(conversationHistoryCutoffIso(now, days)).getTime();
+}
+
+/** @returns {{ label: string, sortKey: number }} */
+export function conversationDayMeta(value, now = new Date()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { label: '未知日期', sortKey: 0 };
+  }
+  const today = startOfLocalDay(now);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const day = startOfLocalDay(date);
+  if (day.getTime() === today.getTime()) {
+    return { label: '今天', sortKey: Number.MAX_SAFE_INTEGER };
+  }
+  if (day.getTime() === yesterday.getTime()) {
+    return { label: '昨天', sortKey: Number.MAX_SAFE_INTEGER - 1 };
+  }
+  return {
+    label: `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`,
+    sortKey: day.getTime(),
+  };
+}
+
+export function groupLabelForDate(value, now = new Date()) {
+  return conversationDayMeta(value, now).label;
+}
+
+export function groupConversationsByDay(conversations = [], now = new Date()) {
   const buckets = new Map();
   for (const item of conversations) {
-    const label = groupLabelForDate(item.updatedAt);
-    if (!buckets.has(label)) buckets.set(label, []);
-    buckets.get(label).push(item);
+    if (!isWithinConversationHistoryRetention(item.updatedAt, now)) continue;
+    const { label, sortKey } = conversationDayMeta(item.updatedAt, now);
+    if (!buckets.has(label)) buckets.set(label, { label, sortKey, items: [] });
+    buckets.get(label).items.push(item);
   }
-  const order = ['今天', '昨天', '更早'];
-  return order
-    .filter((label) => buckets.has(label))
-    .map((label) => ({ label, items: buckets.get(label) }));
+  return [...buckets.values()]
+    .sort((a, b) => b.sortKey - a.sortKey)
+    .map(({ label, items }) => ({ label, items }));
+}
+
+export function extractHashTagNamesFromText(prompt = '') {
+  const text = String(prompt || '');
+  const found = [];
+  const seen = new Set();
+  const pattern = /#([^\s#]+)/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) {
+    const name = String(match[1] || '').trim();
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    found.push(name);
+  }
+  return found;
 }
 
 export function pairChatTurns(messages = [], citationsByMessageId = {}) {
@@ -35,6 +93,7 @@ export function pairChatTurns(messages = [], citationsByMessageId = {}) {
     const citations = assistantMessage
       ? (citationsByMessageId[assistantMessage.id] || [])
       : [];
+    const selectedTags = extractHashTagNamesFromText(userMessage.content);
     turns.push({
       id: assistantMessage?.id || userMessage.id,
       userMessageId: userMessage.id,
@@ -43,7 +102,7 @@ export function pairChatTurns(messages = [], citationsByMessageId = {}) {
       mode: assistantMessage?.answer_mode || userMessage.answer_mode,
       insufficient: assistantMessage?.is_insufficient === true,
       selectedBases: [],
-      selectedTags: [],
+      selectedTags,
       citations: citations.map((citation) => ({
         order: citation.citation_order,
         label: citation.material_title_snapshot,
@@ -109,8 +168,9 @@ export async function listConversations({ surface = 'home', knowledgeBaseId } = 
     .from('chat_conversations')
     .select('id, title, updated_at, created_at')
     .eq('surface', surface)
+    .gte('updated_at', conversationHistoryCutoffIso())
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .limit(200);
 
   if (surface === 'knowledge') {
     if (!knowledgeBaseId) return [];
@@ -119,7 +179,9 @@ export async function listConversations({ surface = 'home', knowledgeBaseId } = 
 
   const { data, error } = await query;
   if (error) throw error;
-  return (data || []).map(mapConversationRow);
+  return (data || [])
+    .map(mapConversationRow)
+    .filter((item) => isWithinConversationHistoryRetention(item.updatedAt));
 }
 
 export async function loadConversationTurns(conversationId) {

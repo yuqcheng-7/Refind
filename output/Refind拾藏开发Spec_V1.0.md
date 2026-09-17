@@ -3,7 +3,7 @@
 > 版本：V1.0  
 > 基于产品需求文档：`Refind拾藏PRD_V1.0.md`  
 > 文档日期：2026-08-13  
-> 最近修订：2026-09-17（见第 14 章：A′ RAG、不足文案、知识库默认最新会话、首页左右留白；第 11–13 章仍有效）
+> 最近修订：2026-09-17（见第 14 章：A′ RAG、LLM 检索改写、回答结构/短标题、下一阶段笔记；第 11–13 章仍有效）
 
 ---
 
@@ -643,10 +643,11 @@ Web 客户端
 ```text
 保存/编辑资料 → 文本切片 → Embedding 向量化 → pgvector 索引
 用户提问（RAG）→ 解析 #标签 → 标签过滤
+  → 检索前 LLM 语义改写（qwen-turbo；失败则规则 fallback）→ 1～2 条完整 query
   → 并行：问题向量召回 + 关键词/标题召回（各 ~20）
-  → RRF 融合（≤40）→ 按 material_id 多样性（≤3）
+  → 同 chunk 最高 similarity 去重 → RRF 融合（≤40）→ 按 material_id 多样性（≤3）
   → 百炼 qwen3-rerank（floor 0.4；失败则 light rerank）
-  → topK≈8（运维 6–10）进 prompt → DeepSeek → 保存消息与 [n] 引用
+  → topK≈8（运维 6–10）进 prompt → DeepSeek → sanitize 结构 → 保存消息与 [n] 引用
   → 过弱 / 无有效引用 → 「暂无相关资料」（可跳过 LLM）
 ```
 
@@ -655,7 +656,9 @@ Web 客户端
 - 只使用召回片段和当前会话上下文；
 - 每个关键事实、观点、案例或结论附句末 `[n]` 来源标记（不要文档名、不要末尾汇总列表）；
 - 对资料间冲突说明差异并分别引用；
-- 对推断使用明确的推断表达，不将推断写成既有事实。
+- 对推断使用明确的推断表达，不将推断写成既有事实；
+- **结构：** 大标题「一、二、三、」→ 有序「1. 2. 3. 4.」（必须递增）或「· 」并列；前端对并行全「1.」重编号；
+- **短标题：** 仅「先命名再展开」时使用，2～12 字，`**短标题：**` + 正文；不要硬造短标题；全局清洗残星。
 
 消息呈现规则：用户消息右对齐，以气泡呈现；AI 消息左对齐，以无卡片容器的紧凑分段/列表文本呈现。双方均不展示头像。首页通用 AI 回答不显示严格 RAG 的资料计数与来源引用。首页对话列（含输入框）在历史展开/折叠时左右外边距保持一致。
 
@@ -874,14 +877,15 @@ disconnected → connecting → connected → expired → reconnecting → conne
 ## 8.3 向量检索
 
 - 向量模型：阿里云百炼 `text-embedding-v4`；
+- 检索改写：阿里云百炼 `qwen-turbo`（超时 800ms abort；失败回退规则 `rewriteRetrievalQueries`）；
 - 重排序：阿里云百炼 `qwen3-rerank`（失败回退本地 light rerank）；
 - 向量库：Supabase Postgres + pgvector；
-- 召回：向量 RPC `match_material_chunks` + 关键词 RPC `match_material_chunks_keyword`，RRF 融合后再 diversify / rerank；
+- 召回：向量 RPC `match_material_chunks` + 关键词 RPC `match_material_chunks_keyword`，最高 similarity 去重后 RRF，再 diversify / rerank；
 - 召回对象：当前用户、`ready` 状态的资料片段；
 - 标签过滤先于召回；多标签为 AND；
 - 搜索与对话均排除 `link_only`、删除中、已删除、索引更新失败资料；
 - 返回结果必须携带资料 ID、知识库 ID、标题、平台、原文位置和内容片段，以支持来源展示；
-- 详细参数见 `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`。
+- 详细参数见 `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`、`2026-09-17-llm-query-rewrite-design.md`。
 
 ## 8.4 RAG 生成提示约束
 
@@ -891,7 +895,11 @@ disconnected → connecting → connected → expired → reconnecting → conne
 2. 没有依据时直接回复「暂无相关资料」；
 3. 关键结论句末标注 `[n]`；不要写文档名、不要末尾汇总参考列表；
 4. 资料冲突时分别标注不同来源观点；
-5. 不输出“已阅读资料但实际未引用”的泛化结论。
+5. 不输出“已阅读资料但实际未引用”的泛化结论；
+6. 结构层级：大标题「一、二、三、」；有序小分点阿拉伯数字必须递增；并列用「· 」；禁止多个「1.」并列；
+7. 短标题仅「先命名再展开」：2～12 字，`**短标题：**` + 正文；不要硬造短标题；加粗尽量少用且必须成对。
+
+前端 `formatAnswerText` / `AnswerContent` 对结构与短标题做二次修复与渲染；服务端 `sanitizeRagAnswer` 与前端同源清洗残星。详见 `docs/superpowers/specs/2026-09-15-answer-inline-citations-design.md`。
 
 ## 8.5 首页通用 AI 与笔记生成约束
 
@@ -1176,38 +1184,58 @@ disconnected → connecting → connected → expired → reconnecting → conne
 - Cloudflare 代理自有域名是可选加速/可达性手段，不替代 Supabase 与托管解析。
 - 当前 Supabase 生产项目区域：**东京 `ap-northeast-1`**。
 
-## 14. 2026-09-16/17 AI 准确度与对话 UX（as-built）
+## 14. 2026-09-16/17 AI 准确度、检索改写与回答结构（as-built）
 
-> 对齐设计：`docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`  
-> 计划：`docs/superpowers/plans/2026-09-16-ai-accuracy-multi-recall-rerank.md`
+> 对齐设计：  
+> - `docs/superpowers/specs/2026-09-16-ai-accuracy-multi-recall-rerank-design.md`  
+> - `docs/superpowers/specs/2026-09-17-llm-query-rewrite-design.md`  
+> - `docs/superpowers/specs/2026-09-15-answer-inline-citations-design.md`  
+> 计划：`docs/superpowers/plans/2026-09-16-ai-accuracy-multi-recall-rerank.md`、`2026-09-17-llm-query-rewrite.md`
 
 ### 14.1 RAG A′ 管线
 
 | 步骤 | 实现 |
 | --- | --- |
-| 召回 | `match_material_chunks` ∥ `match_material_chunks_keyword`（各 ~20） |
+| 检索改写 | `resolveRetrievalQueries`：LLM（`qwen-turbo`，≤800ms abort）→ 逐条校验 → 规则 fallback |
+| 召回 | 每条 rewrite query 向量路；关键词 terms 并集 1 路（各 ~20） |
+| 去重 | 同 `chunk_id` 保留最高 similarity（禁止先到者） |
 | 融合 | RRF `k=60`，候选 ≤40 |
 | 多样性 | `diversifyByMaterial` 每 `material_id` ≤3 |
 | Rerank | Bailian `qwen3-rerank`（floor 0.4）→ 失败 `lightRerank` |
 | 进 prompt | `RAG_FINAL_TOP_K=8`（运维 6–10，硬顶 10） |
 | 不足 | 文案 `暂无相关资料`；弱检索短路不调 LLM |
-| 多轮检索 | `buildRetrievalQuery`：独立问仅当前句；指代/短句软提示 |
-| 多轮生成 | 最近约 6 条消息 + 当前 user |
-| 日志 | `[rag-debug]` 含 `full_llm_prompt` |
+| 多轮生成 | 最近约 6 条消息 + 当前 user（受 `is_followup`） |
+| 日志 | `[rag-debug]` 含 `query_rewrite_*`、`rewrite_latency_ms`、`full_llm_prompt` |
 
-密钥：`DASHSCOPE_API_KEY` 同时用于 embedding 与 rerank。
+密钥：`DASHSCOPE_API_KEY` 用于 embedding、rerank 与 query rewrite。
 
-### 14.2 前端对话 UX
+### 14.2 回答结构与短标题
+
+| 规则 | 取值 |
+| --- | --- |
+| 大标题 | `一、二、三、`（约 12 字，单独成行） |
+| 有序小分点 | `1. 2. 3. 4.` 必须递增；前端 `rewriteParallelSectionTitles` 修复并行全「1.」 |
+| 无序 | `· ` |
+| 短标题 | 2～12 字；`**短标题：**` + 正文；`parseListItemLead` 渲染加粗；不要硬造 |
+| 清洗 | `sanitizeRagAnswer` / `sanitizeInlineMarkdown` 删除残余 `*`/`**` |
+
+实现：`refind-demo/src/features/chat/formatAnswerText.js`、`AnswerContent.jsx`；服务端同源 `answerFormat.js`；prompt 见 `RAG_SYSTEM_RULES_BASE`。
+
+### 14.3 前端对话 UX
 
 - 侧栏「· 拾藏」纯黑 `#111`（无渐变）。
 - 首页 `has-conversation`：历史展开时 `padding-left: 282px`（卡 18+232 + 32 留白），右侧 32px；对话列 `max-width: 880px` 居中；折叠时左右 padding 均为 32px。
 - 进入 / 切换知识库：加载会话后默认 `openKbConversation(latest.id)`。
 - `AnswerContent` 引用浮卡：portal + 夹取视口，避开 composer。
 
-### 14.3 相关计划状态
+### 14.4 相关计划状态与下一阶段
 
 | 计划 / 设计 | 状态 |
 | --- | --- |
 | `2026-09-15-rag-chat-foundation-design.md` | 基础 RAG 已落地 |
-| `2026-09-16-ai-accuracy-multi-recall-rerank.md` | 实现已完成 · 待手工 Case 验收后 commit |
-| `2026-09-13-phase3-ai-rag-launch.md` | RAG/引用部分已推进；笔记生成与托管上线仍待做 |
+| `2026-09-16-ai-accuracy-multi-recall-rerank.md` | 已完成 |
+| `2026-09-17-llm-query-rewrite.md` | 已完成并部署 |
+| `2026-09-15-answer-inline-citations-design.md` | 结构/短标题已落地 |
+| `2026-09-13-phase3-ai-rag-launch.md` | **下一执行重点：笔记 Task 3–5 → 再 Task 6–7 上线** |
+
+**产品确认顺序（2026-09-17）：** 基于已调好的 AI 回答推进笔记模块智能化，最终再上线。笔记 UI 规则复用 `2026-09-13-notes-workspace-remediation-design.md`。
