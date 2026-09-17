@@ -17,7 +17,7 @@
 | --- | --- |
 | Task 1–2：Embedding + RAG chat + 引用 UI | **已完成**（并经 A′ / LLM rewrite / 回答结构打磨） |
 | 回答可读性 + 短标题 + 追问检索 | **已完成** — 见 `2026-09-15-answer-inline-citations-design.md`、`2026-09-17-llm-query-rewrite.md` |
-| **下一执行重点：Task 3–5 笔记智能化** | **待开工**（产品确认：基于已调好的 AI 回答推进） |
+| **下一执行重点：笔记智能化** | **设计已确认** — 先富文本 D，再 Task 3–5（A/B/C）；见 `2026-09-17-notes-intelligence.md` |
 | Task 6–7：脑图（可选）+ 托管上线 | **笔记闭环后** |
 
 相关已完成切片计划：
