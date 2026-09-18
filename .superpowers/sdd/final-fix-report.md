@@ -34,8 +34,8 @@ Linter diagnostics: none for edited files.
 ## Concerns
 
 - The App-level delete handler persists outline-bearing notes with `updateNote`; material relation persistence remains owned by the existing card-delete/API path.
-- The repository contained unrelated pre-existing worktree changes; only the relevant outline/delete files were staged for this fix commit.
+- The repository contained unrelated pre-existing worktree changes. Already-staged materials-outline documentation and the current App feature work were retained in the same commit; no bundled NotesWorkspace/CSS history was reverted.
 
 ## Commit
 
-SHA: recorded in the final handoff; this report is included in the commit.
+Implementation SHA: b13cc0d7c2dafbfebf98df3293c589def72251db
