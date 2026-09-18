@@ -11,7 +11,7 @@ DONE
 - Updated the workspace outline test fixture for the new automatic call.
 
 ## Commit
-Pending parent-agent commit; only Task 6 files are changed.
+`3368d4c` — fix(notes): reset auto-outline state on note switch
 
 ## Tests
 - Focused: `npm run test:ui -- src/features/notes/NoteEditor.outline.test.jsx src/features/notes/NotesWorkspace.test.jsx` — **30 passed**.
