@@ -1,7 +1,7 @@
 # Task 6 Report: Auto-outline on enter fullscreen
 
 ## Status
-DONE_WITH_CONCERNS
+DONE
 
 ## Changes
 - Added fullscreen auto-outline in `NoteEditor` for notes with at least two cards and no saved outline.
