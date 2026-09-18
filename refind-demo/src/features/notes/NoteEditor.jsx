@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronsLeft, Maximize2, PanelRightClose, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatCardPreviewText } from '../../lib/api/notes.js';
-import { AddInspirationCardsDialog, CardDetailDialog } from './NoteDialogs.jsx';
+import { AddInspirationCardsDialog, CardDetailDialog, RetryOutlineConfirmDialog } from './NoteDialogs.jsx';
 import { NoteEditorToolbar } from './editor/NoteEditorToolbar.jsx';
 import { NoteRichEditor } from './editor/NoteRichEditor.jsx';
 import { htmlFromNoteContent, noteContentFromEditor } from './editor/noteContentCodec.js';
@@ -10,6 +10,7 @@ import {
   flattenOutlineCardIds,
   hasSavedOutline,
   moveCardInOutline,
+  noteHasGeneratedBody,
   normalizeOutline,
   removeCardFromOutline,
   renameChapter,
@@ -263,6 +264,7 @@ export function NoteEditor({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [outlining, setOutlining] = useState(false);
+  const [retryConfirmOpen, setRetryConfirmOpen] = useState(false);
   const [outlineError, setOutlineError] = useState(null);
   const [revisions, setRevisions] = useState([]);
   const [detailCard, setDetailCard] = useState(null);
@@ -445,6 +447,9 @@ export function NoteEditor({
     setOutlineError(null);
     try {
       await onRetryOutline();
+      if (noteHasGeneratedBody(note.content)) {
+        setRetryConfirmOpen(true);
+      }
     } catch {
       setOutlineError('成章失败，可重试');
     } finally {
@@ -616,6 +621,15 @@ export function NoteEditor({
           cards={availableCards}
           onConfirm={attachCards}
           onClose={() => setPickerOpen(false)}
+        />
+      ) : null}
+      {retryConfirmOpen ? (
+        <RetryOutlineConfirmDialog
+          onClose={() => setRetryConfirmOpen(false)}
+          onGenerate={() => {
+            setRetryConfirmOpen(false);
+            generate();
+          }}
         />
       ) : null}
       <CardDetailDialog
