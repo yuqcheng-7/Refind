@@ -1,9 +1,18 @@
-import { ArrowDown, ArrowUp, ChevronLeft, GripVertical, Maximize2, PanelBottomClose, PanelBottomOpen, Plus, Trash2, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { CardDetailDialog } from './NoteDialogs.jsx';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronsLeft, Maximize2, PanelRightClose, Plus, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatCardPreviewText } from '../../lib/api/notes.js';
+import { AddInspirationCardsDialog, CardDetailDialog } from './NoteDialogs.jsx';
 import { NoteEditorToolbar } from './editor/NoteEditorToolbar.jsx';
 import { NoteRichEditor } from './editor/NoteRichEditor.jsx';
 import { htmlFromNoteContent, noteContentFromEditor } from './editor/noteContentCodec.js';
+import {
+  addCardsToUnassigned,
+  flattenOutlineCardIds,
+  moveCardInOutline,
+  normalizeOutline,
+  removeCardFromOutline,
+  renameChapter,
+} from './materialOutline.js';
 
 function CitationButton({ index, label, card, onOpenCard }) {
   const [open, setOpen] = useState(false);
@@ -79,48 +88,143 @@ function CitationButton({ index, label, card, onOpenCard }) {
   );
 }
 
-function MaterialsPanel({ cards, thoughts, onReorder, onThoughtChange, onRemove }) {
+function MaterialsPanel({
+  cards,
+  thoughts,
+  outline,
+  readOnly,
+  onReorder,
+  onMove,
+  onRenameChapter,
+  onThoughtChange,
+  onRemove,
+  onCollapse,
+  onRetryOutline,
+}) {
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+  const [draggedCardId, setDraggedCardId] = useState(null);
+
+  const toggleExpanded = (cardId) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardId)) next.delete(cardId);
+      else next.add(cardId);
+      return next;
+    });
+  };
+
+  const renderCard = (card, index, listLength, chapterId = null) => {
+    const expanded = expandedIds.has(card.id);
+    const preview = formatCardPreviewText(card.contentSnapshot);
+    const source = card.sourceLabel || (card.answerMode === 'rag' ? '知识库回答' : '通用回答');
+    const thought = thoughts[card.id] || '';
+    const move = (to) => {
+      if (chapterId) onReorder?.(chapterId, index, to);
+      else onReorder?.(index, to);
+    };
+    return (
+      <article
+        className={`material-card ${expanded ? 'is-expanded' : ''}`}
+        data-testid="material-card"
+        data-card-id={card.id}
+        draggable={!readOnly}
+        onDragStart={() => setDraggedCardId(card.id)}
+        onDragEnd={() => setDraggedCardId(null)}
+        onDragOver={(event) => { if (!readOnly) event.preventDefault(); }}
+        onDrop={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!readOnly && draggedCardId && draggedCardId !== card.id) {
+            onMove?.(draggedCardId, chapterId || 'unassigned', index);
+          }
+          setDraggedCardId(null);
+        }}
+        key={card.id}
+      >
+        <div className="material-card__order"><span>{index + 1}</span></div>
+        <div className="material-card__content">
+          <div className="material-card__summary">
+            <span className="material-card__source">{source}</span>
+            <p className={expanded ? 'is-full' : ''}>{preview}</p>
+            <button type="button" className="material-card__toggle" aria-expanded={expanded} onClick={() => toggleExpanded(card.id)}>
+              {expanded ? '收起' : '展开全文'} <ChevronDown size={13} strokeWidth={1.8} />
+            </button>
+          </div>
+          {expanded && (
+            <label className="material-card__thought">
+              <span>我的想法</span>
+              <textarea value={thought} onChange={(event) => onThoughtChange(card.id, event.target.value)} placeholder="写下你的想法…" rows={2} />
+            </label>
+          )}
+          {!expanded && thought ? <p className="material-card__thought-preview">{thought}</p> : null}
+        </div>
+        <div className="material-card__actions">
+          <button type="button" aria-label={`上移 ${card.id}`} disabled={readOnly || index === 0} onClick={() => move(index - 1)}><ArrowUp size={14} /></button>
+          <button type="button" aria-label={`下移 ${card.id}`} disabled={readOnly || index === listLength - 1} onClick={() => move(index + 1)}><ArrowDown size={14} /></button>
+          <button type="button" aria-label={`移除 ${card.id}`} disabled={readOnly} onClick={() => onRemove(card.id)}><Trash2 size={14} /></button>
+        </div>
+      </article>
+    );
+  };
+
+  const renderOutlineSection = (title, cardIds, chapterId = 'unassigned') => {
+    const sectionCards = cardIds.map((id) => cards.find((card) => card.id === id)).filter(Boolean);
+    return (
+      <section className={`materials-rail__chapter${chapterId === 'unassigned' ? ' materials-rail__chapter--unassigned' : ''}`} key={chapterId}>
+        {chapterId === 'unassigned' ? <h3>{title}</h3> : (
+          <input
+            className="materials-rail__chapter-title"
+            value={title}
+            disabled={readOnly}
+            aria-label={`章节标题 ${title}`}
+            onChange={(event) => onRenameChapter(chapterId, event.target.value)}
+          />
+        )}
+        <div
+          className="materials-rail__chapter-list"
+          onDragOver={(event) => { if (!readOnly) event.preventDefault(); }}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!readOnly && draggedCardId) onMove(draggedCardId, chapterId, sectionCards.length);
+            setDraggedCardId(null);
+          }}
+        >
+          {sectionCards.map((card, index) => renderCard(card, index, sectionCards.length, chapterId))}
+          {!sectionCards.length ? <p className="materials-rail__chapter-empty">拖入素材卡片</p> : null}
+        </div>
+      </section>
+    );
+  };
+
   return (
-    <section className="materials-drawer" aria-label="素材面板">
-      <header>
+    <section className="materials-rail" aria-label="素材面板">
+      <header className="materials-rail__header">
         <div>
           <span className="eyebrow">写作素材</span>
-          <h2>已选灵感卡片</h2>
+          <h2>{outline ? '章节大纲' : '已选灵感卡片'}</h2>
         </div>
-        <span>{cards.length} 张</span>
+        <div className="materials-rail__header-right">
+          <span>{cards.length} 张</span>
+          {outline && onRetryOutline ? <button type="button" className="materials-rail__retry" disabled={readOnly} onClick={onRetryOutline}>重试成章</button> : null}
+          <button
+            type="button"
+            className="materials-rail__collapse"
+            aria-label="收起素材面板"
+            title="收起"
+            onClick={onCollapse}
+          >
+            <PanelRightClose size={16} strokeWidth={1.7} />
+          </button>
+        </div>
       </header>
-      <div className="materials-drawer__list">
-        {cards.map((card, index) => (
-          <article className="material-card" data-testid="material-card" data-card-id={card.id} key={card.id}>
-            <div className="material-card__order">
-              <GripVertical size={16} />
-              <span>{index + 1}</span>
-            </div>
-            <div className="material-card__content">
-              <p>{card.contentSnapshot}</p>
-              <small>{card.sourceLabel || (card.answerMode === 'rag' ? '知识库回答' : '首页通用 AI')}</small>
-              <label>
-                我的想法
-                <textarea
-                  value={thoughts[card.id] || ''}
-                  onChange={(event) => onThoughtChange(card.id, event.target.value)}
-                  placeholder="可选：补充你的看法或写作角度"
-                />
-              </label>
-            </div>
-            <div className="material-card__actions">
-              <button type="button" aria-label={`上移 ${card.id}`} disabled={index === 0} onClick={() => onReorder(index, index - 1)}>
-                <ArrowUp size={14} />
-              </button>
-              <button type="button" aria-label={`下移 ${card.id}`} disabled={index === cards.length - 1} onClick={() => onReorder(index, index + 1)}>
-                <ArrowDown size={14} />
-              </button>
-              <button type="button" aria-label={`移除 ${card.id}`} onClick={() => onRemove(card.id)}>
-                <Trash2 size={14} />
-              </button>
-            </div>
-          </article>
-        ))}
+      <div className="materials-rail__list">
+        {outline
+          ? [
+            ...outline.chapters.map((chapter) => renderOutlineSection(chapter.title, chapter.cardIds, chapter.id)),
+            renderOutlineSection('未归章', outline.unassignedCardIds),
+          ]
+          : cards.map((card, index) => renderCard(card, index, cards.length))}
       </div>
     </section>
   );
@@ -134,12 +238,19 @@ export function NoteEditor({
   mode = 'plain',
   showMaterials,
   cards = [],
+  knowledgeBases = [],
   onAttachCards,
   onGenerate,
+  onRetryOutline,
+  outlining = false,
   onAddToNote,
+  onAttachCardsToNote,
   onDeleteCard,
+  onOpenMaterial,
   onBack,
   onEnterFullscreen,
+  notes = [],
+  notebooks = [],
 }) {
   const isFullscreen = mode === 'inspiration';
   const materialsEnabled = showMaterials ?? isFullscreen;
@@ -147,14 +258,19 @@ export function NoteEditor({
   const [panelOpen, setPanelOpen] = useState(materialsEnabled);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [revisions] = useState([]);
+  const [revisions, setRevisions] = useState([]);
   const [detailCard, setDetailCard] = useState(null);
   const persistTimerRef = useRef(null);
   const pendingPersistRef = useRef(null);
   const onPersistRef = useRef(onPersist);
-  const editorRef = useRef(null);
-  const [tiptapEditor, setTiptapEditor] = useState(null);
   const lastHtmlRef = useRef(null);
+  const documentScrollRef = useRef(null);
+  const [tiptapEditor, setTiptapEditor] = useState(null);
+  const outline = normalizeOutline(note.content?.outline);
+  const readOnly = generating || outlining;
+  const handleEditorReady = useCallback((editor) => {
+    setTiptapEditor(editor);
+  }, []);
 
   useEffect(() => {
     onPersistRef.current = onPersist;
@@ -174,8 +290,8 @@ export function NoteEditor({
   useEffect(() => {
     setSaveState('已保存');
     setPanelOpen(materialsEnabled);
+    setRevisions([]);
     lastHtmlRef.current = null;
-    setTiptapEditor(null);
   }, [note.id, mode, materialsEnabled]);
 
   useEffect(() => {
@@ -231,28 +347,65 @@ export function NoteEditor({
     [next[from], next[to]] = [next[to], next[from]];
     commit({ inspirationCardIds: next });
   };
+  const commitOutline = (nextOutline) => commit({
+    inspirationCardIds: flattenOutlineCardIds(nextOutline),
+    content: { ...note.content, outline: nextOutline },
+  });
+  const moveOutlineCard = (cardId, toChapterId, index) => {
+    if (readOnly || !outline) return;
+    commitOutline(moveCardInOutline(outline, cardId, { toChapterId, index }));
+  };
+  const reorderOutlineCard = (chapterId, from, to) => {
+    if (readOnly || !outline) return;
+    const cardIds = chapterId === 'unassigned'
+      ? outline.unassignedCardIds
+      : outline.chapters.find((chapter) => chapter.id === chapterId)?.cardIds;
+    if (!cardIds || to < 0 || to >= cardIds.length) return;
+    moveOutlineCard(cardIds[from], chapterId, to);
+  };
+  const renameOutlineChapter = (chapterId, title) => {
+    if (readOnly || !outline) return;
+    commitOutline(renameChapter(outline, chapterId, title));
+  };
   const updateThought = (cardId, thought) => commit({
     materialThoughts: { ...(note.materialThoughts || {}), [cardId]: thought },
   });
-  const removeCard = (cardId) => commit({
-    inspirationCardIds: note.inspirationCardIds.filter((id) => id !== cardId),
-  });
-  const attachCard = (cardId) => {
-    onAttachCards?.([cardId]);
+  const removeCard = (cardId) => {
+    const inspirationCardIds = note.inspirationCardIds.filter((id) => id !== cardId);
+    if (!outline) {
+      commit({ inspirationCardIds });
+      return;
+    }
+    commit({
+      inspirationCardIds,
+      content: { ...note.content, outline: removeCardFromOutline(outline, cardId) },
+    });
+  };
+  const attachCards = async (cardIds) => {
+    await onAttachCards?.(cardIds);
+    if (outline) {
+      const nextOutline = addCardsToUnassigned(outline, cardIds);
+      commitOutline(nextOutline);
+    }
     setPickerOpen(false);
   };
-  const generate = () => {
+  const generate = async () => {
     if (!selectedCards.length || generating) return;
     setGenerating(true);
     try {
-      onGenerate?.();
+      await onGenerate?.();
+      setRevisions((prev) => [...prev, { reason: 'before_generate', at: Date.now() }]);
+      const scroller = documentScrollRef.current;
+      if (scroller) scroller.scrollTop = 0;
+    } catch {
+      // Parent surfaces the failure notice; keep original content editable.
     } finally {
-      window.setTimeout(() => setGenerating(false), 0);
+      setGenerating(false);
     }
   };
 
   return (
-    <article className={`note-editor ${isFullscreen ? 'note-editor--inspiration' : ''}`}>
+    <article className={`note-editor ${isFullscreen ? 'note-editor--inspiration' : 'note-editor--plain'}${isFullscreen && materialsEnabled && panelOpen ? ' has-materials-rail' : ''}`}>
       <div className="note-editor__toolbar" aria-label="笔记工具栏">
         <div className="note-editor__toolbar-left">
           {isFullscreen && (
@@ -275,105 +428,162 @@ export function NoteEditor({
         ) : null}
         {isFullscreen && materialsEnabled && (
           <div className="note-editor__inspiration-actions">
-            <button type="button" onClick={() => setPickerOpen((open) => !open)} disabled={generating}>
+            <button type="button" onClick={() => setPickerOpen(true)} disabled={readOnly}>
               <Plus size={15} />
               添加灵感卡片
-            </button>
-            <button type="button" onClick={() => setPanelOpen((open) => !open)} disabled={generating}>
-              {panelOpen ? <PanelBottomClose size={15} /> : <PanelBottomOpen size={15} />}
-              素材面板
             </button>
             <button
               type="button"
               className="note-editor__generate"
-              disabled={!selectedCards.length || generating}
+              disabled={!selectedCards.length || readOnly}
               onClick={generate}
             >
-              生成笔记
+              {generating ? '生成中' : '生成笔记'}
             </button>
-            {pickerOpen && (
-              <div className="note-editor__card-picker" role="menu">
-                <header>
-                  <strong>添加灵感卡片</strong>
-                  <button type="button" aria-label="关闭添加卡片" onClick={() => setPickerOpen(false)}>
-                    <X size={14} />
-                  </button>
-                </header>
-                {availableCards.length
-                  ? availableCards.map((card) => (
-                    <button type="button" role="menuitem" key={card.id} onClick={() => attachCard(card.id)}>
-                      {card.contentSnapshot}
-                    </button>
-                  ))
-                  : <p>没有更多可添加的卡片。</p>}
+          </div>
+        )}
+      </div>
+      {isFullscreen && materialsEnabled && !panelOpen ? (
+        <button
+          type="button"
+          className="materials-rail-fab"
+          aria-label="展开素材面板"
+          title="展开素材"
+          onClick={() => setPanelOpen(true)}
+        >
+          <ChevronsLeft size={16} strokeWidth={1.8} />
+          <span className="materials-rail-fab__label">素材</span>
+        </button>
+      ) : null}
+      {isFullscreen ? (
+        <div className="note-editor__main">
+          <div className="note-editor__document" ref={documentScrollRef}>
+            <input
+              className="note-editor__title"
+              aria-label="笔记标题"
+              disabled={readOnly}
+              value={note.title}
+              onChange={(event) => commit({ title: event.target.value })}
+            />
+            {hasSections ? (
+              <div className="note-editor__rich-body note-editor__rich-body--sections" aria-label="笔记正文">
+                {sections.map((section, index) => (
+                  <p key={`${section.text}-${index}`}>
+                    <span>{section.text}</span>
+                    {section.citationLabel ? (
+                      <CitationButton
+                        index={section.citationIndex || index + 1}
+                        label={section.citationLabel}
+                        card={
+                          cards.find((item) => item.id === section.cardId)
+                          || cards.find((item) => item.id === note.inspirationCardIds[(section.citationIndex || 1) - 1])
+                        }
+                        onOpenCard={setDetailCard}
+                      />
+                    ) : null}
+                  </p>
+                ))}
               </div>
+            ) : (
+              <NoteRichEditor
+                key={note.id}
+                contentHtml={editorHtml}
+                editable={!generating}
+                placeholder="开始记录你的想法…"
+                showToolbar={false}
+                onReady={handleEditorReady}
+                onUpdate={handleEditorUpdate}
+              />
             )}
           </div>
-        )}
-      </div>
-      <div className="note-editor__document">
-        <input
-          className="note-editor__title"
-          aria-label="笔记标题"
-          disabled={generating}
-          value={note.title}
-          onChange={(event) => commit({ title: event.target.value })}
-        />
-        {hasSections ? (
-          <div className="note-editor__rich-body note-editor__rich-body--sections" aria-label="笔记正文">
-            {sections.map((section, index) => (
-              <p key={`${section.text}-${index}`}>
-                <span>{section.text}</span>
-                {section.citationLabel ? (
-                  <CitationButton
-                    index={section.citationIndex || index + 1}
-                    label={section.citationLabel}
-                    card={
-                      cards.find((item) => item.id === section.cardId)
-                      || cards.find((item) => item.id === note.inspirationCardIds[(section.citationIndex || 1) - 1])
-                    }
-                    onOpenCard={setDetailCard}
-                  />
-                ) : null}
-              </p>
-            ))}
-          </div>
-        ) : (
-          <NoteRichEditor
-            key={note.id}
-            editorRef={editorRef}
-            contentHtml={editorHtml}
-            editable={!generating}
-            placeholder="开始记录你的想法…"
-            showToolbar={false}
-            onReady={setTiptapEditor}
-            onUpdate={handleEditorUpdate}
+          {materialsEnabled ? (
+            <div
+              className={`materials-rail-slot${panelOpen ? ' is-open' : ''}`}
+              aria-hidden={!panelOpen}
+            >
+              <MaterialsPanel
+                cards={selectedCards}
+                thoughts={note.materialThoughts || {}}
+                outline={outline}
+                readOnly={readOnly}
+                onReorder={outline ? reorderOutlineCard : reorderCards}
+                onMove={moveOutlineCard}
+                onRenameChapter={renameOutlineChapter}
+                onThoughtChange={updateThought}
+                onRemove={removeCard}
+                onCollapse={() => setPanelOpen(false)}
+                onRetryOutline={onRetryOutline}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="note-editor__document">
+          <input
+            className="note-editor__title"
+            aria-label="笔记标题"
+            disabled={generating}
+            value={note.title}
+            onChange={(event) => commit({ title: event.target.value })}
           />
-        )}
-      </div>
-      {isFullscreen && materialsEnabled && panelOpen && (
-        <MaterialsPanel
-          cards={selectedCards}
-          thoughts={note.materialThoughts || {}}
-          onReorder={reorderCards}
-          onThoughtChange={updateThought}
-          onRemove={removeCard}
-        />
+          {hasSections ? (
+            <div className="note-editor__rich-body note-editor__rich-body--sections" aria-label="笔记正文">
+              {sections.map((section, index) => (
+                <p key={`${section.text}-${index}`}>
+                  <span>{section.text}</span>
+                  {section.citationLabel ? (
+                    <CitationButton
+                      index={section.citationIndex || index + 1}
+                      label={section.citationLabel}
+                      card={
+                        cards.find((item) => item.id === section.cardId)
+                        || cards.find((item) => item.id === note.inspirationCardIds[(section.citationIndex || 1) - 1])
+                      }
+                      onOpenCard={setDetailCard}
+                    />
+                  ) : null}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <NoteRichEditor
+              key={note.id}
+              contentHtml={editorHtml}
+              editable={!generating}
+              placeholder="开始记录你的想法…"
+              showToolbar={false}
+              onReady={handleEditorReady}
+              onUpdate={handleEditorUpdate}
+            />
+          )}
+        </div>
       )}
       {isFullscreen && materialsEnabled && revisions.length > 0 && (
         <span className="note-editor__revision" aria-live="polite">已保留生成前版本，可用撤销返回。</span>
       )}
+      {pickerOpen ? (
+        <AddInspirationCardsDialog
+          cards={availableCards}
+          onConfirm={attachCards}
+          onClose={() => setPickerOpen(false)}
+        />
+      ) : null}
       <CardDetailDialog
         card={detailCard}
+        knowledgeBases={knowledgeBases}
+        notes={notes}
+        notebooks={notebooks}
         onClose={() => setDetailCard(null)}
         onAddToNote={(card) => {
           onAddToNote?.(card);
           setDetailCard(null);
         }}
+        onAttachCardsToNote={onAttachCardsToNote}
         onDelete={(card) => {
           onDeleteCard?.(card.id);
           setDetailCard(null);
         }}
+        onOpenMaterial={onOpenMaterial}
       />
     </article>
   );
