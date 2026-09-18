@@ -69,6 +69,37 @@ function normalizeOutline(outline) {
   };
 }
 
+const UNASSIGNED_CHAPTER_TITLE = '未归章';
+
+export function buildChaptersForPrompt(outline, orderedCards = []) {
+  const normalized = normalizeOutline(outline);
+  if (!normalized) return undefined;
+
+  const byId = new Map((orderedCards || []).map((card) => [card.id, card]));
+  const placed = new Set();
+  const chapters = [];
+
+  for (const chapter of normalized.chapters) {
+    const cards = (chapter.cardIds || [])
+      .map((id) => {
+        if (placed.has(id) || !byId.has(id)) return null;
+        placed.add(id);
+        return byId.get(id);
+      })
+      .filter(Boolean);
+    if (cards.length) {
+      chapters.push({ title: chapter.title, cards });
+    }
+  }
+
+  const remainingCards = (orderedCards || []).filter((card) => !placed.has(card.id));
+  if (remainingCards.length) {
+    chapters.push({ title: UNASSIGNED_CHAPTER_TITLE, cards: remainingCards });
+  }
+
+  return chapters.length ? chapters : undefined;
+}
+
 export function orderCardsByOutline(cards = [], outline) {
   const input = Array.isArray(cards) ? cards : [];
   const normalized = normalizeOutline(outline);

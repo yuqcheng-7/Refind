@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { deepseekChat } from '../_shared/ai.ts';
 import {
+  buildChaptersForPrompt,
   buildGenerateMessages,
   buildNoteContentFromAi,
   buildPromptPayload,
@@ -102,14 +103,7 @@ Deno.serve(async (req) => {
 
     const currentContent = normalizeNoteContent(note.content);
     const orderedCards = orderCardsByOutline(cards, currentContent.outline);
-    const chapters = currentContent.outline?.chapters
-      ?.filter((chapter) => chapter.cardIds?.length)
-      .map((chapter) => ({
-        title: chapter.title,
-        cards: chapter.cardIds
-          .map((id) => orderedCards.find((card) => card.id === id))
-          .filter(Boolean),
-      }));
+    const chapters = buildChaptersForPrompt(currentContent.outline, orderedCards);
     const { error: revisionError } = await admin.from('note_revisions').insert({
       note_id: note.id,
       user_id: userId,
@@ -122,7 +116,7 @@ Deno.serve(async (req) => {
     const promptPayload = buildPromptPayload({
       title: note.title,
       cards: orderedCards,
-      chapters: chapters?.length ? chapters : undefined,
+      chapters,
     });
     const aiRaw = await deepseekChat(buildGenerateMessages(promptPayload), {
       model: 'deepseek-chat',

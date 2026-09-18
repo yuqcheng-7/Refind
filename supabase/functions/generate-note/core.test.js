@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildChaptersForPrompt,
   buildNoteContentFromAi,
   buildPromptPayload,
   buildGenerateMessages,
@@ -101,6 +102,50 @@ test('orderCardsByOutline follows chapters then unassigned', () => {
     unassignedCardIds: ['u'],
   });
   assert.deepEqual(ordered.map((card) => card.id), ['a', 'b', 'u']);
+});
+
+test('buildChaptersForPrompt appends 未归章 for unassigned and orphan cards', () => {
+  const outline = {
+    version: 1,
+    chapters: [
+      { id: 'c1', title: '开场', cardIds: ['a'] },
+      { id: 'c2', title: '空章', cardIds: [] },
+    ],
+    unassignedCardIds: ['u', 'b'],
+  };
+  const cards = [
+    { id: 'a', content_snapshot: 'A' },
+    { id: 'b', content_snapshot: 'B' },
+    { id: 'u', content_snapshot: 'U' },
+  ];
+  const ordered = orderCardsByOutline(cards, outline);
+  const chapters = buildChaptersForPrompt(outline, ordered);
+
+  assert.equal(chapters.length, 2);
+  assert.equal(chapters[0].title, '开场');
+  assert.deepEqual(chapters[0].cards.map((card) => card.id), ['a']);
+  assert.equal(chapters[1].title, '未归章');
+  assert.deepEqual(chapters[1].cards.map((card) => card.id), ['u', 'b']);
+});
+
+test('buildChaptersForPrompt returns undefined without a valid outline', () => {
+  assert.equal(buildChaptersForPrompt(null, [{ id: 'a' }]), undefined);
+  assert.equal(buildChaptersForPrompt({ version: 2 }, [{ id: 'a' }]), undefined);
+});
+
+test('buildChaptersForPrompt places orphan cards in 未归章 after chapter cards', () => {
+  const outline = {
+    version: 1,
+    chapters: [{ id: 'c1', title: '章', cardIds: ['a'] }],
+    unassignedCardIds: [],
+  };
+  const cards = [{ id: 'a' }, { id: 'orphan' }];
+  const ordered = orderCardsByOutline(cards, outline);
+  const chapters = buildChaptersForPrompt(outline, ordered);
+
+  assert.equal(chapters.length, 2);
+  assert.equal(chapters[1].title, '未归章');
+  assert.deepEqual(chapters[1].cards.map((card) => card.id), ['orphan']);
 });
 
 test('buildPromptPayload includes chapters when provided', () => {
