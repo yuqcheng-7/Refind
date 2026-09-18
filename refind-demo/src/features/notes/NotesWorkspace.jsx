@@ -129,6 +129,10 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
       updateNote({
         ...target,
         ...updated,
+        content: {
+          ...(updated.content || {}),
+          outline: updated.content?.outline ?? target.content?.outline,
+        },
         // Keep local materials panel membership / thoughts if Edge omits them.
         inspirationCardIds: updated.inspirationCardIds?.length
           ? updated.inspirationCardIds
@@ -153,6 +157,10 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
       updateNote({
         ...target,
         ...updated,
+        content: {
+          ...(updated.content || {}),
+          outline: updated.content?.outline ?? target.content?.outline,
+        },
         // Keep local materials panel membership / thoughts if Edge omits them.
         inspirationCardIds: updated.inspirationCardIds?.length
           ? updated.inspirationCardIds

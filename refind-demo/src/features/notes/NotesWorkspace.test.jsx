@@ -511,6 +511,72 @@ describe('NotesWorkspace', () => {
     expect(screen.getByText(/不会删除灵感卡片/)).toBeVisible();
   });
 
+  it('generateFullscreenNote preserves existing content.outline when API omits outline', async () => {
+    const existingOutline = {
+      version: 1,
+      chapters: [{ id: 'ch1', title: '开场', cardIds: ['card-onboarding'] }],
+      unassignedCardIds: ['card-retrospective'],
+    };
+    notesApi.generateNote.mockResolvedValue({
+      id: 'note-with-cards',
+      title: '带素材笔记',
+      content: {
+        text: 'generated body',
+        blocks: [{ type: 'paragraph', text: 'generated body' }],
+        sections: [],
+      },
+      inspirationCardIds: ['card-onboarding'],
+      materialThoughts: {},
+      updatedLabel: '刚刚生成',
+    });
+
+    const notes = [{
+      ...demoNotes[0],
+      id: 'note-with-cards',
+      title: '带素材笔记',
+      inspirationCardIds: ['card-onboarding'],
+      content: {
+        text: '',
+        blocks: [],
+        sections: [],
+        outline: existingOutline,
+      },
+    }];
+
+    let latestNotes = notes;
+    const Harness = () => {
+      const [items, setItems] = useState(notes);
+      const captureSetNotes = (updater) => {
+        setItems((prev) => {
+          const next = typeof updater === 'function' ? updater(prev) : updater;
+          latestNotes = next;
+          return next;
+        });
+      };
+      return (
+        <NotesWorkspace
+          notes={items}
+          setNotes={captureSetNotes}
+          cards={demoInspirationCards}
+          notebooks={demoNotebooks}
+          notice={vi.fn()}
+        />
+      );
+    };
+
+    render(<Harness />);
+    await userEvent.click(screen.getByRole('button', { name: /带素材笔记/ }));
+    await userEvent.click(screen.getByRole('button', { name: '全屏编辑' }));
+
+    await noteEditorCapture.latest.onGenerate();
+
+    await waitFor(() => {
+      const updated = latestNotes.find((note) => note.id === 'note-with-cards');
+      expect(updated?.content?.outline).toEqual(existingOutline);
+      expect(updated?.content?.text).toBe('generated body');
+    });
+  });
+
   it('outlineFullscreenNote invokes outline API and merges local materials', async () => {
     const notice = vi.fn();
     notesApi.outlineNoteMaterials.mockResolvedValue({
