@@ -303,6 +303,12 @@ export function NoteEditor({
   }, [note.id, mode, materialsEnabled]);
 
   useEffect(() => {
+    setOutlining(false);
+    setOutlineError(null);
+    autoOutlineAttemptedRef.current = null;
+  }, [note.id]);
+
+  useEffect(() => {
     if (!isFullscreen || !materialsEnabled) return undefined;
     if (autoOutlineAttemptedRef.current === note.id) return undefined;
     const bound = note.inspirationCardIds?.length ?? 0;

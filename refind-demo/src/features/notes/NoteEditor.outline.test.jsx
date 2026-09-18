@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NoteEditor } from './NoteEditor.jsx';
@@ -216,6 +217,119 @@ describe('NoteEditor materials outline', () => {
     expect(screen.getByRole('button', { name: '移除 b' })).toBeDisabled();
 
     resolveGenerate();
+  });
+
+  it('switches notes while outline is in flight without leaving the new note read-only', async () => {
+    let resolveOutlineA;
+    const onOutline = vi.fn(() => new Promise((resolve) => {
+      resolveOutlineA = resolve;
+    }));
+
+    function SwitchableEditor() {
+      const [noteId, setNoteId] = useState('note-a');
+      const notes = {
+        'note-a': {
+          id: 'note-a',
+          title: 'Note A',
+          inspirationCardIds: ['a', 'b'],
+          materialThoughts: {},
+          content: { text: '', sections: [] },
+        },
+        'note-b': {
+          id: 'note-b',
+          title: 'Note B',
+          inspirationCardIds: ['a', 'b'],
+          materialThoughts: {},
+          content: { text: '', sections: [] },
+        },
+      };
+      return (
+        <>
+          <button type="button" onClick={() => setNoteId('note-b')}>Switch to B</button>
+          <NoteEditor
+            mode="inspiration"
+            showMaterials
+            note={notes[noteId]}
+            cards={[
+              { id: 'a', contentSnapshot: 'A', answerMode: 'general' },
+              { id: 'b', contentSnapshot: 'B', answerMode: 'general' },
+            ]}
+            onOutline={onOutline}
+          />
+        </>
+      );
+    }
+
+    render(<SwitchableEditor />);
+
+    await waitFor(() => expect(onOutline).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('成章中…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '添加灵感卡片' })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Switch to B' }));
+
+    await waitFor(() => expect(onOutline).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('成章中…')).toBeInTheDocument();
+
+    resolveOutlineA();
+    await waitFor(() => {
+      expect(screen.getByText('成章中…')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '添加灵感卡片' })).toBeDisabled();
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('成章中…')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '添加灵感卡片' })).not.toBeDisabled();
+    });
+  });
+
+  it('clears stuck outlining when switching away from a note mid-outline', async () => {
+    let resolveOutline;
+    const onOutline = vi.fn(() => new Promise((resolve) => {
+      resolveOutline = resolve;
+    }));
+
+    const { rerender } = render(
+      <NoteEditor
+        mode="inspiration"
+        showMaterials
+        note={{
+          id: 'note-a',
+          title: 'Note A',
+          inspirationCardIds: ['a', 'b'],
+          materialThoughts: {},
+          content: { text: '', sections: [] },
+        }}
+        cards={[
+          { id: 'a', contentSnapshot: 'A', answerMode: 'general' },
+          { id: 'b', contentSnapshot: 'B', answerMode: 'general' },
+        ]}
+        onOutline={onOutline}
+      />,
+    );
+
+    await waitFor(() => expect(onOutline).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('成章中…')).toBeInTheDocument();
+
+    rerender(
+      <NoteEditor
+        mode="inspiration"
+        showMaterials
+        note={outlineNote()}
+        cards={[
+          { id: 'a', contentSnapshot: 'A', answerMode: 'general' },
+          { id: 'b', contentSnapshot: 'B', answerMode: 'general' },
+          { id: 'c', contentSnapshot: 'C', answerMode: 'general' },
+        ]}
+        onOutline={onOutline}
+      />,
+    );
+
+    expect(screen.queryByText('成章中…')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('动机')).not.toBeDisabled();
+    expect(onOutline).toHaveBeenCalledTimes(1);
+
+    resolveOutline();
   });
 
   it('keeps inspiration card ids in flattened outline order after reorder', async () => {

@@ -19,3 +19,25 @@ Pending parent-agent commit; only Task 6 files are changed.
 
 ## Report path
 `/Users/zoecheng/Documents/ChatGPT/拾藏Refind/.superpowers/sdd/task-6-report.md`
+
+## Fix: Important review findings
+
+### Finding 1 — `autoOutlineAttemptedRef` never reset on note switch
+Added a dedicated `useEffect` on `[note.id]` that resets `autoOutlineAttemptedRef.current = null` so each note gets one auto-outline attempt.
+
+### Finding 2 — Cancelled in-flight outline left new note read-only
+The same `note.id` effect calls `setOutlining(false)` and `setOutlineError(null)` before the auto-outline effect runs, so cleanup from a previous note's cancelled request cannot leave the new note stuck in `panelReadOnly`.
+
+### Tests added
+- `switches notes while outline is in flight without leaving the new note read-only` — Note A outline deferred → switch to Note B → B calls `onOutline`, stays outlining until B completes, then unlocks.
+- `clears stuck outlining when switching away from a note mid-outline` — mid-flight switch to a note with saved outline clears outlining immediately and skips auto-outline.
+
+### Test output
+```
+npm run test:ui -- src/features/notes/NoteEditor.outline.test.jsx
+
+ ✓ src/features/notes/NoteEditor.outline.test.jsx (11 tests) 302ms
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+```
