@@ -625,6 +625,7 @@ describe('NotesWorkspace', () => {
     await userEvent.click(screen.getByRole('button', { name: '全屏编辑' }));
 
     expect(noteEditorCapture.latest?.onOutline).toEqual(expect.any(Function));
+    expect(noteEditorCapture.latest?.onRetryOutline).toEqual(expect.any(Function));
     await noteEditorCapture.latest.onOutline();
 
     expect(notesApi.outlineNoteMaterials).toHaveBeenCalledWith('note-with-cards');

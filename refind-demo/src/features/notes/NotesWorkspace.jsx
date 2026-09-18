@@ -432,6 +432,7 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
           onMaterialsChange={persistMaterials}
           onGenerate={generateFullscreenNote}
           onOutline={outlineFullscreenNote}
+          onRetryOutline={outlineFullscreenNote}
           onAttachCards={attachCardsToSelectedNote}
           onAddToNote={addCardToNote}
           onAttachCardsToNote={attachCardsToNote}
