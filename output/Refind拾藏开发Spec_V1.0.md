@@ -3,7 +3,7 @@
 > 版本：V1.0  
 > 基于产品需求文档：`Refind拾藏PRD_V1.0.md`  
 > 文档日期：2026-08-13  
-> 最近修订：2026-09-18（见第 15 章：移动端壳层、笔记智能化 as-built、`sync-note` / `generate-note`；第 11–14 章仍有效）
+> 最近修订：2026-09-19（见 §4.1 / §15.5：Auth 分栏品牌与登录落地；第 11–15.4 章仍有效）
 
 ---
 
@@ -331,6 +331,18 @@ Web 客户端
 | 登录 | 邮箱 + 密码。 |
 | 忘记密码 | 发送密码重置链接至注册邮箱；用户通过链接设置新密码。 |
 | 退出登录 | 清除当前 Refind 会话，不删除云端数据及平台连接。 |
+
+### 4.1.1 Auth 界面（2026-09-19）
+
+| 项 | 规格 |
+| --- | --- |
+| 布局 | `.auth-shell` 两列：`auth-panel--brand` \| `auth-panel--form`；`max-width:900px` 改为单列堆叠。 |
+| 品牌区 | Logo 绝对定位顶左；`.auth-brand-stage` 居中承载主题句+机器人+脚注；对角构图（文上左 / 图下右）。 |
+| 文案 | 主：`把散落的收藏，`（`font-weight:400`，`#2C3644`）+ `重新拾起。`（`700`，`#111923`）；副：`打造属于你的个人知识库，` / `溯源问答，灵感成笔记。`；脚注 `Collect What Matters.` |
+| 表单 | 登录/注册/忘记密码三态；密码 `type` 切换；「记住我」写入 `localStorage` key `refind-auth-remember`（`1`/`0`）。 |
+| 登录落地 | `App`：`session.user.id` 相对上一会话变化时，强制 `activeNav=首页`、`homeSurface=hero`，关闭设置/账户/移动导航/AI 面板。 |
+
+实现文件：`refind-demo/src/features/auth/AuthScreen.jsx`、`refind-demo/src/styles.css`（`.auth-*`）、`refind-demo/src/App.jsx`（登录落地 effect）。
 
 ## 4.2 注销账户
 
@@ -1273,3 +1285,9 @@ disconnected → connecting → connected → expired → reconnecting → conne
 - 设计：`output/design.md` §3.3 / §4 / §10.8
 - PRD：`output/Refind拾藏PRD_V1.0.md` §9.13
 - 特性：`2026-09-17-notes-intelligence-design.md`、`2026-09-18-inspiration-cards-manage-design.md`、`2026-09-18-materials-outline-chapters-design.md`、`2026-09-15-chat-history-surfaces-design.md`
+
+## 15.5 2026-09-19 Auth 品牌分栏（已落地）
+
+- 分栏布局、文案、记住我、密码可见切换：见 §4.1.1。
+- 登录 / 再登录强制回首页 hero：见 §4.1.1「登录落地」。
+- 文档：`output/design.md` §4.1 / §10.9；PRD §9.14。

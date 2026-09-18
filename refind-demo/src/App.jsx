@@ -328,6 +328,7 @@ export function App() {
   const accountRef = useRef(null);
   const kbRailRef = useRef(null);
   const kbHistoryMenuRef = useRef(null);
+  const previousSessionUserIdRef = useRef(null);
   const [homeMessages, setHomeMessages] = useState([]);
   const [homeConversationId, setHomeConversationId] = useState(null);
   const [homeThreadSurface, setHomeThreadSurface] = useState('home');
@@ -395,6 +396,26 @@ export function App() {
       subscription.unsubscribe();
     };
   }, []);
+  // Login (and re-login after logout) always lands on the home hero — do not
+  // restore a leftover chat / notes / knowledge view from the same SPA mount.
+  useEffect(() => {
+    const userId = session?.user?.id ?? null;
+    if (!userId) {
+      previousSessionUserIdRef.current = null;
+      return;
+    }
+    const previousUserId = previousSessionUserIdRef.current;
+    previousSessionUserIdRef.current = userId;
+    if (previousUserId === userId) return;
+    setActiveNav('首页');
+    setHomeSurface('hero');
+    setHomeChatOpened(false);
+    setHomeNavUnlocked(false);
+    setSettingsOpen(false);
+    setAccountOpen(false);
+    setMobileNavOpen(false);
+    setAiPanelOpen(false);
+  }, [session?.user?.id]);
   useEffect(() => {
     if (!session) {
       setProfile(null);
