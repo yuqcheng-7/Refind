@@ -8,6 +8,7 @@ import { htmlFromNoteContent, noteContentFromEditor } from './editor/noteContent
 import {
   addCardsToUnassigned,
   flattenOutlineCardIds,
+  hasSavedOutline,
   moveCardInOutline,
   normalizeOutline,
   removeCardFromOutline,
@@ -94,6 +95,7 @@ function MaterialsPanel({
   outline,
   readOnly,
   outlining,
+  outlineError,
   onReorder,
   onMove,
   onRenameChapter,
@@ -207,7 +209,8 @@ function MaterialsPanel({
         </div>
         <div className="materials-rail__header-right">
           <span>{cards.length} 张</span>
-          {outline && onRetryOutline ? <button type="button" className="materials-rail__retry" disabled={readOnly} onClick={onRetryOutline}>重试成章</button> : null}
+          {outlineError ? <p className="materials-rail__error">{outlineError}</p> : null}
+          {(outline || outlineError) && onRetryOutline ? <button type="button" className="materials-rail__retry" disabled={readOnly} onClick={onRetryOutline}>重试成章</button> : null}
           <button
             type="button"
             className="materials-rail__collapse"
@@ -242,6 +245,7 @@ export function NoteEditor({
   knowledgeBases = [],
   onAttachCards,
   onGenerate,
+  onOutline,
   onRetryOutline,
   onAddToNote,
   onAttachCardsToNote,
@@ -259,10 +263,12 @@ export function NoteEditor({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [outlining, setOutlining] = useState(false);
+  const [outlineError, setOutlineError] = useState(null);
   const [revisions, setRevisions] = useState([]);
   const [detailCard, setDetailCard] = useState(null);
   const persistTimerRef = useRef(null);
   const pendingPersistRef = useRef(null);
+  const autoOutlineAttemptedRef = useRef(null);
   const onPersistRef = useRef(onPersist);
   const lastHtmlRef = useRef(null);
   const documentScrollRef = useRef(null);
@@ -292,8 +298,31 @@ export function NoteEditor({
     setSaveState('已保存');
     setPanelOpen(materialsEnabled);
     setRevisions([]);
+    setOutlineError(null);
     lastHtmlRef.current = null;
   }, [note.id, mode, materialsEnabled]);
+
+  useEffect(() => {
+    if (!isFullscreen || !materialsEnabled) return undefined;
+    if (autoOutlineAttemptedRef.current === note.id) return undefined;
+    const bound = note.inspirationCardIds?.length ?? 0;
+    if (bound < 2 || hasSavedOutline(note.content) || !onOutline) return undefined;
+
+    autoOutlineAttemptedRef.current = note.id;
+    let cancelled = false;
+    (async () => {
+      setOutlining(true);
+      setOutlineError(null);
+      try {
+        await onOutline();
+      } catch {
+        if (!cancelled) setOutlineError('成章失败，可重试');
+      } finally {
+        if (!cancelled) setOutlining(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [note.id, isFullscreen, materialsEnabled]);
 
   useEffect(() => {
     if (saveState !== '正在保存') return undefined;
@@ -407,8 +436,11 @@ export function NoteEditor({
   const handleRetryOutline = async () => {
     if (outlining || generating || !onRetryOutline) return;
     setOutlining(true);
+    setOutlineError(null);
     try {
       await onRetryOutline();
+    } catch {
+      setOutlineError('成章失败，可重试');
     } finally {
       setOutlining(false);
     }
@@ -517,6 +549,7 @@ export function NoteEditor({
                 outline={outline}
                 readOnly={panelReadOnly}
                 outlining={outlining}
+                outlineError={outlineError}
                 onReorder={outline ? reorderOutlineCard : reorderCards}
                 onMove={moveOutlineCard}
                 onRenameChapter={renameOutlineChapter}

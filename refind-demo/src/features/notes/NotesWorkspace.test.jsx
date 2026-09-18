@@ -593,7 +593,7 @@ describe('NotesWorkspace', () => {
           unassignedCardIds: ['card-retrospective'],
         },
       },
-      inspirationCardIds: ['card-onboarding'],
+      inspirationCardIds: ['card-onboarding', 'card-retrospective'],
       materialThoughts: {},
       syncedBaseIds: [],
       updatedLabel: '刚刚成章',

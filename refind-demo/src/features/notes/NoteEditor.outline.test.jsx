@@ -50,6 +50,65 @@ function renderOutlineEditor(props = {}) {
 }
 
 describe('NoteEditor materials outline', () => {
+  it('auto-outlines when entering inspiration edit with ≥2 cards and no outline', async () => {
+    const onOutline = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NoteEditor
+        mode="inspiration"
+        showMaterials
+        note={outlineNote({ content: { text: '', sections: [] } })}
+        cards={[
+          { id: 'a', contentSnapshot: 'A', answerMode: 'general' },
+          { id: 'b', contentSnapshot: 'B', answerMode: 'general' },
+        ]}
+        onOutline={onOutline}
+      />,
+    );
+
+    await waitFor(() => expect(onOutline).toHaveBeenCalledTimes(1));
+  });
+
+  it('does not auto-outline when outline already saved', async () => {
+    const onOutline = vi.fn();
+    render(
+      <NoteEditor
+        mode="inspiration"
+        showMaterials
+        note={outlineNote()}
+        cards={[
+          { id: 'a', contentSnapshot: 'A', answerMode: 'general' },
+          { id: 'b', contentSnapshot: 'B', answerMode: 'general' },
+        ]}
+        onOutline={onOutline}
+      />,
+    );
+
+    await waitFor(() => expect(onOutline).not.toHaveBeenCalled());
+  });
+
+  it('shows a retry action when auto-outline fails', async () => {
+    const onOutline = vi.fn().mockRejectedValue(new Error('network'));
+    const onRetryOutline = vi.fn();
+    render(
+      <NoteEditor
+        mode="inspiration"
+        showMaterials
+        note={outlineNote({ content: { text: '', sections: [] } })}
+        cards={[
+          { id: 'a', contentSnapshot: 'A', answerMode: 'general' },
+          { id: 'b', contentSnapshot: 'B', answerMode: 'general' },
+        ]}
+        onOutline={onOutline}
+        onRetryOutline={onRetryOutline}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('成章失败，可重试')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '重试成章' })).toBeEnabled();
+    });
+  });
+
   it('renders chapter titles and parks unassigned cards', () => {
     render(
       <NoteEditor
