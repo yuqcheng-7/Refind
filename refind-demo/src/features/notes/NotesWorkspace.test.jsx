@@ -8,6 +8,8 @@ import { NotesWorkspace } from './NotesWorkspace.jsx';
 import { NoteEditor } from './NoteEditor.jsx';
 import { AnswerActions } from '../knowledge/AnswerActions.jsx';
 
+const noteEditorCapture = vi.hoisted(() => ({ latest: null }));
+
 const notesApi = vi.hoisted(() => ({
   listNotes: vi.fn(async () => demoNotes),
   createNote: vi.fn(async () => ({
@@ -29,6 +31,32 @@ const notesApi = vi.hoisted(() => ({
   createInspirationCard: vi.fn(),
   deleteInspirationCard: vi.fn(),
   setNoteMaterials: vi.fn(async () => []),
+  generateNote: vi.fn(async () => ({})),
+  outlineNoteMaterials: vi.fn(async () => ({})),
+  syncNote: vi.fn(async ({ knowledgeBaseIds }) => ({
+    noteId: 'n1',
+    synced: (knowledgeBaseIds || []).map((knowledgeBaseId) => ({
+      knowledgeBaseId,
+      materialId: `mat-${knowledgeBaseId}`,
+    })),
+    failed: [],
+    knowledgeBaseIds: knowledgeBaseIds || [],
+  })),
+  resolveCardOriginLabel: (card, knowledgeBases = []) => {
+    if (card?.answerMode !== 'rag') return card?.sourceLabel || '通用回答';
+    const id = card?.sourceKnowledgeBaseIds?.[0];
+    return knowledgeBases.find((base) => base.id === id)?.name || '知识库回答';
+  },
+  formatCardPreviewText: (text) => String(text || '').replace(/\*\*/g, ''),
+  resolveCardMaterialLabels: (card) => (card?.citation?.label ? [card.citation.label] : []),
+  resolveCardCitedMaterials: () => [],
+  citationsForCardDisplay: () => [],
+  cardMatchesTimeFilter: () => true,
+  cardMatchesOriginFilter: (card, originFilter = 'all') => {
+    if (!originFilter || originFilter === 'all') return true;
+    if (originFilter === 'general') return card?.answerMode !== 'rag';
+    return (card?.sourceKnowledgeBaseIds || []).includes(originFilter);
+  },
 }));
 
 const { demoSession, supabase } = vi.hoisted(() => {
@@ -49,6 +77,16 @@ const { demoSession, supabase } = vi.hoisted(() => {
 
 vi.mock('../../lib/supabaseClient.js', () => ({ supabase }));
 vi.mock('../../lib/api/notes.js', () => notesApi);
+vi.mock('./NoteEditor.jsx', async () => {
+  const actual = await vi.importActual('./NoteEditor.jsx');
+  return {
+    ...actual,
+    NoteEditor: (props) => {
+      noteEditorCapture.latest = props;
+      return actual.NoteEditor(props);
+    },
+  };
+});
 
 vi.mock('../../lib/api/auth.js', () => ({
   getSession: () => ({
@@ -142,7 +180,7 @@ describe('NotesWorkspace', () => {
     expect(screen.getByRole('navigation', { name: '主导航' })).toHaveAttribute('data-mobile-open', 'false');
   });
 
-  it('disables generation without material and defers AI generation to the next phase', async () => {
+  it('disables generation without material and shows 生成中 while generating', async () => {
     const cards = [{
       id: 'rag-card',
       contentSnapshot: '缩短首次价值时间，让用户更快完成关键动作。',
@@ -152,7 +190,10 @@ describe('NotesWorkspace', () => {
     }];
     const emptyNote = { id: 'empty', title: '未命名笔记', content: { text: '', blocks: [] }, inspirationCardIds: [] };
     const noteWithCards = { ...emptyNote, id: 'with-card', inspirationCardIds: ['rag-card'] };
-    const onGenerate = vi.fn();
+    let resolveGenerate;
+    const onGenerate = vi.fn(() => new Promise((resolve) => {
+      resolveGenerate = resolve;
+    }));
     const Harness = ({ note }) => {
       const [current, setCurrent] = useState(note);
       return <NoteEditor mode="inspiration" showMaterials note={current} cards={cards} onChange={setCurrent} onGenerate={onGenerate} />;
@@ -163,8 +204,12 @@ describe('NotesWorkspace', () => {
     unmount();
 
     render(<Harness note={noteWithCards} />);
+    expect(screen.getByRole('button', { name: '生成笔记' })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: '生成笔记' }));
     expect(onGenerate).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: '生成中' })).toBeDisabled();
+    resolveGenerate();
+    expect(await screen.findByRole('button', { name: '生成笔记' })).toBeEnabled();
   });
 
   it('offers card save and add-to-note choices from an answer action', async () => {
@@ -334,6 +379,14 @@ describe('NotesWorkspace', () => {
 
     expect(screen.getByRole('button', { name: '返回笔记' })).toBeVisible();
     expect(screen.getByRole('region', { name: '素材面板' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: '素材面板' })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '收起素材面板' }));
+    expect(screen.queryByRole('region', { name: '素材面板' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '展开素材面板' })).toBeVisible();
+
+    await userEvent.click(screen.getByRole('button', { name: '展开素材面板' }));
+    expect(screen.getByRole('region', { name: '素材面板' })).toBeVisible();
   });
 
   it('loads a selected note without focusing its body', async () => {
@@ -345,14 +398,55 @@ describe('NotesWorkspace', () => {
     expect(document.activeElement).not.toBe(screen.getByLabelText('笔记正文'));
   });
 
-  it('keeps inspiration search adjacent to organize without a filter control', async () => {
+  it('keeps inspiration search adjacent to organize with manage and a filter between them', async () => {
     render(<NotesHarness />);
 
     await userEvent.click(screen.getByRole('tab', { name: '灵感卡片' }));
 
-    expect(screen.queryByRole('button', { name: '筛选灵感卡片' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('搜索灵感卡片')).toBeVisible();
+    expect(screen.getByRole('button', { name: '筛选灵感卡片' })).toBeVisible();
+    expect(screen.getByRole('button', { name: '管理' })).toBeVisible();
     expect(screen.getByRole('button', { name: '整理为笔记' })).toBeVisible();
+
+    await userEvent.click(screen.getByRole('button', { name: '筛选灵感卡片' }));
+    expect(screen.getByRole('menu', { name: '灵感卡片筛选' })).toBeVisible();
+    expect(screen.getByRole('menuitemradio', { name: '今天' })).toBeVisible();
+    expect(screen.getByRole('menuitemradio', { name: '通用回答' })).toBeVisible();
+  });
+
+  it('batch-deletes managed cards after a single confirm', async () => {
+    const onDeleteCard = vi.fn();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const cards = [
+      { id: 'c1', contentSnapshot: '卡片一', questionSnapshot: 'q1', answerMode: 'general', sourceLabel: '通用回答', savedAt: '今天' },
+      { id: 'c2', contentSnapshot: '卡片二', questionSnapshot: 'q2', answerMode: 'general', sourceLabel: '通用回答', savedAt: '今天' },
+    ];
+    const Harness = () => {
+      const [notes, setNotes] = useState(demoNotes);
+      return (
+        <NotesWorkspace
+          notes={notes}
+          setNotes={setNotes}
+          cards={cards}
+          notebooks={demoNotebooks}
+          notice={vi.fn()}
+          onDeleteCard={onDeleteCard}
+        />
+      );
+    };
+    render(<Harness />);
+
+    await userEvent.click(screen.getByRole('tab', { name: '灵感卡片' }));
+    await userEvent.click(screen.getByRole('button', { name: '管理' }));
+    await userEvent.click(screen.getByLabelText('选择卡片：c1'));
+    await userEvent.click(screen.getByLabelText('选择卡片：c2'));
+    await userEvent.click(screen.getByRole('button', { name: '删除' }));
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(onDeleteCard).toHaveBeenCalledTimes(2);
+    expect(onDeleteCard).toHaveBeenCalledWith('c1');
+    expect(onDeleteCard).toHaveBeenCalledWith('c2');
+    confirmSpy.mockRestore();
   });
 
   it('enters selection mode from organize and carries visible-list order into a note with materials', async () => {
@@ -389,8 +483,9 @@ describe('NotesWorkspace', () => {
     expect(screen.getByRole('button', { name: '生成笔记' })).toBeVisible();
   });
 
-  it('defers note-to-knowledge-base synchronization to Phase 3 and preserves cards when deleting a note', async () => {
+  it('syncs note to selected knowledge bases via syncNote API', async () => {
     const notice = vi.fn();
+    notesApi.syncNote.mockClear();
     render(<NotesHarness notice={notice} />);
 
     fireEvent.contextMenu(screen.getByRole('button', { name: /会员活动设计/ }));
@@ -398,7 +493,16 @@ describe('NotesWorkspace', () => {
     await userEvent.click(screen.getByLabelText('产品与设计资料'));
     await userEvent.click(screen.getByRole('button', { name: '确认' }));
 
-    expect(notice).toHaveBeenCalledWith('笔记同步至知识库将在 Phase 3 开放。');
+    await waitFor(() => {
+      expect(notice).toHaveBeenCalledWith(expect.stringMatching(/同步中/));
+    });
+    expect(notesApi.syncNote).toHaveBeenCalledWith({
+      noteId: 'note-membership',
+      knowledgeBaseIds: ['base-product'],
+    });
+    await waitFor(() => {
+      expect(notice).toHaveBeenCalledWith('已同步至 1 个知识库。');
+    });
 
     fireEvent.contextMenu(screen.getByRole('button', { name: /会员活动设计/ }));
     await userEvent.click(screen.getByRole('menuitem', { name: '删除笔记' }));
@@ -407,12 +511,68 @@ describe('NotesWorkspace', () => {
     expect(screen.getByText(/不会删除灵感卡片/)).toBeVisible();
   });
 
+  it('outlineFullscreenNote invokes outline API and merges local materials', async () => {
+    const notice = vi.fn();
+    notesApi.outlineNoteMaterials.mockResolvedValue({
+      id: 'note-with-cards',
+      title: '带素材笔记',
+      notebookId: null,
+      content: {
+        text: '',
+        blocks: [],
+        sections: [],
+        outline: {
+          version: 1,
+          chapters: [{ id: 'ch1', title: '开场', cardIds: ['card-onboarding'] }],
+          unassignedCardIds: ['card-retrospective'],
+        },
+      },
+      inspirationCardIds: ['card-onboarding'],
+      materialThoughts: {},
+      syncedBaseIds: [],
+      updatedLabel: '刚刚成章',
+    });
+
+    const notes = [{
+      ...demoNotes[0],
+      id: 'note-with-cards',
+      title: '带素材笔记',
+      inspirationCardIds: ['card-onboarding', 'card-retrospective'],
+      materialThoughts: { 'card-onboarding': 'local' },
+    }];
+
+    const Harness = () => {
+      const [items, setItems] = useState(notes);
+      return (
+        <NotesWorkspace
+          notes={items}
+          setNotes={setItems}
+          cards={demoInspirationCards}
+          notebooks={demoNotebooks}
+          notice={notice}
+        />
+      );
+    };
+
+    render(<Harness />);
+    await userEvent.click(screen.getByRole('button', { name: /带素材笔记/ }));
+    await userEvent.click(screen.getByRole('button', { name: '全屏编辑' }));
+
+    expect(noteEditorCapture.latest?.onOutline).toEqual(expect.any(Function));
+    await noteEditorCapture.latest.onOutline();
+
+    expect(notesApi.outlineNoteMaterials).toHaveBeenCalledWith('note-with-cards');
+    expect(notice).toHaveBeenCalledWith('已生成章节大纲。');
+  });
+
   it('offers unfile or permanent deletion choices when deleting a non-empty notebook', async () => {
     render(<NotesHarness />);
 
     await userEvent.click(screen.getByRole('button', { name: '笔记本' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '管理笔记本' }));
-    await userEvent.click(screen.getByRole('button', { name: '删除笔记本：增长实验' }));
+    const dialog = screen.getByRole('dialog', { name: '管理笔记本' });
+    await userEvent.click(within(dialog).getByRole('option', { name: /增长实验/ }));
+    await userEvent.click(within(dialog).getByRole('button', { name: '删除笔记本：增长实验' }));
 
     expect(screen.getByRole('dialog', { name: '删除笔记本' })).toBeVisible();
     expect(screen.getByRole('button', { name: '仅删除笔记本' })).toBeVisible();
