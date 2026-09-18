@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { ArrowUp, BookOpen, BookSearch, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Hash, Link2, LogOut, Menu, MessageSquare, NotebookText, Plus, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import './styles.css';
 import { NotesWorkspace } from './features/notes/NotesWorkspace.jsx';
+import { removeCardFromNote } from './features/notes/noteState.js';
 import { HomeComposer, defaultHomeScope } from './features/home/HomeComposer.jsx';
 import { HomeConversation, HomeShareBar } from './features/home/HomeConversation.jsx';
 import { KbConversation } from './features/knowledge/KbConversation.jsx';
@@ -17,7 +18,7 @@ import { useDismissable } from './hooks/useDismissable.js';
 import { ComposerTagSuggest } from './features/chat/ComposerTagSuggest.jsx';
 import { AuthScreen } from './features/auth/AuthScreen.jsx';
 import { deleteAccount, getSession, signOut } from './lib/api/auth.js';
-import { createKnowledgeBase, filterKnowledgeBaseNames, listKnowledgeBases } from './lib/api/knowledge.js';
+import { createKnowledgeBase, deleteKnowledgeBase, filterKnowledgeBaseNames, listKnowledgeBases, updateKnowledgeBase } from './lib/api/knowledge.js';
 import { createMaterialStub, deleteMaterial, getMaterialById, listMaterials, listMaterialTags, moveMaterial, replaceMaterialTags, formatMaterialTitle, formatMaterialTypeLabel, inferPlatformFromUrl } from './lib/api/materials.js';
 import { buildRagAskText, extractTagNamesFromPrompt, formatDisplayAskPrompt, matchHashTagQuery, mergeSelectedTagNames, pruneSelectedTagNames, replaceHashTagToken, resolveTagFilterIds } from './lib/api/tagFilters.js';
 import { isHttpUrlLike } from './lib/extractUrlFromPaste.js';
@@ -29,6 +30,7 @@ import {
   listInspirationCards,
   listNotebooks,
   listNotes,
+  prependInspirationCard,
   updateNote,
 } from './lib/api/notes.js';
 import { getMyProfile, resolveDisplayName } from './lib/api/profiles.js';
@@ -43,6 +45,7 @@ import {
   listConversations,
   loadConversationTurns,
   renameConversation,
+  resolveAfterConversationDelete,
   truncateConversationFromTurn,
 } from './lib/api/conversations.js';
 import { applyBubbleDeletes } from './features/chat/chatBubbles.js';
@@ -51,10 +54,16 @@ import { supabase } from './lib/supabaseClient.js';
 const homeChatEmptyPrompt = '有什么想聊的？直接提问，或在输入框里选择知识库。';
 const kbChatEmptyTitle = '从你的知识库中寻找答案';
 
-const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎', 'B 站', '其他'];
+const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎', 'B 站', '本地文件', '其他网站'];
 const sortOptions = ['从新到旧', '从旧到新', 'A-Z', 'Z-A'];
 const initialHomeScope = defaultHomeScope;
-const platformCodes = { 小红书: 'xhs', 抖音: 'douyin', 微信: 'wechat_mp', 知乎: 'zhihu', 'B 站': 'bilibili', 其他: 'other' };
+const platformCodes = { 小红书: 'xhs', 抖音: 'douyin', 微信: 'wechat_mp', 知乎: 'zhihu', 'B 站': 'bilibili', 本地文件: 'local', 其他网站: 'other' };
+
+function clampMenuCoords(clientX, clientY, width = 128, height = 76) {
+  const left = Math.min(Math.max(8, clientX), window.innerWidth - width - 8);
+  const top = Math.min(Math.max(8, clientY), window.innerHeight - height - 8);
+  return { left, top };
+}
 
 function IconHome({ size = 18, strokeWidth = 1.5, ...props }) {
   return (
@@ -105,8 +114,19 @@ function NavItem({ icon: Icon, label, active, onClick, onMouseEnter, onMouseLeav
     </button>
   );
 }
-function Toast({ text, onClose }) {
-  return <div className="home-notice" role="status"><Check size={15} />{text}<button aria-label="关闭提示" type="button" onClick={onClose}><X size={15} /></button></div>;
+function Toast({ text, onClose, durationMs = 1600 }) {
+  useEffect(() => {
+    if (!text) return undefined;
+    const timer = window.setTimeout(() => onClose?.(), durationMs);
+    return () => window.clearTimeout(timer);
+  }, [text, durationMs]);
+
+  return (
+    <div className="home-notice" role="status">
+      <Check size={15} />
+      {text}
+    </div>
+  );
 }
 function Citation({ label }) {
   return <span className="citation" tabIndex="0">引用<span>{label}</span></span>;
@@ -332,8 +352,15 @@ export function App() {
   const [editTagsSaving, setEditTagsSaving] = useState(false);
   const [moveMaterialTarget, setMoveMaterialTarget] = useState(null);
   const materialMenuRef = useRef(null);
+  const [kbBaseMenu, setKbBaseMenu] = useState(null);
+  const [kbBaseRenameDraft, setKbBaseRenameDraft] = useState(null);
+  const kbBaseMenuRef = useRef(null);
   const bases = useMemo(() => knowledgeBases.map((item) => item.name), [knowledgeBases]);
   const visibleBases = useMemo(() => filterKnowledgeBaseNames(bases, kbQuery), [bases, kbQuery]);
+  const visibleKbItems = useMemo(() => {
+    const allowed = new Set(visibleBases);
+    return knowledgeBases.filter((item) => allowed.has(item.name));
+  }, [knowledgeBases, visibleBases]);
   const selectedKnowledgeBase = useMemo(
     () => knowledgeBases.find((item) => item.name === base) || null,
     [knowledgeBases, base],
@@ -593,6 +620,7 @@ export function App() {
   useDismissable({ open: kbRailOpen, onClose: () => setKbRailOpen(false), rootRef: kbRailRef });
   useDismissable({ open: Boolean(materialMenu), onClose: () => setMaterialMenu(null), rootRef: materialMenuRef });
   useDismissable({ open: Boolean(kbHistoryMenu), onClose: () => setKbHistoryMenu(null), rootRef: kbHistoryMenuRef });
+  useDismissable({ open: Boolean(kbBaseMenu), onClose: () => setKbBaseMenu(null), rootRef: kbBaseMenuRef });
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return undefined;
     const tablet = window.matchMedia('(max-width: 1199px) and (min-width: 768px)');
@@ -873,30 +901,51 @@ export function App() {
     || bases[0]
     || ''
   );
-  const startNewKbChat = () => {
+  const startNewKbChat = async () => {
     exitKbShare();
-    setHistoryOpen(false);
     // Invalidate any in-flight open/load so an older reply cannot overwrite this blank thread.
     kbThreadLoadGenRef.current += 1;
     if (!selectedKnowledgeBase) {
       setKbConversationId(null);
+      kbConversationIdRef.current = null;
       setKbMessages([]);
       say('请先选择一个知识库。');
       return;
     }
-    // Local blank draft only — create the DB row on first send (avoids empty「新会话」spam + list lag).
-    setKbConversationId(null);
     setKbMessages([]);
+    setKbConversationId(null);
+    kbConversationIdRef.current = null;
+    try {
+      const created = await createConversation({
+        surface: 'knowledge',
+        knowledgeBaseId: selectedKnowledgeBase.id,
+      });
+      setKbConversationId(created.id);
+      kbConversationIdRef.current = created.id;
+      promoteKbConversation(created);
+      setHistoryOpen(true);
+    } catch {
+      setKbConversationId(null);
+      kbConversationIdRef.current = null;
+      say('创建会话失败，请稍后重试。');
+    }
   };
-  const openKbConversation = async (conversationId) => {
+  const openKbConversation = async (conversationId, { keepHistoryOpen = false } = {}) => {
     exitKbBubbleSelect();
     const loadGen = ++kbThreadLoadGenRef.current;
     setKbConversationId(conversationId);
-    setHistoryOpen(false);
+    kbConversationIdRef.current = conversationId;
+    if (!keepHistoryOpen) setHistoryOpen(false);
     try {
       const turns = await loadConversationTurns(conversationId);
       if (loadGen !== kbThreadLoadGenRef.current) return;
-      setKbMessages(turns);
+      const kbName = selectedKnowledgeBase?.name;
+      const kbId = selectedKnowledgeBase?.id;
+      setKbMessages(turns.map((turn) => ({
+        ...turn,
+        selectedBases: turn.selectedBases?.length ? turn.selectedBases : (kbName ? [kbName] : []),
+        knowledgeBaseIds: turn.knowledgeBaseIds?.length ? turn.knowledgeBaseIds : (kbId ? [kbId] : []),
+      })));
     } catch {
       if (loadGen !== kbThreadLoadGenRef.current) return;
       say('会话加载失败，请稍后重试。');
@@ -908,6 +957,7 @@ export function App() {
     if (!latest) {
       kbThreadLoadGenRef.current += 1;
       setKbConversationId(null);
+      kbConversationIdRef.current = null;
       setKbMessages([]);
       return;
     }
@@ -938,8 +988,20 @@ export function App() {
   const deleteHomeConversation = async (conversationId) => {
     try {
       await deleteConversation(conversationId);
-      setHomeConversations((items) => items.filter((item) => item.id !== conversationId));
-      if (homeConversationId === conversationId) enterFreshHomeChatShell();
+      const { remaining, nextActiveId, focusNext } = resolveAfterConversationDelete(
+        homeConversations,
+        conversationId,
+        homeConversationId,
+      );
+      setHomeConversations(remaining);
+      if (focusNext) {
+        if (nextActiveId) {
+          setHomeHistoryOpen(true);
+          void openHomeConversation(nextActiveId);
+        } else {
+          enterFreshHomeChatShell();
+        }
+      }
       say('会话已删除。');
     } catch {
       say('删除失败，请稍后重试。');
@@ -959,8 +1021,22 @@ export function App() {
   const deleteKbConversation = async (conversationId) => {
     try {
       await deleteConversation(conversationId);
-      setKbConversations((items) => items.filter((item) => item.id !== conversationId));
-      if (kbConversationId === conversationId) startNewKbChat();
+      const { remaining, nextActiveId, focusNext } = resolveAfterConversationDelete(
+        kbConversations,
+        conversationId,
+        kbConversationId,
+      );
+      setKbConversations(remaining);
+      if (focusNext) {
+        if (nextActiveId) {
+          void openKbConversation(nextActiveId, { keepHistoryOpen: true });
+        } else {
+          kbThreadLoadGenRef.current += 1;
+          setKbConversationId(null);
+          kbConversationIdRef.current = null;
+          setKbMessages([]);
+        }
+      }
       say('会话已删除。');
     } catch {
       say('删除失败，请稍后重试。');
@@ -1035,6 +1111,58 @@ export function App() {
       say('创建知识库失败，请稍后重试。');
     }
   };
+  const openKbBaseRename = (item) => {
+    setKbBaseMenu(null);
+    setKbRailOpen(false);
+    setSidebarCollapsed(false);
+    setKbBaseRenameDraft({ id: item.id, name: item.name });
+  };
+  const cancelKbBaseRename = () => setKbBaseRenameDraft(null);
+  const commitKbBaseRename = async () => {
+    if (!kbBaseRenameDraft) return;
+    const draft = kbBaseRenameDraft;
+    const name = draft.name.trim();
+    const original = knowledgeBases.find((item) => item.id === draft.id);
+    setKbBaseRenameDraft(null);
+    if (!name || !original || name === original.name) return;
+    try {
+      const updated = await updateKnowledgeBase(draft.id, { name });
+      setKnowledgeBases((items) => items.map((item) => (item.id === draft.id ? updated : item)));
+      if (base === original.name) setBase(updated.name);
+      setHomeScope((current) => ({
+        ...current,
+        bases: (current.bases || []).map((item) => (item === original.name ? updated.name : item)),
+      }));
+      say(`已重命名为「${updated.name}」。`);
+    } catch {
+      say('重命名失败，请稍后重试。');
+    }
+  };
+  const confirmDeleteKbBase = async (item) => {
+    setKbBaseMenu(null);
+    if (item.isDefault || item.type === 'default') {
+      say('默认知识库不能删除。');
+      return;
+    }
+    const ok = window.confirm(`确定删除知识库「${item.name}」？删除后无法恢复。`);
+    if (!ok) return;
+    try {
+      await deleteKnowledgeBase(item.id);
+      const remaining = knowledgeBases.filter((kb) => kb.id !== item.id);
+      setKnowledgeBases(remaining);
+      setHomeScope((current) => ({
+        ...current,
+        bases: (current.bases || []).filter((name) => name !== item.name),
+      }));
+      if (base === item.name) {
+        const nextName = remaining.find((kb) => kb.type === 'default')?.name || remaining[0]?.name || '';
+        setBase(nextName);
+      }
+      say(`已删除知识库「${item.name}」。`);
+    } catch (error) {
+      say(error?.message || '删除失败，请稍后重试。');
+    }
+  };
   const submitHomeQuestion = async (request) => {
     let priorCount = homeMessages.length;
     if (request.replaceMessageId) {
@@ -1066,6 +1194,10 @@ export function App() {
       online: hasScope ? false : Boolean(request.online),
     };
     const displayQuestion = formatDisplayAskPrompt(request.prompt, scope.tags);
+    const selectedBaseNames = new Set(scope.bases);
+    const knowledgeBaseIds = knowledgeBases
+      .filter((item) => selectedBaseNames.has(item.name))
+      .map((item) => item.id);
     const pendingId = `pending-home-${Date.now()}-${crypto.randomUUID()}`;
     const pendingMessage = {
       id: pendingId,
@@ -1073,6 +1205,7 @@ export function App() {
       mode: scope.mode,
       online: scope.online,
       selectedBases: [...scope.bases],
+      knowledgeBaseIds: [...knowledgeBaseIds],
       selectedTags: [...scope.tags],
       citations: [],
       pending: true,
@@ -1082,10 +1215,6 @@ export function App() {
     setHomeSurface('chat');
     setHomeMessages((all) => [...all, pendingMessage]);
     try {
-      const selectedBaseNames = new Set(scope.bases);
-      const knowledgeBaseIds = knowledgeBases
-        .filter((item) => selectedBaseNames.has(item.name))
-        .map((item) => item.id);
       if (scope.bases.length > 0 && knowledgeBaseIds.length === 0) {
         throw new Error('知识库尚未就绪，请稍后重试。');
       }
@@ -1191,6 +1320,7 @@ export function App() {
       mode: scope.mode,
       online: scope.online,
       selectedBases: scope.bases,
+      knowledgeBaseIds: selectedKnowledgeBase ? [selectedKnowledgeBase.id] : [],
       selectedTags: [...scope.tags],
       citations: [],
       pending: true,
@@ -1268,8 +1398,29 @@ export function App() {
   };
   const saveAnswerCard = async (payload) => {
     try {
-      const card = await createInspirationCard(payload);
-      setCards((items) => [card, ...items]);
+      const nameSet = new Set(payload.sourceKnowledgeBaseNames || []);
+      const resolvedIds = payload.sourceKnowledgeBaseIds?.length
+        ? payload.sourceKnowledgeBaseIds
+        : knowledgeBases.filter((base) => nameSet.has(base.name)).map((base) => base.id);
+      const card = await createInspirationCard({
+        ...payload,
+        sourceKnowledgeBaseIds: resolvedIds.length ? resolvedIds : null,
+        sourceKnowledgeBaseNames: payload.sourceKnowledgeBaseNames || null,
+      });
+      if (!card.sourceKnowledgeBaseIds?.length && resolvedIds.length) {
+        card.sourceKnowledgeBaseIds = resolvedIds;
+      }
+      if (!card.sourceKnowledgeBaseNames?.length && nameSet.size) {
+        card.sourceKnowledgeBaseNames = [...nameSet];
+      }
+      // Optimistic prepend so 灵感页 shows the card immediately.
+      setCards((items) => prependInspirationCard(items, card));
+      try {
+        const refreshed = await listInspirationCards();
+        setCards(refreshed);
+      } catch {
+        // Keep the optimistic card if the soft refresh fails.
+      }
       say('已保存为灵感卡片。');
     } catch {
       say('保存灵感卡片失败，请稍后重试。');
@@ -1642,13 +1793,24 @@ export function App() {
               <button type="button" className={`rail-action ${kbRailOpen ? 'is-active' : ''}`} aria-label="切换知识库" data-rail-label="切换" title="切换知识库" aria-expanded={kbRailOpen} onClick={() => setKbRailOpen((open) => !open)}><IconKbItem size={16} /></button>
               {kbRailOpen && (
                 <div className="kb-rail-menu" role="menu" aria-label="知识库列表">
-                  {visibleBases.map((item) => (
-                    <button key={item} type="button" role="menuitem" className={activeNav === '知识库' && base === item ? 'selected' : ''} onClick={() => { openKnowledgeBase(item); setKbRailOpen(false); }}>
-                      <span>{item}</span>
-                      {activeNav === '知识库' && base === item && <Check size={14} strokeWidth={1.5} />}
+                  {visibleKbItems.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="menuitem"
+                      className={activeNav === '知识库' && base === item.name ? 'selected' : ''}
+                      onClick={() => { openKnowledgeBase(item.name); setKbRailOpen(false); }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        const coords = clampMenuCoords(event.clientX, event.clientY);
+                        setKbBaseMenu({ id: item.id, name: item.name, isDefault: item.isDefault || item.type === 'default', ...coords });
+                      }}
+                    >
+                      <span>{item.name}</span>
+                      {activeNav === '知识库' && base === item.name && <Check size={14} strokeWidth={1.5} />}
                     </button>
                   ))}
-                  {!visibleBases.length && (
+                  {!visibleKbItems.length && (
                     <div className="kb-sidebar-empty" role="status">
                       {kbQuery.trim() ? <p>未找到符合条件的知识库</p> : <p>暂无知识库</p>}
                     </div>
@@ -1660,12 +1822,52 @@ export function App() {
         )}
         <label className="sidebar-search"><Search size={15} strokeWidth={1.5} /><input aria-label="搜索知识库" placeholder="搜索知识库" value={kbQuery} onChange={(event) => setKbQuery(event.target.value)} /></label>
         <div className="kb-sidebar-list">
-          {visibleBases.map((item) => (
-            <button key={item} className={activeNav === '知识库' && base === item ? 'selected' : ''} onClick={() => openKnowledgeBase(item)}>
-              <IconKbItem /><span>{item}</span>
-            </button>
+          {visibleKbItems.map((item) => (
+            kbBaseRenameDraft?.id === item.id ? (
+              <div
+                key={item.id}
+                className={`kb-sidebar-item is-renaming ${activeNav === '知识库' && base === item.name ? 'selected' : ''}`}
+              >
+                <IconKbItem />
+                <input
+                  autoFocus
+                  value={kbBaseRenameDraft.name}
+                  maxLength={40}
+                  aria-label="知识库名称"
+                  onChange={(event) => setKbBaseRenameDraft((current) => (
+                    current ? { ...current, name: event.target.value } : current
+                  ))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      commitKbBaseRename();
+                    }
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      cancelKbBaseRename();
+                    }
+                  }}
+                  onBlur={() => { commitKbBaseRename(); }}
+                  onClick={(event) => event.stopPropagation()}
+                />
+              </div>
+            ) : (
+              <button
+                key={item.id}
+                type="button"
+                className={activeNav === '知识库' && base === item.name ? 'selected' : ''}
+                onClick={() => openKnowledgeBase(item.name)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  const coords = clampMenuCoords(event.clientX, event.clientY);
+                  setKbBaseMenu({ id: item.id, name: item.name, isDefault: item.isDefault || item.type === 'default', ...coords });
+                }}
+              >
+                <IconKbItem /><span>{item.name}</span>
+              </button>
+            )
           ))}
-          {!visibleBases.length && (
+          {!visibleKbItems.length && (
             <div className="kb-sidebar-empty" role="status">
               {kbQuery.trim() ? (
                 <p>未找到符合条件的知识库</p>
@@ -1742,15 +1944,18 @@ export function App() {
       {!showHomeChat && <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} sendArrow="right" introBeam />}
       {notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
-    {!settingsOpen && activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} notice={say} onDeleteCard={async (cardId) => {
+    {!settingsOpen && activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} bases={knowledgeBases} notice={say} onOpenMaterial={(materialId) => window.open(getMaterialPreviewUrl(materialId), '_blank', 'noopener,noreferrer')} onDeleteCard={async (cardId) => {
       try {
         await deleteInspirationCard(cardId);
         setCards((items) => items.filter((card) => card.id !== cardId));
-        setNotes((items) => items.map((note) => ({
-          ...note,
-          inspirationCardIds: note.inspirationCardIds.filter((id) => id !== cardId),
-          materialThoughts: Object.fromEntries(Object.entries(note.materialThoughts || {}).filter(([id]) => id !== cardId)),
-        })));
+        const nextNotes = notes.map((note) => removeCardFromNote(note, cardId));
+        setNotes(nextNotes);
+        await Promise.all(
+          nextNotes
+            .filter((note, index) => note.inspirationCardIds.length !== notes[index].inspirationCardIds.length
+              && note.content?.outline)
+            .map((note) => updateNote(note.id, { title: note.title, content: note.content })),
+        );
       } catch {
         say('删除灵感卡片失败，请稍后重试。');
       }
@@ -1845,7 +2050,23 @@ export function App() {
             <div>
               <button type="button" title="新建会话" aria-label="新建会话" onClick={startNewKbChat}><Plus size={15} strokeWidth={1.5} /></button>
               <div className="ai-history-anchor">
-                <button type="button" title="会话历史" aria-label="会话历史" aria-expanded={historyOpen} onClick={() => setHistoryOpen((v) => !v)}><Clock3 size={15} strokeWidth={1.5} /></button>
+                <button
+                  type="button"
+                  title="会话历史"
+                  aria-label="会话历史"
+                  aria-expanded={historyOpen}
+                  onClick={() => {
+                    setHistoryOpen((open) => {
+                      const next = !open;
+                      if (next && !kbConversationId && kbConversations[0]) {
+                        void openKbConversation(kbConversations[0].id, { keepHistoryOpen: true });
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  <Clock3 size={15} strokeWidth={1.5} />
+                </button>
                 {historyOpen && (
                   <div className="history-popover" role="menu" aria-label="会话历史">
                     <strong>会话历史</strong>
@@ -1856,6 +2077,7 @@ export function App() {
                           {group.items.map((item) => (
                             kbRenameDraft?.id === item.id ? (
                               <div key={item.id} className="is-renaming" role="menuitem">
+                                <MessageSquare size={12} strokeWidth={1.5} aria-hidden="true" />
                                 <input
                                   autoFocus
                                   value={kbRenameDraft.title}
@@ -1895,7 +2117,8 @@ export function App() {
                                   setKbHistoryMenu({ id: item.id, title: item.title, left, top });
                                 }}
                               >
-                                {item.title}
+                                <MessageSquare size={12} strokeWidth={1.5} aria-hidden="true" />
+                                <span>{item.title}</span>
                               </button>
                             )
                           ))}
@@ -1978,6 +2201,35 @@ export function App() {
       </div>{notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
     {showCreate && <div className="modal-layer"><form className="create-modal" onSubmit={createBase}><button className="modal-close" type="button" onClick={() => setShowCreate(false)}><X size={17} /></button><Sparkles size={22} /><h2>新建知识库</h2><p>创建一个主题空间，用来归集和提问。</p><label>知识库名称<input value={newBase} autoFocus onChange={(event) => setNewBase(event.target.value)} placeholder="例如：产品与设计资料" /></label><div><button type="button" onClick={() => setShowCreate(false)}>取消</button><button type="submit">创建</button></div></form></div>}
+    {kbBaseMenu && createPortal(
+      <div
+        className="home-history-context-menu"
+        role="menu"
+        aria-label="知识库操作"
+        ref={kbBaseMenuRef}
+        style={{ left: kbBaseMenu.left, top: kbBaseMenu.top }}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => openKbBaseRename(kbBaseMenu)}
+        >
+          重命名
+        </button>
+        {!kbBaseMenu.isDefault && (
+          <button
+            type="button"
+            role="menuitem"
+            className="is-danger"
+            onClick={() => confirmDeleteKbBase(kbBaseMenu)}
+          >
+            删除
+          </button>
+        )}
+      </div>,
+      document.body,
+    )}
     <EditMaterialTagsDialog
       open={Boolean(editTagsMaterial)}
       initialTags={editTagsMaterial?.tags || (editTagsMaterial?.tag ? [editTagsMaterial.tag] : [])}

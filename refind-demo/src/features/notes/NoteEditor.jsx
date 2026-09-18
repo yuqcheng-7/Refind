@@ -12,6 +12,7 @@ import {
   moveCardInOutline,
   noteHasGeneratedBody,
   normalizeOutline,
+  reconcileOutline,
   removeCardFromOutline,
   renameChapter,
 } from './materialOutline.js';
@@ -295,6 +296,16 @@ export function NoteEditor({
   const editorHtml = hasSections
     ? htmlFromNoteContent(note.content)
     : (note.content?.html || htmlFromNoteContent(note.content));
+
+  useEffect(() => {
+    if (!outline) return;
+    const reconciled = reconcileOutline(outline, note.inspirationCardIds);
+    if (JSON.stringify(reconciled) === JSON.stringify(outline)) return;
+    commit({
+      content: { ...note.content, outline: reconciled },
+      inspirationCardIds: flattenOutlineCardIds(reconciled),
+    });
+  }, [note.id, note.inspirationCardIds]);
 
   useEffect(() => {
     setSaveState('已保存');

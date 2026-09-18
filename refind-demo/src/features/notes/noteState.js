@@ -2,6 +2,7 @@ import {
   addCardsToUnassigned,
   flattenOutlineCardIds,
   normalizeOutline,
+  removeCardFromOutline,
 } from './materialOutline.js';
 
 export function createBlankNote(now = Date.now()) {
@@ -19,10 +20,11 @@ export function createBlankNote(now = Date.now()) {
 export function filterNotes(notes, query, notebookId) {
   const needle = query.trim().toLowerCase();
 
-  return notes.filter((note) => (
-    (notebookId === 'all' || note.notebookId === notebookId)
-    && (!needle || `${note.title} ${note.content.text}`.toLowerCase().includes(needle))
-  ));
+  return notes.filter((note) => {
+    const inNotebook = notebookId === 'all'
+      || (notebookId === 'uncategorized' ? !note.notebookId : note.notebookId === notebookId);
+    return inNotebook && (!needle || `${note.title} ${note.content.text}`.toLowerCase().includes(needle));
+  });
 }
 
 export function attachCards(note, cardIds) {
@@ -39,6 +41,23 @@ export function attachCards(note, cardIds) {
       ...note.content,
       outline: addCardsToUnassigned(outline, added),
     },
+  };
+}
+
+export function removeCardFromNote(note, cardId) {
+  const outline = normalizeOutline(note.content?.outline);
+  return {
+    ...note,
+    inspirationCardIds: note.inspirationCardIds.filter((id) => id !== cardId),
+    materialThoughts: Object.fromEntries(
+      Object.entries(note.materialThoughts || {}).filter(([id]) => id !== cardId),
+    ),
+    ...(outline ? {
+      content: {
+        ...note.content,
+        outline: removeCardFromOutline(outline, cardId),
+      },
+    } : {}),
   };
 }
 

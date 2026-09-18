@@ -141,6 +141,44 @@ describe('NoteEditor materials outline', () => {
     expect(screen.getByText('未归章')).toBeInTheDocument();
   });
 
+  it('reconciles stale outline ids and parks missing bound cards on mount', async () => {
+    const onChange = vi.fn();
+    render(
+      <NoteEditor
+        mode="inspiration"
+        showMaterials
+        note={outlineNote({
+          inspirationCardIds: ['a', 'b'],
+          content: {
+            text: 'body',
+            sections: [],
+            outline: {
+              version: 1,
+              chapters: [{ id: 'ch1', title: '动机', cardIds: ['a', 'stale'] }],
+              unassignedCardIds: [],
+            },
+          },
+        })}
+        cards={[
+          { id: 'a', contentSnapshot: 'A', answerMode: 'general' },
+          { id: 'b', contentSnapshot: 'B', answerMode: 'general' },
+        ]}
+        onChange={onChange}
+      />,
+    );
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      inspirationCardIds: ['a', 'b'],
+      content: expect.objectContaining({
+        outline: {
+          version: 1,
+          chapters: [{ id: 'ch1', title: '动机', cardIds: ['a'] }],
+          unassignedCardIds: ['b'],
+        },
+      }),
+    })));
+  });
+
   it('renames a chapter and updates the outline through onChange', () => {
     const onChange = renderOutlineEditor();
 

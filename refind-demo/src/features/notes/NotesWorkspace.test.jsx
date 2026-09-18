@@ -525,7 +525,7 @@ describe('NotesWorkspace', () => {
         blocks: [{ type: 'paragraph', text: 'generated body' }],
         sections: [],
       },
-      inspirationCardIds: ['card-onboarding'],
+      inspirationCardIds: ['card-onboarding', 'card-retrospective'],
       materialThoughts: {},
       updatedLabel: '刚刚生成',
     });

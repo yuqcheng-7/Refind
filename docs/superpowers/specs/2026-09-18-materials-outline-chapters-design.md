@@ -1,6 +1,6 @@
 # 素材成章与智能排序设计（2026-09-18）
 
-> 状态：已与产品确认（对话拍板）  
+> 状态：已实现（branch `phase3-notes-intelligence-launch`）；手动验收待定  
 > 适用范围：`refind-demo` 灵感卡片 → 全屏笔记编辑；`generate-note` 按章节结构生成  
 > 前置：素材右栏、多选整理、`generate-note` Edge 已落地  
 > 非目标：生产上线、脑图、按来源/时间「粗排」作为成章手段
@@ -138,13 +138,13 @@ type MaterialOutline = {
 
 ## 10. 验收
 
-- [ ] ≥2 卡首次进入全屏 → 自动成章 → 面板为章节挂卡  
-- [ ] 拖卡换章 / 章内排序后生成，正文结构与面板一致  
-- [ ] 无正文时「重试成章」不弹窗；有正文时弹窗且「仅更新结构」不改正文  
-- [ ] 「更新并重新生成」会改正文并留 revision  
-- [ ] 新卡进未归章；删卡不改已有正文  
-- [ ] 成章失败可重试且不挡编辑  
-- [ ] 生成中面板只读  
+- [x] ≥2 卡首次进入全屏 → 自动成章 → 面板为章节挂卡 — *implemented; manual QA pending*  
+- [x] 拖卡换章 / 章内排序后生成，正文结构与面板一致 — *implemented; manual QA pending*  
+- [x] 无正文时「重试成章」不弹窗；有正文时弹窗且「仅更新结构」不改正文 — *implemented; manual QA pending*  
+- [x] 「更新并重新生成」会改正文并留 revision — *implemented; manual QA pending*  
+- [x] 新卡进未归章；删卡不改已有正文 — *implemented; manual QA pending*  
+- [x] 成章失败可重试且不挡编辑 — *implemented; manual QA pending*  
+- [x] 生成中面板只读 — *implemented; manual QA pending*  
 
 ## 11. 风险
 
@@ -157,4 +157,4 @@ type MaterialOutline = {
 
 ## 12. 文档同步
 
-落地后回写：笔记智能化设计 / 计划中「生成按素材顺序」的表述，改为「按章节大纲顺序」；更新 Spec 灵感编辑相关条款。
+- [x] 已回写 `2026-09-17-notes-intelligence-design.md` §6.B：生成按 **章节大纲顺序**；无大纲时回退扁平素材顺序（Task 9, branch `phase3-notes-intelligence-launch`）。

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { attachCards, createBlankNote, filterNotes, generateNoteDocument, syncNoteToBases } from './noteState.js';
+import {
+  attachCards,
+  createBlankNote,
+  filterNotes,
+  generateNoteDocument,
+  removeCardFromNote,
+  syncNoteToBases,
+} from './noteState.js';
 
 describe('note state', () => {
   it('creates an immediately selectable unnamed note', () => {
@@ -33,6 +40,26 @@ describe('note state', () => {
     const next = attachCards(note, ['b', 'c']);
     expect(next.inspirationCardIds).toEqual(['a', 'b', 'c']);
     expect(next.content.outline.unassignedCardIds).toEqual(['b', 'c']);
+  });
+
+  it('removes a deleted card from note membership, thoughts, and outline', () => {
+    const next = removeCardFromNote({
+      id: 'n1',
+      inspirationCardIds: ['a', 'b'],
+      materialThoughts: { a: 'keep', b: 'drop' },
+      content: {
+        text: '',
+        outline: {
+          version: 1,
+          chapters: [{ id: 'ch1', title: '开场', cardIds: ['a', 'b'] }],
+          unassignedCardIds: [],
+        },
+      },
+    }, 'b');
+
+    expect(next.inspirationCardIds).toEqual(['a']);
+    expect(next.materialThoughts).toEqual({ a: 'keep' });
+    expect(next.content.outline.chapters[0].cardIds).toEqual(['a']);
   });
 
   it('creates citation nodes only for RAG cards', () => {

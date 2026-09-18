@@ -3,7 +3,7 @@
 > 状态：**已与产品确认**（范围 A + 富文本 D1；上线另做）  
 > 分支：`phase3-notes-intelligence-launch`  
 > 前置：AI 回答链路（RAG / 结构 / 引用）已调好；笔记 CRUD / 灵感卡片表已落地（Phase 2）  
-> 关联：`2026-09-13-notes-workspace-remediation-design.md`（UI 入口）、`2026-09-13-phase3-ai-rag-launch.md` Task 3–5  
+> 关联：`2026-09-13-notes-workspace-remediation-design.md`（UI 入口）、`2026-09-13-phase3-ai-rag-launch.md` Task 3–5、`2026-09-18-materials-outline-chapters-design.md`（素材成章与生成顺序）  
 > 字体规范来源：用户《笔记文档类编辑器 字体层级规范（可直接上线）》
 
 ## 1. 目标
@@ -112,7 +112,7 @@ D 富文本（TipTap）→ A 收藏补齐 → B 生成笔记 → C 同步知识�
 服务端 `generate-note`：
 
 1. 校验归属 → 保存当前正文 → `note_revisions`（`before_generate`）
-2. 只读绑定卡片（顺序）+ 快照 +「我的想法」
+2. 按 **章节大纲顺序**（`content.outline`：章节 → 章内卡 → 未归章）读取绑定卡片 + 快照 +「我的想法」；**无大纲时**回退当前扁平素材顺序（`inspirationCardIds` / 关系表顺序）
 3. DeepSeek → `sections`（RAG 绑 `cardId`；通用不造资料引用）
 4. 原子替换 `notes.content`
 
