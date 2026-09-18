@@ -1,5 +1,6 @@
 import { supabase } from '../supabaseClient.js';
 import { formatRelativeDateTime } from '../formatTime.js';
+import { normalizeOutline } from '../../features/notes/materialOutline.js';
 
 const emptyContent = { text: '', blocks: [], sections: [] };
 
@@ -7,13 +8,16 @@ export function normalizeNoteContent(content) {
   const value = content && typeof content === 'object' && !Array.isArray(content)
     ? content
     : {};
-
-  return {
+  const outline = normalizeOutline(value.outline);
+  const next = {
     ...value,
     text: typeof value.text === 'string' ? value.text : '',
     blocks: Array.isArray(value.blocks) ? value.blocks : [],
     sections: Array.isArray(value.sections) ? value.sections : [],
   };
+  if (outline) next.outline = outline;
+  else delete next.outline;
+  return next;
 }
 
 function formatCardTime(value) {

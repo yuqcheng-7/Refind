@@ -18,6 +18,23 @@ describe('note state', () => {
     expect(attachCards({ inspirationCardIds: ['c1'] }, ['c2', 'c3']).inspirationCardIds).toEqual(['c1', 'c2', 'c3']);
   });
 
+  it('parks new cards in outline unassigned when outline exists', () => {
+    const note = {
+      inspirationCardIds: ['a'],
+      content: {
+        text: '',
+        outline: {
+          version: 1,
+          chapters: [{ id: 'ch1', title: '开场', cardIds: ['a'] }],
+          unassignedCardIds: [],
+        },
+      },
+    };
+    const next = attachCards(note, ['b', 'c']);
+    expect(next.inspirationCardIds).toEqual(['a', 'b', 'c']);
+    expect(next.content.outline.unassignedCardIds).toEqual(['b', 'c']);
+  });
+
   it('creates citation nodes only for RAG cards', () => {
     const doc = generateNoteDocument({ title: '增长笔记', inspirationCardIds: ['rag', 'general'] }, [
       { id: 'rag', contentSnapshot: '缩短首次价值时间', answerMode: 'rag', citation: { label: '小红书增长策略' } },

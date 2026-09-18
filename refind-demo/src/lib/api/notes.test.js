@@ -15,6 +15,22 @@ describe('note API mappers', () => {
     });
   });
 
+  it('normalizeNoteContent preserves valid outline and drops invalid', () => {
+    const withOutline = normalizeNoteContent({
+      text: '',
+      sections: [],
+      outline: {
+        version: 1,
+        chapters: [{ id: 'ch1', title: '开场', cardIds: ['a'] }],
+        unassignedCardIds: [],
+      },
+    });
+    expect(withOutline.outline.chapters[0].title).toBe('开场');
+
+    const bad = normalizeNoteContent({ text: '', outline: { version: 2, chapters: [] } });
+    expect(bad.outline).toBeUndefined();
+  });
+
   it('maps database note relations to the workspace shape', () => {
     expect(mapNote({
       id: 'note-1',

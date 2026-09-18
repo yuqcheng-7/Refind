@@ -1,3 +1,5 @@
+import { addCardsToUnassigned, normalizeOutline } from './materialOutline.js';
+
 export function createBlankNote(now = Date.now()) {
   return {
     id: `note-${now}`,
@@ -20,12 +22,19 @@ export function filterNotes(notes, query, notebookId) {
 }
 
 export function attachCards(note, cardIds) {
+  const added = cardIds.filter((id) => !note.inspirationCardIds.includes(id));
+  const inspirationCardIds = [...note.inspirationCardIds, ...added];
+  const outline = normalizeOutline(note.content?.outline);
+  if (!outline || !added.length) {
+    return { ...note, inspirationCardIds };
+  }
   return {
     ...note,
-    inspirationCardIds: [
-      ...note.inspirationCardIds,
-      ...cardIds.filter((id) => !note.inspirationCardIds.includes(id)),
-    ],
+    inspirationCardIds,
+    content: {
+      ...note.content,
+      outline: addCardsToUnassigned(outline, added),
+    },
   };
 }
 
