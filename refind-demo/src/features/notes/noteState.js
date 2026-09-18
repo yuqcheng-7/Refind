@@ -1,4 +1,8 @@
-import { addCardsToUnassigned, normalizeOutline } from './materialOutline.js';
+import {
+  addCardsToUnassigned,
+  flattenOutlineCardIds,
+  normalizeOutline,
+} from './materialOutline.js';
 
 export function createBlankNote(now = Date.now()) {
   return {
@@ -39,12 +43,25 @@ export function attachCards(note, cardIds) {
 }
 
 export function generateNoteDocument(note, cards) {
-  const selected = note.inspirationCardIds
+  const outline = normalizeOutline(note.content?.outline);
+  const outlineCardIds = outline ? flattenOutlineCardIds(outline) : [];
+  const selectedIds = outline
+    ? [
+      ...outlineCardIds,
+      ...note.inspirationCardIds.filter((id) => !outlineCardIds.includes(id)),
+    ]
+    : note.inspirationCardIds;
+  const selected = selectedIds
     .map((id) => cards.find((card) => card.id === id))
     .filter(Boolean);
 
   if (!selected.length) {
-    return { text: '', blocks: [], sections: [] };
+    return {
+      text: '',
+      blocks: [],
+      sections: [],
+      ...(outline ? { outline } : {}),
+    };
   }
 
   const title = note.title && note.title !== '未命名笔记' ? note.title : '灵感整理草稿';
@@ -84,6 +101,7 @@ export function generateNoteDocument(note, cards) {
       citationIndex: point.citationIndex,
     })),
     sections,
+    ...(outline ? { outline } : {}),
   };
 }
 
