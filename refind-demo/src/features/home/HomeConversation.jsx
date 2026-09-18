@@ -92,9 +92,14 @@ export function HomeConversation({
             content: message.answer || '',
             questionSnapshot: message.question,
             answerMode: message.mode,
+            conversationId: message.conversationId,
+            sourceMessageId: message.userMessageId || message.id,
             citation: message.citations?.[0]
               ? { label: message.citations[0].label, sourceId: message.citations[0].materialId }
               : undefined,
+            citations: message.citations || [],
+            sourceKnowledgeBaseNames: message.selectedBases || [],
+            sourceKnowledgeBaseIds: message.knowledgeBaseIds || [],
           };
 
           return (
@@ -110,7 +115,6 @@ export function HomeConversation({
                   message={message}
                   bubbleClassName="home-user-message"
                   shareMode={Boolean(activeSelectMode)}
-                  disabled={busy}
                   onResend={onResend}
                 />
               </BubbleRow>

@@ -17,7 +17,7 @@
 }
 
 .note-rich-editor .ProseMirror p.is-editor-empty:first-child::before {
-  color: #9ba5b1;
+  color: #9EA4AD;
   content: attr(data-placeholder);
   float: left;
   height: 0;
@@ -30,9 +30,9 @@
 
 .note-typo--h1,
 .note-rich-editor .ProseMirror h1 {
-  font-size: 32px;
+  font-size: 28px;
   font-weight: 600;
-  line-height: 40px;
+  line-height: 36px;
   color: #1d2129;
   margin: 0 0 24px;
 }
@@ -84,18 +84,54 @@
 }
 
 .note-rich-editor .ProseMirror blockquote {
+  width: fit-content;
+  max-width: 100%;
   margin: 0 0 8px;
-  padding-left: 12px;
-  border-left: 3px solid rgba(151, 164, 181, 0.45);
-  color: #4e5969;
+  padding: 5px 10px 5px 10px;
+  border-left: 3px solid #dadad8;
+  border-radius: 0;
+  color: #8a8a87;
+  background: #f2f2f0;
   font-size: 14px;
   line-height: 20px;
 }
 
+.note-rich-editor .ProseMirror blockquote p,
+.note-rich-editor .ProseMirror blockquote p[data-body='body1'],
+.note-rich-editor .ProseMirror blockquote p[data-body='body2'],
+.note-rich-editor .ProseMirror blockquote p[data-body='body3'],
+.note-rich-editor .ProseMirror blockquote h1,
+.note-rich-editor .ProseMirror blockquote h2,
+.note-rich-editor .ProseMirror blockquote h3 {
+  color: #8a8a87;
+}
+
+.note-rich-editor .ProseMirror blockquote p,
+.note-rich-editor .ProseMirror blockquote p[data-body] {
+  display: block;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
 .note-rich-editor .ProseMirror ul,
 .note-rich-editor .ProseMirror ol {
-  margin: 0 0 8px;
-  padding-left: 1.35em;
+  margin: 10px 0 16px;
+  padding-left: 1.45em;
+}
+
+.note-rich-editor .ProseMirror li {
+  margin: 0 0 6px;
+}
+
+.note-rich-editor .ProseMirror li p {
+  margin: 0;
+}
+
+.note-rich-editor .note-citation-node {
+  display: inline;
+  vertical-align: baseline;
 }
 
 .note-rich-editor .ProseMirror a {
@@ -107,8 +143,8 @@
 @media (min-width: 768px) and (max-width: 1199px) {
   .note-typo--h1,
   .note-rich-editor .ProseMirror h1 {
-    font-size: 30px;
-    line-height: 38px;
+    font-size: 26px;
+    line-height: 34px;
     margin-bottom: 19px;
   }
 
@@ -155,8 +191,8 @@
 @media (max-width: 767px) {
   .note-typo--h1,
   .note-rich-editor .ProseMirror h1 {
-    font-size: 28px;
-    line-height: 36px;
+    font-size: 24px;
+    line-height: 32px;
     margin-bottom: 17px;
   }
 

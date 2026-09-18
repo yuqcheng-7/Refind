@@ -2,13 +2,28 @@ import { BookmarkPlus, Copy, MoreHorizontal, Share2, ThumbsDown, Trash2 } from '
 import { useEffect, useRef, useState } from 'react';
 import { FloatingMenu } from '../../components/FloatingMenu.jsx';
 import { useDismissable } from '../../hooks/useDismissable.js';
+import { citationsReferencedByText } from '../../lib/api/notes.js';
 
-function cardPayload(answer, contentSnapshot) {
+/** Build the inspiration-card create payload for a whole answer or selected fragment. */
+export function buildInspirationCardPayload(answer, contentSnapshot) {
+  const answerMode = answer.answerMode ?? 'general';
+  const isRag = answerMode === 'rag';
+  const allCitations = isRag
+    ? (Array.isArray(answer.citations) && answer.citations.length
+      ? answer.citations
+      : (answer.citation ? [answer.citation] : []))
+    : [];
+  const citations = citationsReferencedByText(contentSnapshot, allCitations);
   return {
     contentSnapshot,
     questionSnapshot: answer.questionSnapshot ?? answer.question ?? '',
-    answerMode: answer.answerMode ?? 'general',
-    citation: answer.citation,
+    answerMode,
+    citation: citations[0] || null,
+    citationSnapshot: citations.length ? citations : null,
+    sourceMessageId: answer.sourceMessageId || answer.id || null,
+    sourceConversationId: answer.conversationId || null,
+    sourceKnowledgeBaseIds: answer.sourceKnowledgeBaseIds || answer.knowledgeBaseIds || null,
+    sourceKnowledgeBaseNames: answer.sourceKnowledgeBaseNames || answer.selectedBases || null,
   };
 }
 
@@ -88,11 +103,11 @@ export function AnswerActions({ answer, children, onSaveCard, onAddToNote, onDel
     openCapture(selection, selectionAnchorRect());
   };
   const saveCard = () => {
-    onSaveCard?.(cardPayload(answer, captureText));
+    onSaveCard?.(buildInspirationCardPayload(answer, captureText));
     closeCapture();
   };
   const addToNote = () => {
-    onAddToNote?.(cardPayload(answer, captureText));
+    onAddToNote?.(buildInspirationCardPayload(answer, captureText));
     closeCapture();
   };
   const copyAnswer = async () => {

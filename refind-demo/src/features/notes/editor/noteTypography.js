@@ -26,9 +26,9 @@ export const NOTE_DEFAULT_STYLE_ID = 'body1';
 /** Desktop (default) tokens — exact shipping values */
 export const NOTE_TYPOGRAPHY_DESKTOP = Object.freeze({
   h1: {
-    fontSize: '32px',
+    fontSize: '28px',
     fontWeight: 600,
-    lineHeight: '40px',
+    lineHeight: '36px',
     color: '#1D2129',
     marginTop: '0',
     marginBottom: '24px',

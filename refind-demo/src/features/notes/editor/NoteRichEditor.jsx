@@ -1,5 +1,5 @@
 import { EditorContent, useEditor } from '@tiptap/react';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { createNoteExtensions } from './noteSchema.js';
 import { normalizePastedHtml } from './noteContentCodec.js';
 import { NoteEditorToolbar } from './NoteEditorToolbar.jsx';
@@ -17,9 +17,22 @@ export function NoteRichEditor({
   editorRef,
   className = '',
   showToolbar = true,
+  citationCards = [],
+  onOpenCitationCard,
 }) {
+  const citationRef = useRef({ cards: citationCards, onOpenCard: onOpenCitationCard });
+  citationRef.current = { cards: citationCards, onOpenCard: onOpenCitationCard };
+
   const editor = useEditor({
-    extensions: createNoteExtensions({ placeholder }),
+    extensions: createNoteExtensions({
+      placeholder,
+      citation: {
+        getCard: (cardId) => (
+          citationRef.current.cards.find((card) => card.id === cardId) || null
+        ),
+        onOpenCard: (card) => citationRef.current.onOpenCard?.(card),
+      },
+    }),
     content: contentHtml || '<p data-body="body1"></p>',
     editable,
     autofocus: false,
@@ -52,6 +65,9 @@ export function NoteRichEditor({
 
   useEffect(() => {
     onReady?.(editor || null);
+    return () => {
+      onReady?.(null);
+    };
   }, [editor, onReady]);
 
   useEffect(() => {
@@ -63,8 +79,8 @@ export function NoteRichEditor({
     if (!editor) return;
     const next = contentHtml || '<p data-body="body1"></p>';
     if (next === editor.getHTML()) return;
-    if (editor.isFocused) return;
-    editor.commands.setContent(next, false);
+    // TipTap v3 options object — boolean `false` is ignored and emitUpdate stays true.
+    editor.commands.setContent(next, { emitUpdate: false });
   }, [editor, contentHtml]);
 
   return (

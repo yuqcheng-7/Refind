@@ -21,6 +21,7 @@ export function normalizePastedHtml(html = '') {
     [...el.attributes].forEach((attr) => {
       if (attr.name === 'href' && el.tagName === 'A') return;
       if (attr.name === 'data-body') return;
+      if (attr.name === 'data-citation' || attr.name === 'data-card-id' || attr.name === 'data-label') return;
       el.removeAttribute(attr.name);
     });
   });
@@ -47,12 +48,31 @@ export function htmlFromNoteContent(content = {}) {
   if (content?.html && String(content.html).trim()) return content.html;
   if (Array.isArray(content?.sections) && content.sections.length) {
     return content.sections.map((section) => {
+      if (section?.type === 'heading') {
+        const text = escapeHtml(section?.text || '');
+        if (!text) return '';
+        const level = section.level === 3 ? 3 : 2;
+        return `<h${level}>${text}</h${level}>`;
+      }
+      if (section?.type === 'bullet_list' || section?.type === 'ordered_list') {
+        const tag = section.type === 'ordered_list' ? 'ol' : 'ul';
+        const items = (Array.isArray(section.items) ? section.items : [])
+          .map((item) => String(item || '').trim())
+          .filter(Boolean)
+          .map((item) => `<li><p data-body="body1">${escapeHtml(item)}</p></li>`)
+          .join('');
+        return items ? `<${tag}>${items}</${tag}>` : '';
+      }
       const text = escapeHtml(section?.text || '');
+      if (!text) return '';
       if (section?.cardId != null && section?.citationIndex != null) {
-        return `<p data-body="body1">${text}<span data-citation="${section.citationIndex}" data-card-id="${escapeAttr(section.cardId)}">[${section.citationIndex}]</span></p>`;
+        const labelAttr = section.citationLabel
+          ? ` data-label="${escapeAttr(section.citationLabel)}"`
+          : '';
+        return `<p data-body="body1">${text}<span data-citation="${section.citationIndex}" data-card-id="${escapeAttr(section.cardId)}"${labelAttr}>[${section.citationIndex}]</span></p>`;
       }
       return `<p data-body="body1">${text}</p>`;
-    }).join('');
+    }).filter(Boolean).join('');
   }
   if (content?.text && String(content.text).trim()) {
     return String(content.text)

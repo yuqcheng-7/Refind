@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronsLeft, Maximize2, PanelRightClose, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronDown, ChevronLeft, ChevronsLeft, Loader2, Maximize2, PanelRightClose, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatCardPreviewText } from '../../lib/api/notes.js';
 import { AddInspirationCardsDialog, CardDetailDialog, RetryOutlineConfirmDialog } from './NoteDialogs.jsx';
@@ -17,78 +17,20 @@ import {
   renameChapter,
 } from './materialOutline.js';
 
-function CitationButton({ index, label, card, onOpenCard }) {
-  const [open, setOpen] = useState(false);
-  const [align, setAlign] = useState('end');
-  const hideTimer = useRef(null);
-  const wrapRef = useRef(null);
-  const menuRef = useRef(null);
+/** Client-side stage labels while Edge generate-note runs (no streamed progress). */
+const GENERATE_STAGES = [
+  { id: 'prep', label: '整理素材', afterMs: 0 },
+  { id: 'write', label: '撰写正文', afterMs: 2500 },
+  { id: 'cite', label: '整理引用', afterMs: 11000 },
+  { id: 'save', label: '写入笔记', afterMs: 20000 },
+];
 
-  const showMenu = () => {
-    window.clearTimeout(hideTimer.current);
-    setOpen(true);
-  };
-  const hideMenu = () => {
-    hideTimer.current = window.setTimeout(() => setOpen(false), 140);
-  };
-
-  useEffect(() => () => window.clearTimeout(hideTimer.current), []);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const frame = window.requestAnimationFrame(() => {
-      const menu = menuRef.current?.getBoundingClientRect();
-      const wrap = wrapRef.current?.getBoundingClientRect();
-      if (!menu || !wrap) return;
-      const pad = 16;
-      const width = menu.width;
-      const endLeft = wrap.right - width;
-      const startRight = wrap.left + width;
-      if (endLeft >= pad) setAlign('end');
-      else if (startRight <= window.innerWidth - pad) setAlign('start');
-      else setAlign('end');
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [open]);
-
-  return (
-    <span
-      ref={wrapRef}
-      className="note-editor__citation-wrap"
-      onMouseEnter={showMenu}
-      onMouseLeave={hideMenu}
-    >
-      <button
-        type="button"
-        className="note-editor__citation"
-        aria-label={`${label} 引用`}
-        aria-expanded={open}
-        onClick={() => {
-          if (card) onOpenCard?.(card);
-        }}
-      >
-        [{index}]
-      </button>
-      {open && (
-        <button
-          ref={menuRef}
-          type="button"
-          className={`note-editor__citation-menu note-editor__citation-menu--${align}`}
-          onMouseEnter={showMenu}
-          onMouseLeave={hideMenu}
-          onClick={() => {
-            if (card) onOpenCard?.(card);
-            setOpen(false);
-          }}
-        >
-          <span className="note-editor__citation-menu-source">{card?.sourceLabel || label}</span>
-          <strong>{card?.contentSnapshot || label}</strong>
-          {card?.questionSnapshot ? <p>{card.questionSnapshot}</p> : null}
-          <span className="note-editor__citation-menu-hint">点击查看灵感卡片</span>
-        </button>
-      )}
-    </span>
-  );
+function generateStageLabel(elapsedMs) {
+  let label = GENERATE_STAGES[0].label;
+  for (const stage of GENERATE_STAGES) {
+    if (elapsedMs >= stage.afterMs) label = stage.label;
+  }
+  return label;
 }
 
 function MaterialsPanel({
@@ -107,7 +49,7 @@ function MaterialsPanel({
   onRetryOutline,
 }) {
   const [expandedIds, setExpandedIds] = useState(() => new Set());
-  const [draggedCardId, setDraggedCardId] = useState(null);
+  const dragCardIdRef = useRef(null);
 
   const toggleExpanded = (cardId) => {
     setExpandedIds((prev) => {
@@ -118,13 +60,19 @@ function MaterialsPanel({
     });
   };
 
+  const readDragCardId = (event) => (
+    event.dataTransfer?.getData('text/card-id')
+    || dragCardIdRef.current
+    || ''
+  );
+
   const renderCard = (card, index, listLength, chapterId = null) => {
     const expanded = expandedIds.has(card.id);
     const preview = formatCardPreviewText(card.contentSnapshot);
     const source = card.sourceLabel || (card.answerMode === 'rag' ? '知识库回答' : '通用回答');
     const thought = thoughts[card.id] || '';
     const move = (to) => {
-      if (chapterId) onReorder?.(chapterId, index, to);
+      if (chapterId != null) onReorder?.(chapterId, index, to);
       else onReorder?.(index, to);
     };
     return (
@@ -133,16 +81,26 @@ function MaterialsPanel({
         data-testid="material-card"
         data-card-id={card.id}
         draggable={!readOnly}
-        onDragStart={() => setDraggedCardId(card.id)}
-        onDragEnd={() => setDraggedCardId(null)}
+        onDragStart={(event) => {
+          dragCardIdRef.current = card.id;
+          event.dataTransfer?.setData('text/card-id', card.id);
+          event.dataTransfer.effectAllowed = 'move';
+        }}
+        onDragEnd={() => { dragCardIdRef.current = null; }}
         onDragOver={(event) => { if (!readOnly) event.preventDefault(); }}
         onDrop={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          if (!readOnly && draggedCardId && draggedCardId !== card.id) {
-            onMove?.(draggedCardId, chapterId || 'unassigned', index);
+          if (readOnly) return;
+          const fromId = readDragCardId(event);
+          dragCardIdRef.current = null;
+          if (!fromId || fromId === card.id) return;
+          if (outline) {
+            onMove?.(fromId, chapterId || 'unassigned', index);
+            return;
           }
-          setDraggedCardId(null);
+          const fromIndex = cards.findIndex((item) => item.id === fromId);
+          if (fromIndex >= 0 && fromIndex !== index) onReorder?.(fromIndex, index);
         }}
         key={card.id}
       >
@@ -191,8 +149,10 @@ function MaterialsPanel({
           onDrop={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            if (!readOnly && draggedCardId) onMove(draggedCardId, chapterId, sectionCards.length);
-            setDraggedCardId(null);
+            if (readOnly) return;
+            const fromId = readDragCardId(event);
+            dragCardIdRef.current = null;
+            if (fromId) onMove?.(fromId, chapterId, sectionCards.length);
           }}
         >
           {sectionCards.map((card, index) => renderCard(card, index, sectionCards.length, chapterId))}
@@ -205,25 +165,33 @@ function MaterialsPanel({
   return (
     <section className="materials-rail" aria-label="素材面板">
       <header className="materials-rail__header">
-        <div>
+        <div className="materials-rail__header-top">
           <span className="eyebrow">写作素材</span>
-          <h2>{outlining ? '成章中…' : outline ? '章节大纲' : '已选灵感卡片'}</h2>
+          <div className="materials-rail__header-actions">
+            <span>{cards.length} 张</span>
+            <button
+              type="button"
+              className="materials-rail__collapse"
+              aria-label="收起素材面板"
+              title="收起"
+              onClick={onCollapse}
+            >
+              <PanelRightClose size={16} strokeWidth={1.7} />
+            </button>
+          </div>
         </div>
-        <div className="materials-rail__header-right">
-          <span>{cards.length} 张</span>
-          {outlineError ? <p className="materials-rail__error">{outlineError}</p> : null}
-          {(outline || outlineError) && onRetryOutline ? <button type="button" className="materials-rail__retry" disabled={readOnly} onClick={onRetryOutline}>重试成章</button> : null}
-          <button
-            type="button"
-            className="materials-rail__collapse"
-            aria-label="收起素材面板"
-            title="收起"
-            onClick={onCollapse}
-          >
-            <PanelRightClose size={16} strokeWidth={1.7} />
-          </button>
+        <div className="materials-rail__header-title">
+          <h2>{outlining ? '成章中…' : outline ? '章节大纲' : '已选灵感卡片'}</h2>
+          {(outline || outlineError) && onRetryOutline ? (
+            <button type="button" className="materials-rail__retry" disabled={readOnly} onClick={onRetryOutline}>
+              重试成章
+            </button>
+          ) : null}
         </div>
       </header>
+      {outlineError ? (
+        <p className="materials-rail__error" role="status">{outlineError}</p>
+      ) : null}
       <div className="materials-rail__list">
         {outline
           ? [
@@ -264,10 +232,11 @@ export function NoteEditor({
   const [panelOpen, setPanelOpen] = useState(materialsEnabled);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [generateStage, setGenerateStage] = useState(GENERATE_STAGES[0].label);
+  const [bodyEpoch, setBodyEpoch] = useState(0);
   const [outlining, setOutlining] = useState(false);
   const [retryConfirmOpen, setRetryConfirmOpen] = useState(false);
   const [outlineError, setOutlineError] = useState(null);
-  const [revisions, setRevisions] = useState([]);
   const [detailCard, setDetailCard] = useState(null);
   const persistTimerRef = useRef(null);
   const pendingPersistRef = useRef(null);
@@ -278,6 +247,10 @@ export function NoteEditor({
   const [tiptapEditor, setTiptapEditor] = useState(null);
   const outline = normalizeOutline(note.content?.outline);
   const panelReadOnly = generating || outlining;
+  const noteRef = useRef(note);
+  const generatingRef = useRef(generating);
+  noteRef.current = note;
+  generatingRef.current = generating;
   const handleEditorReady = useCallback((editor) => {
     setTiptapEditor(editor);
   }, []);
@@ -291,11 +264,7 @@ export function NoteEditor({
     [note.inspirationCardIds, cards],
   );
   const availableCards = cards.filter((card) => !note.inspirationCardIds.includes(card.id));
-  const sections = note.content?.sections;
-  const hasSections = Array.isArray(sections) && sections.length > 0;
-  const editorHtml = hasSections
-    ? htmlFromNoteContent(note.content)
-    : (note.content?.html || htmlFromNoteContent(note.content));
+  const editorHtml = note.content?.html || htmlFromNoteContent(note.content);
 
   useEffect(() => {
     if (!outline) return;
@@ -310,10 +279,21 @@ export function NoteEditor({
   useEffect(() => {
     setSaveState('已保存');
     setPanelOpen(materialsEnabled);
-    setRevisions([]);
     setOutlineError(null);
     lastHtmlRef.current = null;
   }, [note.id, mode, materialsEnabled]);
+
+  useEffect(() => {
+    if (!generating) {
+      setGenerateStage(GENERATE_STAGES[0].label);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    const tick = () => setGenerateStage(generateStageLabel(Date.now() - startedAt));
+    tick();
+    const timer = window.setInterval(tick, 400);
+    return () => window.clearInterval(timer);
+  }, [generating]);
 
   useEffect(() => {
     setOutlining(false);
@@ -376,15 +356,16 @@ export function NoteEditor({
   };
 
   const handleEditorUpdate = (payload) => {
-    if (generating) return;
-    const prevHtml = note.content?.html || htmlFromNoteContent(note.content);
-    const prevText = note.content?.text || '';
+    if (generatingRef.current) return;
+    const current = noteRef.current;
+    const prevHtml = current.content?.html || htmlFromNoteContent(current.content);
+    const prevText = current.content?.text || '';
     if (payload.html === prevHtml && payload.text === prevText) return;
     if (payload.html === lastHtmlRef.current) return;
     lastHtmlRef.current = payload.html;
     commit({
       content: {
-        ...note.content,
+        ...current.content,
         ...noteContentFromEditor(payload),
         sections: [],
       },
@@ -392,8 +373,11 @@ export function NoteEditor({
   };
 
   const reorderCards = (from, to) => {
+    if (from === to || from < 0 || to < 0) return;
     const next = [...note.inspirationCardIds];
-    [next[from], next[to]] = [next[to], next[from]];
+    if (from >= next.length || to >= next.length) return;
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
     commit({ inspirationCardIds: next });
   };
   const commitOutline = (nextOutline) => commit({
@@ -443,13 +427,14 @@ export function NoteEditor({
     setGenerating(true);
     try {
       await onGenerate?.();
-      setRevisions((prev) => [...prev, { reason: 'before_generate', at: Date.now() }]);
+      setBodyEpoch((value) => value + 1);
       const scroller = documentScrollRef.current;
       if (scroller) scroller.scrollTop = 0;
     } catch {
       // Parent surfaces the failure notice; keep original content editable.
     } finally {
-      setGenerating(false);
+      // Defer unlocking TipTap until generated sections have committed to props.
+      window.requestAnimationFrame(() => setGenerating(false));
     }
   };
   const handleRetryOutline = async () => {
@@ -487,9 +472,7 @@ export function NoteEditor({
             {saveState}
           </span>
         </div>
-        {!hasSections ? (
-          <NoteEditorToolbar editor={tiptapEditor} disabled={generating} />
-        ) : null}
+        <NoteEditorToolbar editor={tiptapEditor} disabled={generating} />
         {isFullscreen && materialsEnabled && (
           <div className="note-editor__inspiration-actions">
             <button type="button" onClick={() => setPickerOpen(true)} disabled={panelReadOnly}>
@@ -498,11 +481,20 @@ export function NoteEditor({
             </button>
             <button
               type="button"
-              className="note-editor__generate"
+              className={`note-editor__generate${generating ? ' is-generating' : ''}`}
               disabled={!selectedCards.length || panelReadOnly}
+              aria-busy={generating || undefined}
+              aria-label={generating ? `生成中：${generateStage}` : '生成笔记'}
               onClick={generate}
             >
-              {generating ? '生成中' : '生成笔记'}
+              {generating ? (
+                <>
+                  <Loader2 className="note-editor__generate-spinner" size={14} strokeWidth={2.2} aria-hidden />
+                  <span>{generateStage}</span>
+                </>
+              ) : (
+                '生成笔记'
+              )}
             </button>
           </div>
         )}
@@ -529,36 +521,17 @@ export function NoteEditor({
               value={note.title}
               onChange={(event) => commit({ title: event.target.value })}
             />
-            {hasSections ? (
-              <div className="note-editor__rich-body note-editor__rich-body--sections" aria-label="笔记正文">
-                {sections.map((section, index) => (
-                  <p key={`${section.text}-${index}`}>
-                    <span>{section.text}</span>
-                    {section.citationLabel ? (
-                      <CitationButton
-                        index={section.citationIndex || index + 1}
-                        label={section.citationLabel}
-                        card={
-                          cards.find((item) => item.id === section.cardId)
-                          || cards.find((item) => item.id === note.inspirationCardIds[(section.citationIndex || 1) - 1])
-                        }
-                        onOpenCard={setDetailCard}
-                      />
-                    ) : null}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              <NoteRichEditor
-                key={note.id}
-                contentHtml={editorHtml}
-                editable={!generating}
-                placeholder="开始记录你的想法…"
-                showToolbar={false}
-                onReady={handleEditorReady}
-                onUpdate={handleEditorUpdate}
-              />
-            )}
+            <NoteRichEditor
+              key={`${note.id}-${bodyEpoch}`}
+              contentHtml={editorHtml}
+              editable={!generating}
+              placeholder="开始记录你的想法…"
+              showToolbar={false}
+              citationCards={selectedCards}
+              onOpenCitationCard={setDetailCard}
+              onReady={handleEditorReady}
+              onUpdate={handleEditorUpdate}
+            />
           </div>
           {materialsEnabled ? (
             <div
@@ -592,40 +565,18 @@ export function NoteEditor({
             value={note.title}
             onChange={(event) => commit({ title: event.target.value })}
           />
-          {hasSections ? (
-            <div className="note-editor__rich-body note-editor__rich-body--sections" aria-label="笔记正文">
-              {sections.map((section, index) => (
-                <p key={`${section.text}-${index}`}>
-                  <span>{section.text}</span>
-                  {section.citationLabel ? (
-                    <CitationButton
-                      index={section.citationIndex || index + 1}
-                      label={section.citationLabel}
-                      card={
-                        cards.find((item) => item.id === section.cardId)
-                        || cards.find((item) => item.id === note.inspirationCardIds[(section.citationIndex || 1) - 1])
-                      }
-                      onOpenCard={setDetailCard}
-                    />
-                  ) : null}
-                </p>
-              ))}
-            </div>
-          ) : (
-            <NoteRichEditor
-              key={note.id}
-              contentHtml={editorHtml}
-              editable={!generating}
-              placeholder="开始记录你的想法…"
-              showToolbar={false}
-              onReady={handleEditorReady}
-              onUpdate={handleEditorUpdate}
-            />
-          )}
+          <NoteRichEditor
+            key={`${note.id}-${bodyEpoch}`}
+            contentHtml={editorHtml}
+            editable={!generating}
+            placeholder="开始记录你的想法…"
+            showToolbar={false}
+            citationCards={selectedCards}
+            onOpenCitationCard={setDetailCard}
+            onReady={handleEditorReady}
+            onUpdate={handleEditorUpdate}
+          />
         </div>
-      )}
-      {isFullscreen && materialsEnabled && revisions.length > 0 && (
-        <span className="note-editor__revision" aria-live="polite">已保留生成前版本，可用撤销返回。</span>
       )}
       {pickerOpen ? (
         <AddInspirationCardsDialog

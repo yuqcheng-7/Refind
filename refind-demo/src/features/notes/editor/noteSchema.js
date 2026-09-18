@@ -8,12 +8,15 @@ import { TextStyle } from '@tiptap/extension-text-style';
 import Underline from '@tiptap/extension-underline';
 import Heading from '@tiptap/extension-heading';
 import { NoteParagraph } from './noteParagraph.js';
-import { NOTE_DEFAULT_STYLE_ID } from './noteTypography.js';
+import { createNoteCitationExtension } from './noteCitation.jsx';
 
 export { NoteParagraph } from './noteParagraph.js';
 export { applyNoteStyle, getActiveNoteStyleId } from './noteStyleCommands.js';
 
-export function createNoteExtensions({ placeholder = '开始记录…' } = {}) {
+export function createNoteExtensions({
+  placeholder = '开始记录…',
+  citation,
+} = {}) {
   return [
     StarterKit.configure({
       heading: false,
@@ -38,5 +41,6 @@ export function createNoteExtensions({ placeholder = '开始记录…' } = {}) {
       HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
     }),
     Placeholder.configure({ placeholder }),
+    createNoteCitationExtension(citation || {}),
   ];
 }

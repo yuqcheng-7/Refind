@@ -13,7 +13,8 @@ import {
 
 test('normalizeRequestBody requires noteId', () => {
   assert.throws(() => normalizeRequestBody({}), /noteId/);
-  assert.deepEqual(normalizeRequestBody({ noteId: '  note-1  ' }), { noteId: 'note-1' });
+  assert.deepEqual(normalizeRequestBody({ noteId: '  note-1  ' }), { noteId: 'note-1', lang: 'zh' });
+  assert.deepEqual(normalizeRequestBody({ noteId: 'n1', lang: 'en' }), { noteId: 'n1', lang: 'en' });
 });
 
 test('parseAiJson extracts sections object from fenced or raw JSON', () => {
@@ -172,10 +173,120 @@ test('normalizeNoteContent preserves a valid outline and drops an invalid one', 
   assert.equal(normalizeNoteContent({ outline: { version: 2 } }).outline, undefined);
 });
 
+test('buildPromptPayload truncates long card fields for faster generation', () => {
+  const longContent = '内容'.repeat(1200);
+  const payload = buildPromptPayload({
+    title: '增长笔记',
+    cards: [
+      {
+        id: 'c1',
+        answer_mode: 'rag',
+        content_snapshot: longContent,
+        source_question_snapshot: '问题'.repeat(200),
+        citation_snapshot: [{ order: 1, label: '资料A' }],
+        user_thought: '想法'.repeat(250),
+      },
+    ],
+  });
+
+  assert.ok(payload.cards[0].content.length <= 1800);
+  assert.ok(payload.cards[0].question.length <= 240);
+  assert.ok(payload.cards[0].thought.length <= 320);
+  assert.match(payload.cards[0].content, /…$/);
+});
+
+test('buildNoteContentFromAi keeps bullet and ordered lists', () => {
+  const content = buildNoteContentFromAi({
+    sections: [
+      { type: 'paragraph', text: '先看全局。' },
+      { type: 'bullet_list', items: ['资讯源', '系统学习', '动手实践'] },
+      { type: 'ordered_list', items: ['理解边界', '搭知识库'] },
+    ],
+  }, []);
+  assert.equal(content.sections[1].type, 'bullet_list');
+  assert.deepEqual(content.sections[1].items, ['资讯源', '系统学习', '动手实践']);
+  assert.equal(content.sections[2].type, 'ordered_list');
+  assert.match(content.text, /• 资讯源/);
+  assert.match(content.text, /1\. 理解边界/);
+});
+
+test('buildNoteContentFromAi renders 一、二、三 headings as h2 html', () => {
+  const content = buildNoteContentFromAi({
+    sections: [
+      { type: 'paragraph', text: '开篇说明。' },
+      { type: 'heading', level: 2, text: '一、核心技术认知' },
+      { type: 'paragraph', text: '展开叙述。' },
+      { type: 'heading', level: 2, text: '二、职业方向选择' },
+    ],
+  }, []);
+  assert.equal(content.sections[1].type, 'heading');
+  assert.equal(content.sections[1].text, '一、核心技术认知');
+  assert.match(content.html, /<h2>一、核心技术认知<\/h2>/);
+  assert.match(content.html, /<h2>二、职业方向选择<\/h2>/);
+});
+
 test('buildGenerateMessages explains chapter ordering when chapters are present', () => {
   const [system] = buildGenerateMessages({
     title: 't',
-    chapters: [{ title: '开场', cards: [] }],
+    lang: 'zh',
+    totalCardNum: 2,
+    chapters: [{ title: '开场', cards: [{ id: 'a' }] }],
   });
-  assert.match(system.content, /chapters 数组顺序/);
+  assert.match(system.content, /存在 chapters/);
+  assert.match(system.content, /独有/);
+  assert.match(system.content, /heading|二级标题/);
+});
+
+test('buildGenerateMessages asks for full prose plus unique-point coverage', () => {
+  const [system] = buildGenerateMessages({
+    title: 't',
+    lang: 'zh',
+    totalCardNum: 3,
+    cards: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+  });
+  assert.match(system.content, /本次共有 3 张灵感卡片/);
+  assert.match(system.content, /独有/);
+  assert.match(system.content, /无 chapters/);
+  assert.match(system.content, /lang=zh/);
+  assert.match(system.content, /该分点处分点/);
+  assert.match(system.content, /分点强制规则/);
+  assert.match(system.content, /段落强制规则/);
+  assert.match(system.content, /合理展开/);
+});
+
+test('buildGenerateMessages switches to English mode guidance when lang=en', () => {
+  const [system] = buildGenerateMessages({
+    title: 't',
+    lang: 'en',
+    totalCardNum: 1,
+    cards: [{ id: 'a' }],
+  });
+  assert.match(system.content, /根据 en 生成/);
+  assert.match(system.content, /Chapter 1/);
+  assert.match(system.content, /学术笔记风格/);
+});
+
+test('buildPromptPayload includes lang and totalCardNum', () => {
+  const payload = buildPromptPayload({
+    title: 't',
+    lang: 'en',
+    cards: [
+      { id: 'c1', content_snapshot: 'a' },
+      { id: 'c2', content_snapshot: 'b' },
+    ],
+  });
+  assert.equal(payload.lang, 'en');
+  assert.equal(payload.totalCardNum, 2);
+});
+
+test('buildPromptPayload marks regenerate when previousNote is provided', () => {
+  const payload = buildPromptPayload({
+    title: 't',
+    cards: [{ id: 'c1', content_snapshot: '内容' }],
+    previousNote: '旧稿正文'.repeat(20),
+  });
+  assert.equal(payload.regenerate, true);
+  assert.ok(payload.previousNote.length > 0);
+  const [system] = buildGenerateMessages(payload);
+  assert.match(system.content, /regenerate=true/);
 });

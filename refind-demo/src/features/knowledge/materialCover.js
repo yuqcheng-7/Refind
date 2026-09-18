@@ -43,7 +43,7 @@ export function resolveMaterialCoverSource(material = {}) {
   if ((inputType === 'pptx' || inputType === 'docx' || inputType === 'xlsx') && storageKey) {
     return { kind: 'office-embed', value: storageKey };
   }
-  if (inputType === 'markdown' || inputType === 'txt' || inputType === 'csv') {
+  if (inputType === 'markdown' || inputType === 'txt' || inputType === 'csv' || inputType === 'note') {
     const snippet = String(material.body || material.summary || '').trim();
     if (snippet || storageKey) {
       return { kind: 'text', value: snippet, storageKey, inputType };

@@ -63,6 +63,37 @@ describe('KbConversation edit resend', () => {
     });
   });
 
+  it('allows editing the user bubble while the answer is still generating', async () => {
+    const onResend = vi.fn();
+    render(
+      <KbConversation
+        messages={[{
+          id: 'pending-kb-1',
+          question: '正在生成中的问题',
+          mode: 'rag',
+          selectedBases: ['默认知识库'],
+          selectedTags: [],
+          citations: [],
+          pending: true,
+        }]}
+        onResend={onResend}
+      />,
+    );
+
+    const edit = screen.getByRole('button', { name: '编辑提问' });
+    expect(edit).toBeEnabled();
+    await userEvent.click(edit);
+    const editor = screen.getByRole('textbox', { name: '编辑提问内容' });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, '改一下再发');
+    await userEvent.click(screen.getByRole('button', { name: '重新发送' }));
+
+    expect(onResend).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'pending-kb-1',
+      prompt: '改一下再发',
+    }));
+  });
+
   it('hides edit control while sharing', () => {
     render(<KbConversation messages={messages} selectMode="share" onResend={vi.fn()} />);
     expect(screen.queryByRole('button', { name: '编辑提问' })).not.toBeInTheDocument();

@@ -32,9 +32,9 @@ describe('noteTypography', () => {
 
   it('locks desktop tokens to shipping typography table', () => {
     expect(NOTE_TYPOGRAPHY_DESKTOP.h1).toMatchObject({
-      fontSize: '32px',
+      fontSize: '28px',
       fontWeight: 600,
-      lineHeight: '40px',
+      lineHeight: '36px',
       color: '#1D2129',
       marginTop: '0',
       marginBottom: '24px',

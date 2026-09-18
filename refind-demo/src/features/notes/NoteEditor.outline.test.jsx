@@ -248,7 +248,7 @@ describe('NoteEditor materials outline', () => {
     renderOutlineEditor({ onGenerate });
 
     await userEvent.click(screen.getByRole('button', { name: '生成笔记' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: '生成中' })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: /生成中/ })).toBeDisabled());
 
     expect(screen.getByDisplayValue('动机')).toBeDisabled();
     expect(screen.getByRole('button', { name: '重试成章' })).toBeDisabled();

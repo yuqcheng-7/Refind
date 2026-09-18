@@ -90,7 +90,11 @@ async function chatCompletions(
   key: string,
   body: Record<string, unknown>,
   label: string,
+  opts: { timeoutMs?: number } = {},
 ): Promise<string> {
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && Number(opts.timeoutMs) > 0
+    ? Math.floor(Number(opts.timeoutMs))
+    : 55_000;
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -98,13 +102,17 @@ async function chatCompletions(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(55_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`${label} failed: ${res.status} ${await res.text()}`);
   const json = await res.json();
   const content = json?.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error(`${label} returned empty content`);
+  }
+  const finishReason = json?.choices?.[0]?.finish_reason;
+  if (finishReason === 'length') {
+    throw new Error(`${label} truncated by max_tokens; raise max_tokens and retry`);
   }
   return content;
 }
@@ -177,13 +185,73 @@ export async function rewriteQueriesWithLlm(
   return content;
 }
 
+/** Fast Bailian chat for structured writing. Prefer DeepSeek; override via GENERATE_NOTE_MODEL. */
+export async function bailianTextChat(
+  messages: { role: string; content: string }[],
+  opts: {
+    model?: string;
+    temperature?: number;
+    max_tokens?: number;
+    enable_thinking?: boolean;
+    timeoutMs?: number;
+  } = {},
+): Promise<string> {
+  const key = Deno.env.get('DASHSCOPE_API_KEY');
+  if (!key) throw new Error('DASHSCOPE_API_KEY missing');
+  const model = opts.model
+    || Deno.env.get('GENERATE_NOTE_MODEL')
+    || 'deepseek-v3';
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    temperature: opts.temperature ?? 0.3,
+  };
+  if (Number.isFinite(opts.max_tokens) && Number(opts.max_tokens) > 0) {
+    body.max_tokens = Math.floor(Number(opts.max_tokens));
+  }
+  // Non-thinking path is much faster for note drafting on hybrid DeepSeek models.
+  if (typeof opts.enable_thinking === 'boolean') {
+    body.enable_thinking = opts.enable_thinking;
+  } else if (String(model).startsWith('deepseek') && !String(model).includes('r1')) {
+    body.enable_thinking = false;
+  }
+  return chatCompletions(
+    'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+    key,
+    body,
+    'bailian text chat',
+    { timeoutMs: opts.timeoutMs },
+  );
+}
+
 export async function deepseekChat(
   messages: { role: string; content: string }[],
-  opts: { model: 'deepseek-chat' | 'deepseek-reasoner'; temperature?: number },
+  opts: {
+    model: 'deepseek-chat' | 'deepseek-reasoner';
+    temperature?: number;
+    max_tokens?: number;
+    /** Override Bailian model id (e.g. deepseek-v3 for faster non-thinking notes). */
+    bailianModel?: string;
+    /** Hybrid models only; false skips chain-of-thought for lower latency. */
+    enable_thinking?: boolean;
+  },
 ): Promise<string> {
   const temperature = opts.temperature ?? 0.3;
   const dashscopeKey = Deno.env.get('DASHSCOPE_API_KEY');
   const deepseekKey = Deno.env.get('DEEPSEEK_API_KEY');
+  const body: Record<string, unknown> = {
+    messages,
+    temperature,
+  };
+  if (Number.isFinite(opts.max_tokens) && Number(opts.max_tokens) > 0) {
+    body.max_tokens = Math.floor(Number(opts.max_tokens));
+  }
+  if (typeof opts.enable_thinking === 'boolean') {
+    body.enable_thinking = opts.enable_thinking;
+  }
+
+  const bailianModel = String(opts.bailianModel || '').trim()
+    || bailianChatModel(opts.model);
 
   // Prefer Bailian-hosted DeepSeek: official api.deepseek.com often hangs from some networks.
   if (dashscopeKey) {
@@ -192,9 +260,8 @@ export async function deepseekChat(
         'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
         dashscopeKey,
         {
-          model: bailianChatModel(opts.model),
-          messages,
-          temperature,
+          ...body,
+          model: bailianModel,
         },
         'bailian chat',
       );
@@ -208,9 +275,8 @@ export async function deepseekChat(
     'https://api.deepseek.com/chat/completions',
     deepseekKey,
     {
+      ...body,
       model: opts.model,
-      messages,
-      temperature,
     },
     'deepseek',
   );

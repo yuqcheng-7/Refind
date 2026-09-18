@@ -27,7 +27,17 @@ export function noteContentToMaterialText(content) {
   if (value.text?.trim()) return value.text.trim();
   if (value.sections?.length) {
     const fromSections = value.sections
-      .map((section) => (typeof section?.text === 'string' ? section.text.trim() : ''))
+      .map((section) => {
+        if (typeof section?.text === 'string' && section.text.trim()) return section.text.trim();
+        if ((section?.type === 'bullet_list' || section?.type === 'ordered_list') && Array.isArray(section.items)) {
+          return section.items
+            .map((item) => (typeof item === 'string' ? item.trim() : ''))
+            .filter(Boolean)
+            .map((item) => `• ${item}`)
+            .join('\n');
+        }
+        return '';
+      })
       .filter(Boolean)
       .join('\n\n');
     if (fromSections) return fromSections;

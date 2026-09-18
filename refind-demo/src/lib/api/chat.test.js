@@ -27,6 +27,7 @@ describe('mapChatResponseToMessage', () => {
 
     expect(message).toEqual({
       id: 'm1',
+      userMessageId: undefined,
       conversationId: 'conv-1',
       question: 'Q',
       answer: '答案[1]',
@@ -34,6 +35,7 @@ describe('mapChatResponseToMessage', () => {
       online: false,
       selectedBases: ['产品'],
       selectedTags: [],
+      knowledgeBaseIds: [],
       insufficient: false,
       citations: [{ order: 1, label: '增长笔记', materialId: 'mat1', excerpt: '...' }],
       webSources: [],

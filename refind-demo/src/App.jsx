@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowUp, BookOpen, BookSearch, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Hash, Link2, LogOut, Menu, MessageSquare, NotebookText, Plus, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react';
+import { ArrowUp, BookOpen, BookSearch, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Hash, Link2, LogOut, Menu, MessageSquare, NotebookText, Plus, Search, Settings, SlidersHorizontal, X } from 'lucide-react';
 import './styles.css';
 import { NotesWorkspace } from './features/notes/NotesWorkspace.jsx';
 import { removeCardFromNote } from './features/notes/noteState.js';
@@ -8,6 +8,7 @@ import { HomeComposer, defaultHomeScope } from './features/home/HomeComposer.jsx
 import { HomeConversation, HomeShareBar } from './features/home/HomeConversation.jsx';
 import { KbConversation } from './features/knowledge/KbConversation.jsx';
 import { HomeHistoryCard } from './features/home/HomeHistoryCard.jsx';
+import { WelcomeHeadline } from './features/home/WelcomeHeadline.jsx';
 import { MaterialIngest } from './features/knowledge/MaterialIngest.jsx';
 import { MaterialListCover } from './features/knowledge/MaterialListCover.jsx';
 import { EditMaterialTagsDialog } from './features/knowledge/EditMaterialTagsDialog.jsx';
@@ -54,10 +55,10 @@ import { supabase } from './lib/supabaseClient.js';
 const homeChatEmptyPrompt = '有什么想聊的？直接提问，或在输入框里选择知识库。';
 const kbChatEmptyTitle = '从你的知识库中寻找答案';
 
-const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎', 'B 站', '本地文件', '其他网站'];
+const sourceOptions = ['全部来源', '小红书', '抖音', '微信', '知乎', 'B 站', '笔记', '本地文件', '其他网站'];
 const sortOptions = ['从新到旧', '从旧到新', 'A-Z', 'Z-A'];
 const initialHomeScope = defaultHomeScope;
-const platformCodes = { 小红书: 'xhs', 抖音: 'douyin', 微信: 'wechat_mp', 知乎: 'zhihu', 'B 站': 'bilibili', 本地文件: 'local', 其他网站: 'other' };
+const platformCodes = { 小红书: 'xhs', 抖音: 'douyin', 微信: 'wechat_mp', 知乎: 'zhihu', 'B 站': 'bilibili', 笔记: 'note', 本地文件: 'local', 其他网站: 'other' };
 
 function clampMenuCoords(clientX, clientY, width = 128, height = 76) {
   const left = Math.min(Math.max(8, clientX), window.innerWidth - width - 8);
@@ -302,7 +303,19 @@ export function App() {
   const [sort, setSort] = useState('从新到旧');
   const [filterOpen, setFilterOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [homeHistoryOpen, setHomeHistoryOpen] = useState(true);
+  const [homeHistoryOpen, setHomeHistoryOpen] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
+    return window.matchMedia('(min-width: 768px)').matches;
+  });
+  const isMobileHomeViewport = () => (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(max-width: 767px)').matches
+  );
+  // Desktop keeps history open beside chat; mobile must stay locked so the thread is visible.
+  const revealHomeHistory = () => {
+    setHomeHistoryOpen(!isMobileHomeViewport());
+  };
   const [kbHistoryMenu, setKbHistoryMenu] = useState(null);
   const [kbRenameDraft, setKbRenameDraft] = useState(null);
   const [accountOpen, setAccountOpen] = useState(false);
@@ -336,6 +349,7 @@ export function App() {
   const [kbConversations, setKbConversations] = useState([]);
   const [homeScope, setHomeScope] = useState(initialHomeScope);
   const [knowledgeMaterials, setKnowledgeMaterials] = useState([]);
+  const [materialsEpoch, setMaterialsEpoch] = useState(0);
   const materialsListFetchGenRef = useRef(0);
   const kbThreadLoadGenRef = useRef(0);
   const kbConversationIdRef = useRef(null);
@@ -547,8 +561,8 @@ export function App() {
     return () => { active = false; };
   }, [session?.user?.id, selectedKnowledgeBase?.id]);
   useEffect(() => {
-    if (!session || !selectedKnowledgeBase) {
-      setKnowledgeMaterials([]);
+    if (!session || !selectedKnowledgeBase || activeNav !== '知识库' || settingsOpen) {
+      if (!session || !selectedKnowledgeBase) setKnowledgeMaterials([]);
       return undefined;
     }
     let active = true;
@@ -575,7 +589,7 @@ export function App() {
         say('资料暂时无法加载，请稍后重试。');
       });
     return () => { active = false; };
-  }, [session?.user?.id, selectedKnowledgeBase?.id, query, source]);
+  }, [session?.user?.id, selectedKnowledgeBase?.id, query, source, activeNav, settingsOpen, materialsEpoch]);
   useEffect(() => {
     if (!session) {
       setHomeTagOptions([]);
@@ -795,7 +809,7 @@ export function App() {
     setHomeChatOpened(true);
     setHomeNavUnlocked(true);
     setHomeSurface('chat');
-    setHomeHistoryOpen(true);
+    revealHomeHistory();
     setHomeMessages([]);
     setHomeConversationId(null);
   };
@@ -808,6 +822,7 @@ export function App() {
     setHomeChatOpened(true);
     setHomeNavUnlocked(true);
     setHomeSurface('chat');
+    if (isMobileHomeViewport()) setHomeHistoryOpen(false);
     try {
       const turns = await loadConversationTurns(conversationId);
       if (loadGen !== homeThreadLoadGenRef.current) return;
@@ -824,7 +839,7 @@ export function App() {
       enterFreshHomeChatShell();
       return;
     }
-    setHomeHistoryOpen(true);
+    revealHomeHistory();
     void openHomeConversation(latest.id);
   };
   const promoteHomeConversation = (conversation, { title } = {}) => {
@@ -844,7 +859,7 @@ export function App() {
       };
       return [next, ...items.filter((item) => item.id !== conversation.id)];
     });
-    setHomeHistoryOpen(true);
+    revealHomeHistory();
   };
   const promoteKbConversation = (conversation, { title } = {}) => {
     if (!conversation?.id) return;
@@ -880,7 +895,7 @@ export function App() {
     if (suppressHomeNavHoverRef.current) return;
     // Already viewing a conversation in the chat shell — just keep history open.
     if (homeSurface === 'chat' && homeConversationId) {
-      setHomeHistoryOpen(true);
+      revealHomeHistory();
       return;
     }
     openLatestHomeConversation();
@@ -996,7 +1011,7 @@ export function App() {
       setHomeConversations(remaining);
       if (focusNext) {
         if (nextActiveId) {
-          setHomeHistoryOpen(true);
+          revealHomeHistory();
           void openHomeConversation(nextActiveId);
         } else {
           enterFreshHomeChatShell();
@@ -1058,7 +1073,7 @@ export function App() {
     suppressHomeNavHoverRef.current = true;
     switchNav('首页');
     setHomeSurface('hero');
-    setHomeHistoryOpen(true);
+    revealHomeHistory();
     // Detach from the previous thread so hero compose / next chat entry
     // starts fresh; old conversations remain in the history list.
     setHomeMessages([]);
@@ -1079,7 +1094,7 @@ export function App() {
         openLatestHomeConversation();
       } else {
         setHomeSurface('hero');
-        setHomeHistoryOpen(true);
+        revealHomeHistory();
       }
       return;
     }
@@ -1088,11 +1103,11 @@ export function App() {
         openLatestHomeConversation();
       } else {
         setHomeSurface('chat');
-        setHomeHistoryOpen(true);
+        revealHomeHistory();
       }
     } else {
       setHomeSurface('hero');
-      setHomeHistoryOpen(true);
+      revealHomeHistory();
     }
   };
   const createBase = async (event) => {
@@ -1697,10 +1712,12 @@ export function App() {
   const avatarLabel = displayName.slice(0, 1) || '用';
   const accountLabel = `${displayName} 个人账号`;
 
-  return <main className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''}`}>
-    <button className="mobile-nav-trigger" type="button" aria-label="打开导航" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>
-      <Menu size={18} strokeWidth={1.85} />
-    </button>
+  return <main className={`app-shell ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''} ${activeNav === '知识库' ? 'is-knowledge' : ''}`}>
+    {activeNav !== '知识库' && (
+      <button className="mobile-nav-trigger" type="button" aria-label="打开导航" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}>
+        <Menu size={18} strokeWidth={1.85} />
+      </button>
+    )}
     {mobileNavOpen && <button className="mobile-nav-scrim" type="button" aria-label="关闭导航" onClick={() => setMobileNavOpen(false)} />}
     <aside className={`home-sidebar ${mobileNavOpen ? 'is-mobile-open' : ''}`}>
       <button
@@ -1906,7 +1923,7 @@ export function App() {
       </section>
     )}
     {!settingsOpen && activeNav === '首页' && <section className={`home-canvas ${showHomeChat ? 'has-conversation' : ''} ${showHomeChat && homeHistoryOpen ? 'is-history-open' : ''} ${showHomeChat && !homeHistoryOpen ? 'is-history-collapsed' : ''}`}>
-      {!showHomeChat && <div className="hero-block"><div className="robot-hero"><img src="/assets/refind-home-robot.png" alt="" /></div><h1>Welcome, Refind!</h1><p>把散落的收藏，重新捡回来。</p></div>}
+      {!showHomeChat && <div className="hero-block"><div className="robot-hero"><img src="/assets/refind-home-robot.png" alt="" /></div><WelcomeHeadline /><p>把散落的收藏，重新捡回来。</p></div>}
       {showHomeChat && (
         <>
           <HomeHistoryCard
@@ -1944,7 +1961,7 @@ export function App() {
       {!showHomeChat && <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} sendArrow="right" introBeam />}
       {notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
-    {!settingsOpen && activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} bases={knowledgeBases} notice={say} onOpenMaterial={(materialId) => window.open(getMaterialPreviewUrl(materialId), '_blank', 'noopener,noreferrer')} onDeleteCard={async (cardId) => {
+    {!settingsOpen && activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} bases={knowledgeBases} notice={say} onNoteSynced={() => setMaterialsEpoch((value) => value + 1)} onOpenMaterial={(materialId) => window.open(getMaterialPreviewUrl(materialId), '_blank', 'noopener,noreferrer')} onDeleteCard={async (cardId) => {
       try {
         await deleteInspirationCard(cardId);
         setCards((items) => items.filter((card) => card.id !== cardId));
@@ -1964,6 +1981,15 @@ export function App() {
       <div className="knowledge-layout">
         <div className="materials-column">
           <header className="workspace-header">
+            <button
+              className="workspace-header__nav"
+              type="button"
+              aria-label="打开导航"
+              aria-expanded={mobileNavOpen}
+              onClick={() => setMobileNavOpen(true)}
+            >
+              <Menu size={18} strokeWidth={1.85} />
+            </button>
             <div><h1>{base}</h1></div>
             <button className="ai-panel-trigger" type="button" onClick={() => setAiPanelOpen(true)}><MessageSquare size={15} strokeWidth={1.6} />知识库问答</button>
           </header>
@@ -2200,7 +2226,7 @@ export function App() {
         </aside>
       </div>{notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
-    {showCreate && <div className="modal-layer"><form className="create-modal" onSubmit={createBase}><button className="modal-close" type="button" onClick={() => setShowCreate(false)}><X size={17} /></button><Sparkles size={22} /><h2>新建知识库</h2><p>创建一个主题空间，用来归集和提问。</p><label>知识库名称<input value={newBase} autoFocus onChange={(event) => setNewBase(event.target.value)} placeholder="例如：产品与设计资料" /></label><div><button type="button" onClick={() => setShowCreate(false)}>取消</button><button type="submit">创建</button></div></form></div>}
+    {showCreate && <div className="modal-layer"><form className="create-modal" onSubmit={createBase}><button className="modal-close" type="button" onClick={() => setShowCreate(false)}><X size={17} /></button><h2>新建知识库</h2><p>创建一个主题空间，用来归集和提问。</p><label>知识库名称<input value={newBase} autoFocus onChange={(event) => setNewBase(event.target.value)} placeholder="例如：产品与设计资料" /></label><div><button type="button" onClick={() => setShowCreate(false)}>取消</button><button type="submit">创建</button></div></form></div>}
     {kbBaseMenu && createPortal(
       <div
         className="home-history-context-menu"

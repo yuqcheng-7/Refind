@@ -4,6 +4,7 @@ export function mapChatResponseToMessage({
   question,
   selectedBases = [],
   selectedTags = [],
+  knowledgeBaseIds = [],
   online = false,
   response,
 }) {
@@ -26,6 +27,7 @@ export function mapChatResponseToMessage({
     online,
     selectedBases: [...selectedBases],
     selectedTags: [...selectedTags],
+    knowledgeBaseIds: [...knowledgeBaseIds],
     insufficient: response.insufficient === true,
     citations: (response.citations || []).map((citation) => ({
       order: citation.order,
@@ -92,6 +94,7 @@ export async function sendChatMessage({
     question: question == null ? content : question,
     selectedBases,
     selectedTags,
+    knowledgeBaseIds,
     online: onlineEnabled,
     response: data,
   });

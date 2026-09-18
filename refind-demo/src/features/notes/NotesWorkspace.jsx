@@ -3,9 +3,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDismissable } from '../../hooks/useDismissable.js';
 import { attachCards, filterNotes } from './noteState.js';
+import { htmlFromNoteContent } from './editor/noteContentCodec.js';
 import { NoteEditor } from './NoteEditor.jsx';
 import { InspirationCards } from './InspirationCards.jsx';
-import { DeleteNotebookDialog, DeleteNoteDialog, KnowledgeBaseSyncDialog, NotebookManagerDialog } from './NoteDialogs.jsx';
+import { DeleteNotebookDialog, DeleteNoteDialog, KnowledgeBaseSyncDialog, KnowledgeBaseSyncedViewDialog, NotebookManagerDialog } from './NoteDialogs.jsx';
 import { demoKnowledgeBases } from './demoData.js';
 import {
   downloadNoteFile,
@@ -32,7 +33,7 @@ function clampMenuCoords(clientX, clientY, width = 196, height = 188) {
   return { left, top };
 }
 
-export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demoKnowledgeBases, notice, onCreateOrganizedNote, onDeleteCard, onOpenMaterial }) {
+export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demoKnowledgeBases, notice, onCreateOrganizedNote, onDeleteCard, onOpenMaterial, onNoteSynced }) {
   const [tab, setTab] = useState('notes');
   const [notebookId, setNotebookId] = useState('all');
   const [notebookMenuOpen, setNotebookMenuOpen] = useState(false);
@@ -47,6 +48,7 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
   const contextMenuRef = useRef(null);
   const notebookFilterRef = useRef(null);
   const [syncNoteId, setSyncNoteId] = useState(null);
+  const [viewSyncedNoteId, setViewSyncedNoteId] = useState(null);
   const [deleteNoteId, setDeleteNoteId] = useState(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [deleteNotebook, setDeleteNotebook] = useState(null);
@@ -126,13 +128,18 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
         note: target,
         cards,
       });
+      const rawContent = updated.content || {};
+      // Rebuild html from sections so regenerate cannot stick to a stale html snapshot.
+      const nextHtml = htmlFromNoteContent({ ...rawContent, html: '' });
+      const nextContent = {
+        ...rawContent,
+        html: nextHtml,
+        outline: rawContent.outline ?? target.content?.outline,
+      };
       updateNote({
         ...target,
         ...updated,
-        content: {
-          ...(updated.content || {}),
-          outline: updated.content?.outline ?? target.content?.outline,
-        },
+        content: nextContent,
         // Keep local materials panel membership / thoughts if Edge omits them.
         inspirationCardIds: updated.inspirationCardIds?.length
           ? updated.inspirationCardIds
@@ -175,6 +182,7 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
   };
   const contextNote = notes.find((note) => note.id === contextNoteId);
   const syncNote = notes.find((note) => note.id === syncNoteId);
+  const viewSyncedNote = notes.find((note) => note.id === viewSyncedNoteId);
   const notePendingDelete = notes.find((note) => note.id === deleteNoteId);
   const syncSelectedNote = async (baseIds) => {
     if (!syncNote) return;
@@ -196,6 +204,8 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
         ...target,
         syncedBaseIds: [...new Set([...(target.syncedBaseIds || []), ...syncedIds])],
       });
+
+      if (syncedIds.length) onNoteSynced?.(syncedIds);
 
       if (result.failed?.length && syncedIds.length) {
         notice?.(`已同步 ${syncedIds.length} 个，失败 ${result.failed.length} 个。`);
@@ -598,9 +608,7 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
             type="button"
             role="menuitem"
             onClick={() => {
-              notice?.(contextNote.syncedBaseIds?.length
-                ? `已同步至 ${contextNote.syncedBaseIds.length} 个知识库。`
-                : '这篇笔记尚未同步至知识库。');
+              setViewSyncedNoteId(contextNote.id);
               closeContextMenu();
             }}
           >
@@ -690,6 +698,13 @@ export function NotesWorkspace({ notes, setNotes, cards, notebooks, bases = demo
         document.body,
       )}
       {syncNote && <KnowledgeBaseSyncDialog note={syncNote} bases={bases} onConfirm={syncSelectedNote} onClose={() => setSyncNoteId(null)} />}
+      {viewSyncedNote && (
+        <KnowledgeBaseSyncedViewDialog
+          note={viewSyncedNote}
+          bases={bases}
+          onClose={() => setViewSyncedNoteId(null)}
+        />
+      )}
       {notePendingDelete && <DeleteNoteDialog note={notePendingDelete} onConfirm={deleteNote} onClose={() => setDeleteNoteId(null)} />}
       {managerOpen && (
         <NotebookManagerDialog

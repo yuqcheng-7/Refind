@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { deepseekChat } from '../_shared/ai.ts';
+import { bailianTextChat } from '../_shared/ai.ts';
 import {
   buildChaptersForPrompt,
   buildGenerateMessages,
@@ -44,11 +44,11 @@ Deno.serve(async (req) => {
   const userId = userData.user.id;
   const admin = createClient(supabaseUrl, serviceRoleKey);
 
-  let body: { noteId: string };
+  let body: { noteId: string; lang?: string };
   try {
     body = normalizeRequestBody(await req.json());
   } catch (error) {
-    return response({ error: error instanceof Error ? error.message : 'invalid request' }, 400);
+    return response({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
 
   try {
@@ -117,10 +117,15 @@ Deno.serve(async (req) => {
       title: note.title,
       cards: orderedCards,
       chapters,
+      previousNote: typeof currentContent.text === 'string' ? currentContent.text : '',
+      lang: body.lang,
     });
-    const aiRaw = await deepseekChat(buildGenerateMessages(promptPayload), {
-      model: 'deepseek-chat',
-      temperature: 0.4,
+    const aiRaw = await bailianTextChat(buildGenerateMessages(promptPayload), {
+      model: Deno.env.get('GENERATE_NOTE_MODEL') || 'deepseek-v3',
+      temperature: 0.45,
+      max_tokens: 8192,
+      enable_thinking: false,
+      timeoutMs: 90_000,
     });
     const aiJson = parseAiJson(aiRaw);
     const generated = buildNoteContentFromAi(aiJson, orderedCards);

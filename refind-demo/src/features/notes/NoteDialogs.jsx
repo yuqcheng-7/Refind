@@ -37,6 +37,33 @@ export function KnowledgeBaseSyncDialog({ note, bases, onConfirm, onClose }) {
   </DialogShell>;
 }
 
+export function KnowledgeBaseSyncedViewDialog({ note, bases, onClose }) {
+  const synced = (bases || []).filter((base) => (note?.syncedBaseIds || []).includes(base.id));
+  return (
+    <DialogShell label="已同步知识库" onClose={onClose}>
+      <header>
+        <div>
+          <span className="eyebrow">知识库同步</span>
+          <h2>已同步知识库</h2>
+        </div>
+        <button type="button" aria-label="关闭已同步知识库" onClick={onClose}><X size={17} /></button>
+      </header>
+      {synced.length ? (
+        <ul className="note-dialog__synced-list">
+          {synced.map((base) => (
+            <li key={base.id}>{base.name}</li>
+          ))}
+        </ul>
+      ) : (
+        <p>这篇笔记尚未同步至知识库。</p>
+      )}
+      <footer>
+        <button type="button" className="quiet-action" onClick={onClose}>知道了</button>
+      </footer>
+    </DialogShell>
+  );
+}
+
 export function DeleteNoteDialog({ note, onConfirm, onClose }) {
   return <DialogShell label="删除笔记" onClose={onClose}>
     <header><h2>删除这篇笔记？</h2><button type="button" aria-label="关闭删除笔记" onClick={onClose}><X size={17} /></button></header>

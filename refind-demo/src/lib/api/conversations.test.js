@@ -20,6 +20,7 @@ import {
   isPlaceholderTitle,
   NEW_CONVERSATION_TITLE,
   pairChatTurns,
+  resolveAfterConversationDelete,
   truncateConversationFromTurn,
 } from './conversations.js';
 
@@ -227,5 +228,36 @@ describe('truncateConversationFromTurn', () => {
     await truncateConversationFromTurn('conv-1', 'pending-1');
 
     expect(del).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveAfterConversationDelete', () => {
+  const list = [
+    { id: 'newest', title: 'A' },
+    { id: 'older', title: 'B' },
+  ];
+
+  it('focuses the latest remaining conversation when the active one is deleted', () => {
+    expect(resolveAfterConversationDelete(list, 'newest', 'newest')).toEqual({
+      remaining: [{ id: 'older', title: 'B' }],
+      nextActiveId: 'older',
+      focusNext: true,
+    });
+  });
+
+  it('clears focus when the last conversation is deleted', () => {
+    expect(resolveAfterConversationDelete([{ id: 'only' }], 'only', 'only')).toEqual({
+      remaining: [],
+      nextActiveId: null,
+      focusNext: true,
+    });
+  });
+
+  it('keeps the current conversation when a different one is deleted', () => {
+    expect(resolveAfterConversationDelete(list, 'older', 'newest')).toEqual({
+      remaining: [{ id: 'newest', title: 'A' }],
+      nextActiveId: 'newest',
+      focusNext: false,
+    });
   });
 });

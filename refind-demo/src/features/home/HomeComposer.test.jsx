@@ -110,6 +110,15 @@ vi.mock('../../lib/api/conversations.js', () => ({
   },
   renameConversation: async (id, title) => ({ id, title, updatedAt: new Date().toISOString() }),
   deleteConversation: async () => {},
+  resolveAfterConversationDelete: (conversations = [], deletedId, activeId) => {
+    const remaining = conversations.filter((item) => item?.id !== deletedId);
+    const focusNext = Boolean(activeId) && activeId === deletedId;
+    return {
+      remaining,
+      nextActiveId: focusNext ? (remaining[0]?.id ?? null) : (activeId || null),
+      focusNext,
+    };
+  },
   truncateConversationFromTurn: async () => {},
   deleteChatMessages: async () => {},
   isPlaceholderTitle: (title) => !String(title || '').trim() || title === '新会话' || title === '未命名会话',

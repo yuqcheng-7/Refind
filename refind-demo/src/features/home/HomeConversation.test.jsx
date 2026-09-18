@@ -47,6 +47,37 @@ describe('HomeConversation', () => {
     });
   });
 
+  it('allows editing the user bubble while the answer is still generating', async () => {
+    const onResend = vi.fn();
+    render(
+      <HomeConversation
+        messages={[{
+          id: 'pending-home-1',
+          question: '正在生成中的问题',
+          mode: 'general',
+          selectedBases: [],
+          selectedTags: [],
+          citations: [],
+          pending: true,
+        }]}
+        onResend={onResend}
+      />,
+    );
+
+    const edit = screen.getByRole('button', { name: '编辑提问' });
+    expect(edit).toBeEnabled();
+    await userEvent.click(edit);
+    const editor = screen.getByRole('textbox', { name: '编辑提问内容' });
+    await userEvent.clear(editor);
+    await userEvent.type(editor, '改一下再发');
+    await userEvent.click(screen.getByRole('button', { name: '重新发送' }));
+
+    expect(onResend).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'pending-home-1',
+      prompt: '改一下再发',
+    }));
+  });
+
   it('hides edit control while sharing', () => {
     render(<HomeConversation messages={messages} selectMode="share" onResend={vi.fn()} />);
     expect(screen.queryByRole('button', { name: '编辑提问' })).not.toBeInTheDocument();

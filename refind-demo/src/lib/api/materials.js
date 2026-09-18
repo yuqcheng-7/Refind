@@ -169,7 +169,13 @@ export async function listMaterials(knowledgeBaseId, { query, platform } = {}) {
     .order('created_at', { ascending: false });
 
   if (query?.trim()) request = request.ilike('title', `%${query.trim()}%`);
-  if (platform && platform !== 'all') request = request.eq('platform_code', platform);
+  if (platform === 'local') {
+    request = request.neq('input_type', 'link').neq('input_type', 'note');
+  } else if (platform === 'note') {
+    request = request.or('platform_code.eq.note,input_type.eq.note');
+  } else if (platform && platform !== 'all') {
+    request = request.eq('platform_code', platform);
+  }
 
   const { data, error } = await request;
   if (error) throw error;
@@ -315,6 +321,13 @@ export async function deleteMaterial(id) {
     .eq('id', id)
     .single();
   if (lookupError) throw lookupError;
+
+  // Unlink note sync only — do not delete the note (Spec §5.7).
+  const { error: unlinkError } = await supabase
+    .from('note_knowledge_base_materials')
+    .delete()
+    .eq('material_id', id);
+  if (unlinkError) throw unlinkError;
 
   const { error } = await supabase
     .from('materials')

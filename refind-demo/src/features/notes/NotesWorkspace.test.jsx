@@ -207,7 +207,7 @@ describe('NotesWorkspace', () => {
     expect(screen.getByRole('button', { name: '生成笔记' })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: '生成笔记' }));
     expect(onGenerate).toHaveBeenCalledOnce();
-    expect(screen.getByRole('button', { name: '生成中' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /生成中/ })).toBeDisabled();
     resolveGenerate();
     expect(await screen.findByRole('button', { name: '生成笔记' })).toBeEnabled();
   });
@@ -503,6 +503,12 @@ describe('NotesWorkspace', () => {
     await waitFor(() => {
       expect(notice).toHaveBeenCalledWith('已同步至 1 个知识库。');
     });
+
+    fireEvent.contextMenu(screen.getByRole('button', { name: /会员活动设计/ }));
+    await userEvent.click(screen.getByRole('menuitem', { name: '查看知识库' }));
+    expect(screen.getByRole('dialog', { name: '已同步知识库' })).toBeVisible();
+    expect(screen.getByText('产品与设计资料')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: '知道了' }));
 
     fireEvent.contextMenu(screen.getByRole('button', { name: /会员活动设计/ }));
     await userEvent.click(screen.getByRole('menuitem', { name: '删除笔记' }));

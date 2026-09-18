@@ -5,19 +5,19 @@ import {
   Bold,
   Highlighter,
   Italic,
-  Link2,
   List,
   ListOrdered,
-  Palette,
   Quote,
   Redo2,
   Strikethrough,
   Underline as UnderlineIcon,
   Undo2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useDismissable } from '../../../hooks/useDismissable.js';
 import { applyNoteStyle, getActiveNoteStyleId } from './noteStyleCommands.js';
-import { NOTE_STYLE_MENU } from './noteTypography.js';
+import { getNoteStyleToken, NOTE_FONT_STACK, NOTE_STYLE_MENU } from './noteTypography.js';
 
 const TEXT_COLORS = [
   { label: '默认黑', value: '#1D2129' },
@@ -29,7 +29,7 @@ const TEXT_COLORS = [
 ];
 
 const HIGHLIGHT_COLORS = [
-  { label: '无', value: null },
+  { label: '无高亮', value: null },
   { label: '黄', value: '#FEF08A' },
   { label: '绿', value: '#BBF7D0' },
   { label: '蓝', value: '#BFDBFE' },
@@ -52,6 +52,165 @@ function ToolButton({ label, active, disabled, onClick, children }) {
   );
 }
 
+function ColorSwatchPicker({
+  label,
+  disabled,
+  colors,
+  value,
+  onPick,
+  kind = 'text',
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const menuId = useId();
+
+  useDismissable({ open, onClose: () => setOpen(false), rootRef });
+
+  const active = colors.find((item) => (item.value || '') === (value || '')) || colors[0];
+  const swatch = active?.value;
+
+  return (
+    <div className="note-editor__swatch-picker" ref={rootRef}>
+      <button
+        type="button"
+        className={`note-editor__tool note-editor__swatch-trigger${open ? ' is-active' : ''}`}
+        aria-label={label}
+        title={label}
+        aria-expanded={open}
+        aria-controls={menuId}
+        disabled={disabled}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span
+          className={`note-editor__swatch-preview note-editor__swatch-preview--${kind}${swatch ? '' : ' is-empty'}`}
+          style={swatch ? (kind === 'text' ? { color: swatch } : { background: swatch }) : undefined}
+          aria-hidden
+        >
+          {kind === 'text' ? 'A' : null}
+        </span>
+      </button>
+      {open ? (
+        <div id={menuId} className="note-editor__swatch-menu" role="listbox" aria-label={label}>
+          {colors.map((item) => {
+            const selected = (item.value || '') === (value || '');
+            return (
+              <button
+                key={item.label}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                aria-label={item.label}
+                title={item.label}
+                className={`note-editor__swatch${selected ? ' is-selected' : ''}${item.value ? '' : ' is-none'}`}
+                style={item.value ? { background: item.value } : undefined}
+                disabled={disabled}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onPick(item.value);
+                  setOpen(false);
+                }}
+              />
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StyleSelect({ disabled, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
+  const rootRef = useRef(null);
+  const menuRef = useRef(null);
+  const menuId = useId();
+  const active = NOTE_STYLE_MENU.find((item) => item.id === value) || NOTE_STYLE_MENU[3];
+
+  useDismissable({ open, onClose: () => setOpen(false), rootRef: menuRef, triggerRef: rootRef });
+
+  useLayoutEffect(() => {
+    if (!open || !rootRef.current) return undefined;
+    const place = () => {
+      const rect = rootRef.current.getBoundingClientRect();
+      setMenuPos({ top: rect.bottom + 6, left: rect.left });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open]);
+
+  return (
+    <div className={`note-editor__style-select${open ? ' is-open' : ''}`} ref={rootRef}>
+      <button
+        type="button"
+        className="note-editor__style-trigger"
+        aria-label="段落样式"
+        aria-expanded={open}
+        aria-controls={menuId}
+        disabled={disabled}
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>{active.label}</span>
+      </button>
+      {open
+        ? createPortal(
+          <div
+            id={menuId}
+            ref={menuRef}
+            className="note-editor__style-menu"
+            role="listbox"
+            aria-label="段落样式"
+            style={{ top: menuPos.top, left: menuPos.left }}
+          >
+            {NOTE_STYLE_MENU.map((item) => {
+              const selected = item.id === value;
+              const token = getNoteStyleToken(item.id);
+              const previewSize = Math.max(10, Math.round(Number.parseFloat(token.fontSize) * 0.72));
+              const previewLine = Math.max(14, Math.round(Number.parseFloat(token.lineHeight) * 0.72));
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  className={`note-editor__style-option${selected ? ' is-selected' : ''}`}
+                  disabled={disabled}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    onChange(item.id);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="note-editor__style-check" aria-hidden>{selected ? '✓' : ''}</span>
+                  <span
+                    className="note-editor__style-preview"
+                    style={{
+                      fontFamily: NOTE_FONT_STACK,
+                      fontSize: `${previewSize}px`,
+                      fontWeight: token.fontWeight,
+                      lineHeight: `${previewLine}px`,
+                      color: token.color,
+                    }}
+                  >
+                    {item.label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )
+        : null}
+    </div>
+  );
+}
+
 export function NoteEditorToolbar({ editor, disabled = false }) {
   const [, tick] = useState(0);
 
@@ -71,17 +230,8 @@ export function NoteEditorToolbar({ editor, disabled = false }) {
   const styleId = getActiveNoteStyleId(editor);
   const canUndo = editor.can().undo();
   const canRedo = editor.can().redo();
-
-  const setLink = () => {
-    const previous = editor.getAttributes('link').href || '';
-    const url = window.prompt('输入链接地址', previous);
-    if (url === null) return;
-    if (!url.trim()) {
-      editor.chain().focus().extendMarkRange('link').unsetLink().run();
-      return;
-    }
-    editor.chain().focus().extendMarkRange('link').setLink({ href: url.trim() }).run();
-  };
+  const textColor = editor.getAttributes('textStyle').color || '#1D2129';
+  const highlightColor = editor.getAttributes('highlight').color || null;
 
   return (
     <div className="note-editor__tool-list note-editor__tool-list--rich" role="toolbar" aria-label="富文本工具">
@@ -92,19 +242,11 @@ export function NoteEditorToolbar({ editor, disabled = false }) {
         <Redo2 size={15} />
       </ToolButton>
 
-      <label className="note-editor__style-select">
-        <span className="sr-only">段落样式</span>
-        <select
-          aria-label="段落样式"
-          disabled={disabled}
-          value={styleId}
-          onChange={(event) => applyNoteStyle(editor, event.target.value)}
-        >
-          {NOTE_STYLE_MENU.map((item) => (
-            <option key={item.id} value={item.id}>{item.label}</option>
-          ))}
-        </select>
-      </label>
+      <StyleSelect
+        disabled={disabled}
+        value={styleId}
+        onChange={(nextId) => applyNoteStyle(editor, nextId)}
+      />
 
       <ToolButton label="加粗" disabled={disabled} active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()}>
         <Bold size={15} />
@@ -119,43 +261,29 @@ export function NoteEditorToolbar({ editor, disabled = false }) {
         <Strikethrough size={15} />
       </ToolButton>
 
-      <label className="note-editor__color-select" title="字体颜色">
-        <Palette size={15} aria-hidden />
-        <span className="sr-only">字体颜色</span>
-        <select
-          aria-label="字体颜色"
-          disabled={disabled}
-          value={editor.getAttributes('textStyle').color || '#1D2129'}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (value === '#1D2129') editor.chain().focus().unsetColor().run();
-            else editor.chain().focus().setColor(value).run();
-          }}
-        >
-          {TEXT_COLORS.map((item) => (
-            <option key={item.value} value={item.value}>{item.label}</option>
-          ))}
-        </select>
-      </label>
+      <ColorSwatchPicker
+        label="字体颜色"
+        kind="text"
+        disabled={disabled}
+        colors={TEXT_COLORS}
+        value={textColor}
+        onPick={(value) => {
+          if (!value || value === '#1D2129') editor.chain().focus().unsetColor().run();
+          else editor.chain().focus().setColor(value).run();
+        }}
+      />
 
-      <label className="note-editor__color-select" title="高亮">
-        <Highlighter size={15} aria-hidden />
-        <span className="sr-only">高亮</span>
-        <select
-          aria-label="高亮"
-          disabled={disabled}
-          value={editor.getAttributes('highlight').color || ''}
-          onChange={(event) => {
-            const value = event.target.value;
-            if (!value) editor.chain().focus().unsetHighlight().run();
-            else editor.chain().focus().toggleHighlight({ color: value }).run();
-          }}
-        >
-          {HIGHLIGHT_COLORS.map((item) => (
-            <option key={item.label} value={item.value || ''}>{item.label}</option>
-          ))}
-        </select>
-      </label>
+      <ColorSwatchPicker
+        label="高亮"
+        kind="highlight"
+        disabled={disabled}
+        colors={HIGHLIGHT_COLORS}
+        value={highlightColor}
+        onPick={(value) => {
+          if (!value) editor.chain().focus().unsetHighlight().run();
+          else editor.chain().focus().toggleHighlight({ color: value }).run();
+        }}
+      />
 
       <ToolButton label="左对齐" disabled={disabled} active={editor.isActive({ textAlign: 'left' })} onClick={() => editor.chain().focus().setTextAlign('left').run()}>
         <AlignLeft size={15} />
@@ -173,11 +301,19 @@ export function NoteEditorToolbar({ editor, disabled = false }) {
       <ToolButton label="有序列表" disabled={disabled} active={editor.isActive('orderedList')} onClick={() => editor.chain().focus().toggleOrderedList().run()}>
         <ListOrdered size={15} />
       </ToolButton>
-      <ToolButton label="引用" disabled={disabled} active={editor.isActive('blockquote')} onClick={() => editor.chain().focus().toggleBlockquote().run()}>
+      <ToolButton
+        label="引用"
+        disabled={disabled}
+        active={editor.isActive('blockquote')}
+        onClick={() => {
+          const chain = editor.chain().focus();
+          if (!editor.isActive('blockquote')) {
+            chain.unsetColor().unsetHighlight();
+          }
+          chain.toggleBlockquote().run();
+        }}
+      >
         <Quote size={15} />
-      </ToolButton>
-      <ToolButton label="链接" disabled={disabled} active={editor.isActive('link')} onClick={setLink}>
-        <Link2 size={15} />
       </ToolButton>
     </div>
   );

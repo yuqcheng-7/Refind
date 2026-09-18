@@ -36,6 +36,7 @@ function textCoverLabel(inputType) {
   if (inputType === 'markdown') return 'MD';
   if (inputType === 'csv') return 'CSV';
   if (inputType === 'txt') return 'TXT';
+  if (inputType === 'note') return '笔记';
   if (inputType === 'pdf') return 'PDF';
   if (inputType === 'docx' || inputType === 'doc') return 'DOC';
   if (inputType === 'pptx') return 'PPT';

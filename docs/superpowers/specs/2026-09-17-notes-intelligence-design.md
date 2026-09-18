@@ -147,3 +147,10 @@ D 富文本（TipTap）→ A 收藏补齐 → B 生成笔记 → C 同步知识�
 ## 10. 文档同步
 
 落地后回写：PRD §6.11 / Spec §5.7、路线图 §1.0、`phase3-ai-rag-launch.md` Task 状态。
+
+## 11. 2026-09-18 as-built 补记
+
+- **B `generate-note`：** 系统提示强调覆盖卡片要点、文白与分点平衡（该分点处分点、该叙述处叙述）；尊重 `content.outline`；未归章卡仍进 prompt；部署 DeepSeek + 充足 `max_tokens`。
+- **C `sync-note`：** Edge Function `supabase/functions/sync-note` 已实现；同步资料 `origin_type=note`；前端同步成功后刷新材料列表 / 「查看知识库」对话框；来源筛选含「笔记」。
+- **UX：** 去掉「已保留生成前版本」强 toast；新建知识库弹窗无 sparkles；placeholder `#9EA4AD`。
+- 文档已同步：`output/design.md` §10.8、PRD §9.13、Spec §15。

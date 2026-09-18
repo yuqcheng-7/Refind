@@ -3,7 +3,7 @@
 > 版本：V1.0  
 > 基于产品需求文档：`Refind拾藏PRD_V1.0.md`  
 > 文档日期：2026-08-13  
-> 最近修订：2026-09-17（见第 14 章：A′ RAG、LLM 检索改写、回答结构/短标题、下一阶段笔记；第 11–13 章仍有效）
+> 最近修订：2026-09-18（见第 15 章：移动端壳层、笔记智能化 as-built、`sync-note` / `generate-note`；第 11–14 章仍有效）
 
 ---
 
@@ -374,6 +374,8 @@ Web 客户端
 - 全局导航展开态约 220px，提供折叠按钮；收起态仅保留图标，隐藏导航文字、知识库列表和账号文字，并通过 tooltip 或等价可访问名称解释图标。
 - `≥1200px` 保留桌面多栏工作台；`768–1199px` 使用紧凑双栏，导航默认图标态，AI 对话、筛选和素材面板为覆盖式面板；`<768px` 使用单栏和左侧导航抽屉。
 - 移动端触控目标不得小于 44px；不得通过缩放桌面多栏来伪适配移动端。
+- **`<768px` 知识库顶栏：** 菜单按钮渲染在 `.workspace-header` 内（`.workspace-header__nav`），与 `.ai-panel-trigger` 同行 `align-items:center`、高度 36px；`app-shell.is-knowledge` 下不渲染全局 `.mobile-nav-trigger`。
+- **`<768px` 首页历史：** `revealHomeHistory()` 在移动视口保持 `homeHistoryOpen=false`；打开时 `.home-history-card` 为 `position:fixed` 全屏抽屉；`openHomeConversation` 后强制收起。composer `.composer-actions` `flex-wrap:nowrap` + 横滑，`.send-button` 右侧固定。
 - 组件采用扁平风格：圆角 8–12px、低对比细边框、无或极浅阴影。默认页不展示菜单、筛选、引用或账户等弹层；弹层仅由用户操作触发。
 - 「新建知识库」加号自定义 hover 提示须右对齐，避免侧栏裁切；不叠原生 `title`。
 
@@ -1239,3 +1241,35 @@ disconnected → connecting → connected → expired → reconnecting → conne
 | `2026-09-13-phase3-ai-rag-launch.md` | **下一执行重点：笔记 Task 3–5 → 再 Task 6–7 上线** |
 
 **产品确认顺序（2026-09-17）：** 基于已调好的 AI 回答推进笔记模块智能化，最终再上线。笔记 UI 规则复用 `2026-09-13-notes-workspace-remediation-design.md`。
+
+# 15. 2026-09-18 as-built（移动端 · 笔记智能化 · 同步）
+
+## 15.1 品牌与全局 UI
+
+- 侧栏 `.home-brand`：`align-items:flex-end`；`.brand-logo` 与文字底对齐，`top:2px` 微校正。
+- 全局 `input`/`textarea::placeholder` 色 `#9EA4AD`。
+- 首页 `WelcomeHeadline`：均匀字距 stagger，整页加载内存标记只播一次。
+
+## 15.2 笔记智能化（已实现）
+
+| 能力 | 实现要点 |
+| --- | --- |
+| 富文本 | TipTap；6 档样式；`noteContentCodec` / `noteCitation` 内联 `[n]` |
+| 灵感管理 | `InspirationCards` manage 模式：批量删除、导入新建/追加笔记 |
+| 素材成章 | 大纲章节 + 未归章；生成顺序见 `2026-09-18-materials-outline-chapters-design.md` |
+| `generate-note` | DeepSeek；覆盖卡片要点；文白与分点铁律；尊重 `outline`；`max_tokens` 充足 |
+| `sync-note` | Edge `supabase/functions/sync-note`；`origin_type=note`；前端 `materialsEpoch` / 查看知识库对话框刷新 |
+| 资料筛选 | `listMaterials` 支持来源「笔记」（`platform_code` / `input_type`） |
+| 导入导出 | `noteImport.js` / `noteExport.js` |
+
+## 15.3 登出与数据
+
+- `signOut()` → 仅 `supabase.auth.signOut()`；客户端列表在 `!session` 时清空并在再登录时重拉。
+- **不**在登出路径调用账户删除、Storage 清空或业务表 delete。
+- 未持久化草稿、笔记 debounce 未刷盘窗口内编辑可能丢失（预期）。
+
+## 15.4 文档索引
+
+- 设计：`output/design.md` §3.3 / §4 / §10.8
+- PRD：`output/Refind拾藏PRD_V1.0.md` §9.13
+- 特性：`2026-09-17-notes-intelligence-design.md`、`2026-09-18-inspiration-cards-manage-design.md`、`2026-09-18-materials-outline-chapters-design.md`、`2026-09-15-chat-history-surfaces-design.md`

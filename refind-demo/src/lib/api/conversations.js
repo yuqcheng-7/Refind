@@ -244,6 +244,20 @@ export async function deleteConversation(conversationId) {
   if (error) throw error;
 }
 
+/**
+ * Newest-first history: after deleting `deletedId`, return remaining rows and
+ * which conversation to focus when the deleted one was active.
+ */
+export function resolveAfterConversationDelete(conversations = [], deletedId, activeId) {
+  const remaining = conversations.filter((item) => item?.id !== deletedId);
+  const focusNext = Boolean(activeId) && activeId === deletedId;
+  return {
+    remaining,
+    nextActiveId: focusNext ? (remaining[0]?.id ?? null) : (activeId || null),
+    focusNext,
+  };
+}
+
 export async function truncateConversationFromTurn(conversationId, turnId) {
   if (!conversationId || !turnId) return;
 

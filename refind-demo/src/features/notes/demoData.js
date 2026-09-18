@@ -41,9 +41,12 @@ export const demoInspirationCards = [
     contentSnapshot: '缩短首次价值时间：将关键动作拆解为一个低摩擦步骤。',
     questionSnapshot: '怎样缩短新用户看到价值的时间？',
     answerMode: 'rag',
-    sourceLabel: '小红书增长策略',
+    sourceLabel: '知识库回答',
+    sourceKnowledgeBaseIds: ['base-growth'],
+    createdAt: '2026-09-18T02:20:00.000Z',
     savedAt: '今天 10:20',
     citation: { label: '小红书增长策略', sourceId: 'source-xiaohongshu-growth' },
+    citationSnapshot: [{ label: '小红书增长策略', sourceId: 'source-xiaohongshu-growth' }],
   },
   {
     id: 'card-retrospective',
@@ -51,6 +54,7 @@ export const demoInspirationCards = [
     questionSnapshot: '如何让团队持续学习？',
     answerMode: 'general',
     sourceLabel: '通用回答',
+    createdAt: '2026-09-17T08:00:00.000Z',
     savedAt: '昨天',
   },
 ];
