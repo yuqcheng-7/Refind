@@ -93,6 +93,7 @@ function MaterialsPanel({
   thoughts,
   outline,
   readOnly,
+  outlining,
   onReorder,
   onMove,
   onRenameChapter,
@@ -202,7 +203,7 @@ function MaterialsPanel({
       <header className="materials-rail__header">
         <div>
           <span className="eyebrow">写作素材</span>
-          <h2>{outline ? '章节大纲' : '已选灵感卡片'}</h2>
+          <h2>{outlining ? '成章中…' : outline ? '章节大纲' : '已选灵感卡片'}</h2>
         </div>
         <div className="materials-rail__header-right">
           <span>{cards.length} 张</span>
@@ -242,7 +243,6 @@ export function NoteEditor({
   onAttachCards,
   onGenerate,
   onRetryOutline,
-  outlining = false,
   onAddToNote,
   onAttachCardsToNote,
   onDeleteCard,
@@ -258,6 +258,7 @@ export function NoteEditor({
   const [panelOpen, setPanelOpen] = useState(materialsEnabled);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [outlining, setOutlining] = useState(false);
   const [revisions, setRevisions] = useState([]);
   const [detailCard, setDetailCard] = useState(null);
   const persistTimerRef = useRef(null);
@@ -267,7 +268,7 @@ export function NoteEditor({
   const documentScrollRef = useRef(null);
   const [tiptapEditor, setTiptapEditor] = useState(null);
   const outline = normalizeOutline(note.content?.outline);
-  const readOnly = generating || outlining;
+  const panelReadOnly = generating || outlining;
   const handleEditorReady = useCallback((editor) => {
     setTiptapEditor(editor);
   }, []);
@@ -352,11 +353,11 @@ export function NoteEditor({
     content: { ...note.content, outline: nextOutline },
   });
   const moveOutlineCard = (cardId, toChapterId, index) => {
-    if (readOnly || !outline) return;
+    if (panelReadOnly || !outline) return;
     commitOutline(moveCardInOutline(outline, cardId, { toChapterId, index }));
   };
   const reorderOutlineCard = (chapterId, from, to) => {
-    if (readOnly || !outline) return;
+    if (panelReadOnly || !outline) return;
     const cardIds = chapterId === 'unassigned'
       ? outline.unassignedCardIds
       : outline.chapters.find((chapter) => chapter.id === chapterId)?.cardIds;
@@ -364,7 +365,7 @@ export function NoteEditor({
     moveOutlineCard(cardIds[from], chapterId, to);
   };
   const renameOutlineChapter = (chapterId, title) => {
-    if (readOnly || !outline) return;
+    if (panelReadOnly || !outline) return;
     commitOutline(renameChapter(outline, chapterId, title));
   };
   const updateThought = (cardId, thought) => commit({
@@ -403,6 +404,15 @@ export function NoteEditor({
       setGenerating(false);
     }
   };
+  const handleRetryOutline = async () => {
+    if (outlining || generating || !onRetryOutline) return;
+    setOutlining(true);
+    try {
+      await onRetryOutline();
+    } finally {
+      setOutlining(false);
+    }
+  };
 
   return (
     <article className={`note-editor ${isFullscreen ? 'note-editor--inspiration' : 'note-editor--plain'}${isFullscreen && materialsEnabled && panelOpen ? ' has-materials-rail' : ''}`}>
@@ -428,14 +438,14 @@ export function NoteEditor({
         ) : null}
         {isFullscreen && materialsEnabled && (
           <div className="note-editor__inspiration-actions">
-            <button type="button" onClick={() => setPickerOpen(true)} disabled={readOnly}>
+            <button type="button" onClick={() => setPickerOpen(true)} disabled={panelReadOnly}>
               <Plus size={15} />
               添加灵感卡片
             </button>
             <button
               type="button"
               className="note-editor__generate"
-              disabled={!selectedCards.length || readOnly}
+              disabled={!selectedCards.length || panelReadOnly}
               onClick={generate}
             >
               {generating ? '生成中' : '生成笔记'}
@@ -461,7 +471,7 @@ export function NoteEditor({
             <input
               className="note-editor__title"
               aria-label="笔记标题"
-              disabled={readOnly}
+              disabled={generating}
               value={note.title}
               onChange={(event) => commit({ title: event.target.value })}
             />
@@ -505,14 +515,15 @@ export function NoteEditor({
                 cards={selectedCards}
                 thoughts={note.materialThoughts || {}}
                 outline={outline}
-                readOnly={readOnly}
+                readOnly={panelReadOnly}
+                outlining={outlining}
                 onReorder={outline ? reorderOutlineCard : reorderCards}
                 onMove={moveOutlineCard}
                 onRenameChapter={renameOutlineChapter}
                 onThoughtChange={updateThought}
                 onRemove={removeCard}
                 onCollapse={() => setPanelOpen(false)}
-                onRetryOutline={onRetryOutline}
+                onRetryOutline={handleRetryOutline}
               />
             </div>
           ) : null}

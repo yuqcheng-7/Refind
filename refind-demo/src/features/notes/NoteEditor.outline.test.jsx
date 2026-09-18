@@ -117,6 +117,31 @@ describe('NoteEditor materials outline', () => {
     }));
   });
 
+  it('disables outline mutations while retry outline is pending', async () => {
+    let resolveRetry;
+    const onRetryOutline = vi.fn(() => new Promise((resolve) => {
+      resolveRetry = resolve;
+    }));
+    renderOutlineEditor({ onRetryOutline });
+
+    await userEvent.click(screen.getByRole('button', { name: '重试成章' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('成章中…')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('动机')).toBeDisabled();
+      expect(screen.getByRole('button', { name: '重试成章' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: '移除 b' })).toBeDisabled();
+    });
+
+    resolveRetry();
+    await waitFor(() => {
+      expect(screen.queryByText('成章中…')).not.toBeInTheDocument();
+      expect(screen.getByDisplayValue('动机')).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: '重试成章' })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: '移除 b' })).not.toBeDisabled();
+    });
+  });
+
   it('disables outline mutations while generating', async () => {
     let resolveGenerate;
     const onGenerate = vi.fn(() => new Promise((resolve) => {
