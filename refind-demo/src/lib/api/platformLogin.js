@@ -18,8 +18,11 @@ async function readJson(response) {
 }
 
 function parserUnreachableError() {
+  const hosted = Boolean(String(import.meta.env.VITE_PLATFORM_PARSER_URL || '').trim());
   return new Error(
-    '无法连接本机解析器。请先运行：python3 tools/platform-parser/server.py（需已 pip install playwright && playwright install chromium）',
+    hosted
+      ? '无法连接平台登录服务，请稍后重试。若持续失败，请联系管理员检查 parser 服务。'
+      : '无法连接本机解析器。请先运行：python3 tools/platform-parser/server.py（需已 pip install playwright && playwright install chromium）',
   );
 }
 
@@ -104,6 +107,7 @@ export async function pollPlatformLogin(loginId, { parserBaseUrl } = {}) {
     accountDisplayName: data?.account_display_name || '',
     sessionPayload: data?.session_payload || '',
     error: data?.error || '',
+    qrImageBase64: data?.qr_image_base64 || '',
   };
 }
 
@@ -169,17 +173,25 @@ export async function waitForPlatformLogin(platformCode, {
   intervalMs = 1500,
   timeoutMs = 180_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  onUpdate,
 } = {}) {
   const { loginId, parserBaseUrl: base } = await startPlatformLogin(platformCode, { parserBaseUrl });
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const snap = await pollPlatformLogin(loginId, { parserBaseUrl: base });
+    if (typeof onUpdate === 'function') {
+      try {
+        onUpdate(snap);
+      } catch {
+        // UI callback errors must not abort login polling.
+      }
+    }
     if (snap.status === 'success') {
       if (!snap.sessionPayload) throw new Error('登录成功但未返回会话，请重试');
       const sessions = await fetchLocalSessionPresence({ parserBaseUrl: base });
       if (sessions && !sessions[platformCode]) {
         throw new Error(
-          '登录未完成：本机未保存有效会话。请在弹出窗口中用 App 扫码或手机验证码完成登录后再试。',
+          '登录未完成：服务端未保存有效会话。请重新点击「连接」，用 App 扫码完成登录后再试。',
         );
       }
       return snap;

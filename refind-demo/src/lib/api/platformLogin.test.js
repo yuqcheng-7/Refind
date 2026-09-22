@@ -55,12 +55,13 @@ describe('platformLogin client', () => {
     const polled = await pollPlatformLogin('lid-1', { parserBaseUrl: 'http://127.0.0.1:8787' });
     expect(polled.status).toBe('success');
     expect(polled.sessionPayload).toContain('cookies');
+    expect(polled.qrImageBase64).toBe('');
   });
 
   it('surfaces parser unreachable errors', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     await expect(startPlatformLogin('douyin', { parserBaseUrl: 'http://127.0.0.1:8787' }))
       .rejects
-      .toThrow(/本机解析器/);
+      .toThrow(/本机解析器|平台登录服务/);
   });
 });

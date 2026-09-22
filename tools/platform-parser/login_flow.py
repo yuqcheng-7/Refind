@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import threading
 import time
 import uuid
@@ -28,6 +30,17 @@ PERSISTENT_BROWSER_PLATFORMS = frozenset({"zhihu"})
 # Legacy: no platforms keep the window open after success (auto-close after persist).
 KEEP_BROWSER_OPEN_AFTER_LOGIN = frozenset()
 KEEP_OPEN_AFTER_SUCCESS_SEC = 30 * 60
+
+# Hosted (bind 0.0.0.0): default headless so QR is scraped into the web UI.
+# Local desktop (127.0.0.1): default headed window. Override with PLATFORM_LOGIN_HEADLESS=0|1.
+_parser_host = os.environ.get("PLATFORM_PARSER_HOST", "127.0.0.1").strip().lower()
+_headless_env = os.environ.get("PLATFORM_LOGIN_HEADLESS", "").strip().lower()
+if _headless_env in {"0", "false", "no"}:
+  HEADLESS = False
+elif _headless_env in {"1", "true", "yes"}:
+  HEADLESS = True
+else:
+  HEADLESS = _parser_host not in {"127.0.0.1", "localhost", "::1", ""}
 
 
 class LoginWindowClosed(RuntimeError):
@@ -55,6 +68,36 @@ PROFILE_BOOTSTRAP = {
   "bilibili": "https://www.bilibili.com/",
 }
 
+QR_SELECTORS = {
+  "xhs": (
+    "img[src*='qr']",
+    "canvas",
+    "[class*='qrcode'] img",
+    "[class*='qr-code'] img",
+    ".login-container img",
+  ),
+  "douyin": (
+    "img[src*='qr']",
+    "canvas",
+    "[class*='qrcode'] img",
+    "[class*='qr-code'] img",
+  ),
+  "zhihu": (
+    ".Qrcode-img",
+    "img[alt*='二维码']",
+    "img[src*='qr']",
+    "canvas",
+    "[class*='Qrcode'] img",
+  ),
+  "bilibili": (
+    ".qrcode-img",
+    "#qrcode img",
+    "img[src*='qr']",
+    "canvas",
+    "[class*='qrcode'] img",
+  ),
+}
+
 
 
 @dataclass
@@ -65,6 +108,7 @@ class LoginJob:
   account_display_name: str = ""
   session_payload: str | None = None
   error: str = ""
+  qr_image_base64: str = ""
   created_at: float = field(default_factory=time.time)
   consumed_payload: bool = False
 
@@ -864,6 +908,7 @@ def snapshot_job(login_id: str) -> dict[str, Any] | None:
       "account_display_name": job.account_display_name,
       "session_payload": payload,
       "error": job.error,
+      "qr_image_base64": job.qr_image_base64 or "",
     }
 
 
@@ -894,6 +939,11 @@ def _wait_until_user_closes_browser(
 
 def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
   """Open the visible login UI (QR / phone) when landing pages hide it."""
+  try:
+    page.wait_for_timeout(800)
+  except Exception:  # noqa: BLE001
+    pass
+
   if platform == "xhs":
     try:
       if page.url and "login" not in page.url and "signin" not in page.url:
@@ -903,21 +953,127 @@ def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
         page.goto(start_url, wait_until="domcontentloaded", timeout=45_000)
       except Exception:  # noqa: BLE001
         pass
-    try:
-      page.wait_for_timeout(1200)
-      for selector in (
-        "text=扫码登录",
-        "text=登录",
-        ".login-btn",
-        "button:has-text('登录')",
-      ):
-        loc = page.locator(selector).first
-        if loc.count() > 0:
+
+  click_labels = (
+    "扫码登录",
+    "二维码登录",
+    "登录",
+  )
+  try:
+    page.wait_for_timeout(600)
+    for label in click_labels:
+      loc = page.get_by_text(label, exact=False).first
+      if loc.count() > 0:
+        try:
           loc.click(timeout=2500)
           page.wait_for_timeout(800)
           break
+        except Exception:  # noqa: BLE001
+          continue
+    for selector in (
+      ".login-btn",
+      "button:has-text('登录')",
+      "[class*='qrcode']",
+      "[class*='Qrcode']",
+    ):
+      loc = page.locator(selector).first
+      if loc.count() > 0:
+        try:
+          loc.click(timeout=2000)
+          page.wait_for_timeout(600)
+          break
+        except Exception:  # noqa: BLE001
+          continue
+  except Exception:  # noqa: BLE001
+    pass
+
+
+def capture_qr_image(page: Any, platform: str) -> str:
+  """Return a data-URL (or raw base64 PNG) of the visible login QR, or empty string."""
+  selectors = QR_SELECTORS.get(platform) or (
+    "img[src*='qr']",
+    "canvas",
+    "[class*='qrcode'] img",
+    "[class*='qr-code'] img",
+  )
+  for selector in selectors:
+    try:
+      loc = page.locator(selector).first
+      if loc.count() == 0:
+        continue
+      try:
+        if not loc.is_visible(timeout=800):
+          continue
+      except Exception:  # noqa: BLE001
+        continue
+
+      # Prefer <img src="data:..."> or http(s) QR image URL.
+      tag = ""
+      try:
+        tag = (loc.evaluate("el => el.tagName") or "").lower()
+      except Exception:  # noqa: BLE001
+        tag = ""
+
+      if tag == "img":
+        src = ""
+        try:
+          src = str(loc.get_attribute("src") or "").strip()
+        except Exception:  # noqa: BLE001
+          src = ""
+        if src.startswith("data:image"):
+          return src
+        if src.startswith("http://") or src.startswith("https://"):
+          try:
+            resp = page.request.get(src, timeout=15_000)
+            if resp.ok:
+              mime = resp.headers.get("content-type") or "image/png"
+              if ";" in mime:
+                mime = mime.split(";", 1)[0].strip()
+              raw = resp.body()
+              return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+          except Exception:  # noqa: BLE001
+            pass
+
+      if tag == "canvas":
+        try:
+          data_url = loc.evaluate(
+            """(el) => {
+              try { return el.toDataURL('image/png'); } catch (e) { return ''; }
+            }"""
+          )
+          if isinstance(data_url, str) and data_url.startswith("data:image"):
+            return data_url
+        except Exception:  # noqa: BLE001
+          pass
+
+      png = loc.screenshot(type="png")
+      if png:
+        return f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}"
     except Exception:  # noqa: BLE001
-      pass
+      continue
+
+  # Last resort: screenshot a likely QR container.
+  for container in (
+    "[class*='qrcode']",
+    "[class*='Qrcode']",
+    "[class*='qr-code']",
+    "#qrcode",
+  ):
+    try:
+      loc = page.locator(container).first
+      if loc.count() == 0:
+        continue
+      try:
+        if not loc.is_visible(timeout=500):
+          continue
+      except Exception:  # noqa: BLE001
+        continue
+      png = loc.screenshot(type="png")
+      if png:
+        return f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}"
+    except Exception:  # noqa: BLE001
+      continue
+  return ""
 
 
 def probe_browser_session(page: Any, platform: str, captured: dict[str, Any] | None = None) -> bool:
@@ -972,6 +1128,7 @@ def default_playwright_runner(
   platform: str,
   timeout_sec: float,
   on_authenticated: Callable[[dict[str, Any]], None] | None = None,
+  on_qr: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
   try:
     from playwright.sync_api import sync_playwright
@@ -983,11 +1140,12 @@ def default_playwright_runner(
   url = LOGIN_URLS[platform]
   home = PROFILE_BOOTSTRAP.get(platform) or url
   deadline = time.time() + timeout_sec
-  keep_open = platform in KEEP_BROWSER_OPEN_AFTER_LOGIN
-  use_persistent = platform in PERSISTENT_BROWSER_PLATFORMS
+  keep_open = platform in KEEP_BROWSER_OPEN_AFTER_LOGIN and not HEADLESS
+  use_persistent = platform in PERSISTENT_BROWSER_PLATFORMS and not HEADLESS
   captured: dict[str, Any] = {"account": "", "account_id": "", "logged_in": False, "login_verified": False}
   saved_payload = load_platform_session(platform)
   session_ua = str((saved_payload or {}).get("ua") or UA_FALLBACK).strip() or UA_FALLBACK
+  last_qr = ""
 
   browser = None
   context = None
@@ -1008,6 +1166,21 @@ def default_playwright_runner(
     except Exception:  # noqa: BLE001
       pass
     browser = None
+
+  def emit_qr() -> None:
+    nonlocal last_qr
+    if on_qr is None or page is None:
+      return
+    try:
+      data = capture_qr_image(page, platform)
+    except Exception:  # noqa: BLE001
+      return
+    if data and data != last_qr:
+      last_qr = data
+      try:
+        on_qr(data)
+      except Exception:  # noqa: BLE001
+        pass
 
   def finish(account: str, cookies: list[dict[str, Any]]) -> dict[str, Any]:
     result = {
@@ -1074,7 +1247,10 @@ def default_playwright_runner(
         page = context.pages[0] if context.pages else context.new_page()
         seeded = True  # profile itself carries prior cookies
       else:
-        launch_kwargs = {"headless": False}
+        launch_kwargs = {
+          "headless": HEADLESS,
+          "args": ["--disable-blink-features=AutomationControlled"] if HEADLESS else [],
+        }
         browser = playwright.chromium.launch(**launch_kwargs)
         context = browser.new_context(
           locale="zh-CN",
@@ -1110,12 +1286,18 @@ def default_playwright_runner(
       else:
         ensure_login_surface(page, platform, url)
 
+      emit_qr()
+
       ready_streak = 0
       closed_hint = (
         "登录窗口已关闭。请重新点击「连接」并完成扫码；"
         "知乎会复用本机登录配置，成功保存后关闭窗口不会退出拾藏登录态。"
         if use_persistent
-        else "登录窗口已关闭。请重新点击「连接」，扫码后等待窗口自动关闭，不要手动关闭。"
+        else (
+          "登录已取消或浏览器已关闭。请重新点击「连接」并完成扫码。"
+          if HEADLESS
+          else "登录窗口已关闭。请重新点击「连接」，扫码后等待窗口自动关闭，不要手动关闭。"
+        )
       )
       while time.time() < deadline:
         if window_closed["value"]:
@@ -1127,6 +1309,8 @@ def default_playwright_runner(
           raise
         except Exception:  # noqa: BLE001
           pass
+        if not last_qr or ready_streak == 0:
+          emit_qr()
         cookies = context.cookies()
         if platform_login_ready(page, platform, cookies, captured):
           ready_streak += 1
@@ -1197,6 +1381,7 @@ def _persist_login_success(login_id: str, platform: str, result: dict[str, Any])
     account_display_name=payload["account_display_name"],
     session_payload=json.dumps(payload, ensure_ascii=False),
     error="",
+    qr_image_base64="",
   )
 
 
@@ -1209,11 +1394,21 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
     _persist_login_success(login_id, platform, result)
     early_done["value"] = True
 
+  def on_qr(data_url: str) -> None:
+    if early_done["value"]:
+      return
+    mark_job(login_id, qr_image_base64=str(data_url or ""))
+
   try:
-    if platform in KEEP_BROWSER_OPEN_AFTER_LOGIN:
-      result = runner(platform, timeout_sec, on_authenticated=on_authenticated)
-    else:
-      result = runner(platform, timeout_sec)
+    import inspect
+
+    params = inspect.signature(runner).parameters
+    kwargs: dict[str, Any] = {}
+    if "on_authenticated" in params:
+      kwargs["on_authenticated"] = on_authenticated
+    if "on_qr" in params:
+      kwargs["on_qr"] = on_qr
+    result = runner(platform, timeout_sec, **kwargs)
     if early_done["value"]:
       return
     _persist_login_success(login_id, platform, result)
@@ -1229,11 +1424,11 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
     if early_done["value"]:
       return
     err = str(exc).lower()
-    if "closed" in err or "target" in err and "closed" in err:
+    if "closed" in err or ("target" in err and "closed" in err):
       mark_job(
         login_id,
         status="failed",
-        error="登录窗口已关闭。请重新点击「连接」，扫码后等待窗口自动关闭，不要手动关闭。",
+        error="登录已取消或浏览器已关闭。请重新点击「连接」并完成扫码。",
       )
       return
     mark_job(login_id, status="failed", error=str(exc) or "登录失败")

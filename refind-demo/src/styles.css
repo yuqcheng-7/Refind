@@ -1741,6 +1741,14 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .settings-notice{background:#eef6f0;color:#2f6b45}
 .settings-error{background:#f8ecec;color:#9a4040}
 .settings-loading{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.7);color:#5d6b7c}
+.settings-qr-overlay{position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(18,24,32,.42);backdrop-filter:blur(2px)}
+.settings-qr-modal{width:min(360px,100%);padding:22px 22px 18px;border-radius:16px;background:#fff;box-shadow:0 18px 48px rgba(16,24,40,.18);text-align:center}
+.settings-qr-modal h2{margin:0;font-size:17px;font-weight:650;color:#162131;letter-spacing:-.02em}
+.settings-qr-hint,.settings-qr-foot{margin:10px 0 0;color:#667484;font-size:12.5px;line-height:1.5}
+.settings-qr-foot{margin-top:12px}
+.settings-qr-frame{margin:16px auto 0;width:220px;height:220px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:#f4f6f8;overflow:hidden}
+.settings-qr-frame img{width:100%;height:100%;object-fit:contain;display:block}
+.settings-qr-loading{display:inline-flex;align-items:center;gap:8px;margin:0;color:#5d6b7c;font-size:13px}
 .settings-panel{display:flex;flex-direction:column;align-items:stretch;padding:0;margin:0}
 .settings-card,.platform-connection-card{margin:0;padding:0;list-style:none;border:1px solid rgba(167,174,185,.26);border-radius:14px;background:rgba(255,255,255,.78);overflow:hidden}
 .platform-connection-item{padding:14px 12px;border-top:1px solid rgba(167,174,185,.18)}

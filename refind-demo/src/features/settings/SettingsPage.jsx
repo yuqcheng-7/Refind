@@ -63,6 +63,7 @@ export function SettingsPage({
   const [editingPassword, setEditingPassword] = useState(false);
   const [passwordForm, setPasswordForm] = useState(EMPTY_PASSWORD_FORM);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [loginQr, setLoginQr] = useState(null); // { platformCode, image, waiting }
 
   const refresh = async () => {
     setLoading(true);
@@ -100,19 +101,24 @@ export function SettingsPage({
     setError('');
     try {
       if (action === 'connect' || action === 'reconnect') {
-        setNotice(
-          platformCode === 'zhihu'
-            ? '将打开登录窗口，请扫码或验证码登录；成功后窗口会自动关闭。若此前已登录，通常无需重复扫码。'
-            : '将打开登录窗口，请用 App 扫码或手机验证码完成登录；成功后窗口会自动关闭。登录完成前请勿关闭窗口。',
-        );
-        const login = await waitForPlatformLogin(platformCode);
+        setLoginQr({ platformCode, image: '', waiting: true });
+        setNotice('正在准备登录二维码，请用对应 App 扫码…');
+        const login = await waitForPlatformLogin(platformCode, {
+          onUpdate: (snap) => {
+            if (snap?.qrImageBase64) {
+              setLoginQr({ platformCode, image: snap.qrImageBase64, waiting: true });
+              setNotice('请用手机 App 扫描下方二维码完成登录。');
+            }
+          },
+        });
+        setLoginQr(null);
         await connectPlatform(platformCode, {
           sessionPayload: login.sessionPayload,
           accountDisplayName: login.accountDisplayName,
         });
         setNotice(action === 'reconnect'
           ? (login.accountDisplayName ? '已重新连接。' : '已重新连接；昵称暂未获取到，不影响解析。')
-          : (login.accountDisplayName ? '已连接。解析该平台链接时会优先使用本机会话。' : '已连接；昵称暂未获取到，不影响解析。'));
+          : (login.accountDisplayName ? '已连接。解析该平台链接时会优先使用已保存会话。' : '已连接；昵称暂未获取到，不影响解析。'));
       } else if (action === 'disconnect') {
         const confirmed = window.confirm('断开后不影响已导入资料，仅影响后续解析。确定断开吗？');
         if (!confirmed) return;
@@ -126,6 +132,7 @@ export function SettingsPage({
     } catch (err) {
       setError(err?.message || '操作失败，请稍后重试');
       setNotice('');
+      setLoginQr(null);
     } finally {
       setBusyCode('');
     }
@@ -465,6 +472,28 @@ export function SettingsPage({
           </section>
         </div>
       )}
+
+      {loginQr ? (
+        <div className="settings-qr-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-qr-title">
+          <div className="settings-qr-modal">
+            <h2 id="settings-qr-title">扫码登录</h2>
+            <p className="settings-qr-hint">
+              请使用对应手机 App 扫描二维码。扫码成功后此窗口会自动关闭。
+            </p>
+            <div className="settings-qr-frame">
+              {loginQr.image ? (
+                <img src={loginQr.image} alt="登录二维码" />
+              ) : (
+                <p className="settings-qr-loading">
+                  <LoaderCircle size={18} className="is-spin" />
+                  正在生成二维码…
+                </p>
+              )}
+            </div>
+            <p className="settings-qr-foot">登录过程约需数十秒，请勿关闭本页。</p>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

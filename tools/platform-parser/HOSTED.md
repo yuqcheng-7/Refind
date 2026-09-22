@@ -47,6 +47,7 @@ User=root
 WorkingDirectory=/root/Refind/tools/platform-parser
 Environment=PLATFORM_PARSER_HOST=0.0.0.0
 Environment=PLATFORM_PARSER_PORT=8787
+Environment=PLATFORM_LOGIN_HEADLESS=1
 ExecStart=/root/Refind/tools/platform-parser/.venv/bin/python3 server.py
 Restart=always
 RestartSec=3
@@ -76,10 +77,17 @@ Production：
 
 重新部署 Pages。
 
-## 4. 网页扫码（产品改造 · 进行中）
+## 4. 网页扫码
 
-本机弹窗登录**不能**给外网用户用。下一步要把二维码展示到 `www.refind.cloud` 设置页。  
-在改造完成前：即使 parser 已公网，外网用户点「连接」仍可能看不到扫码窗。
+设置页「连接」会弹出二维码：parser 在无头浏览器打开平台登录页，把 QR 截图经 `GET /login/:id` 的 `qr_image_base64` 回传前端。
+
+更新机器上的代码后：
+
+```bash
+cd /root/Refind && git pull
+sudo systemctl restart refind-parser
+# 确认 Environment 含 PLATFORM_LOGIN_HEADLESS=1（见上文 unit）
+```
 
 ## 5. 安全提醒
 
