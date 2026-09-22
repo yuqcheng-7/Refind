@@ -25,8 +25,8 @@ from urllib.parse import urlparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 import base64
 
-HOST = "127.0.0.1"
-PORT = 8787
+HOST = os.environ.get("PLATFORM_PARSER_HOST", "127.0.0.1").strip() or "127.0.0.1"
+PORT = int(os.environ.get("PLATFORM_PARSER_PORT", "8787") or "8787")
 UA = (
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

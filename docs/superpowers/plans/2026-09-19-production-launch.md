@@ -53,13 +53,13 @@
 
 - [x] **Step 5: Owner input required** — Host = Cloudflare Pages；域名 = `refind.cloud`（建议 `app.refind.cloud`）；解析默认 Soft A。NS 已在阿里云改为 Cloudflare，域名 **Active**。
 
-- [ ] **Step 6: Deploy preview** — Cloudflare Pages 连接 GitHub；Root `refind-demo`；`npm run build:web`；输出 `dist/client`；设置 `VITE_SUPABASE_*`。
+- [x] **Step 6: Deploy preview** — Cloudflare Pages `refind` / `refind-bsm.pages.dev`；Root `refind-demo`；`build:web` / vite build；`VITE_SUPABASE_*` 已配。
 
-- [ ] **Step 7: Bind custom domain** — DNS CNAME/A per host docs; optional Cloudflare orange-cloud proxy.
+- [x] **Step 7: Bind custom domain** — `https://www.refind.cloud`（用户选定 www）；DNS CNAME + SSL **Active**。
 
 - [ ] **Step 8: Supabase Auth URLs** — Dashboard → Authentication → URL Configuration:
-  - Site URL = `https://<custom-domain>`
-  - Redirect allow list includes `https://<custom-domain>/**` and password-reset path if used
+  - Site URL = `https://www.refind.cloud`
+  - Redirect allow list includes `https://www.refind.cloud/**` and `https://refind-bsm.pages.dev/**`
 
 **Done when:** Preview URL builds from `main`; custom domain resolves HTTPS; login page loads; anonymous key talks to Tokyo project.
 
@@ -83,20 +83,22 @@
 
 ### Task 3: Soft-launch policy for parser (decide + implement)
 
-**Two options (pick one before public invite):**
+**Decision（2026-09-23）：** 必须给外网用户用 → **B · Full**（公网 parser + 网页扫码）。
 
-| Option | Behavior | When |
-| --- | --- | --- |
-| **A · Soft** | Ship without hosted parser; link save + anonymous path; settings “连接” copy says 即将支持 / 开发机 only | Fastest invitee launch |
-| **B · Full** | Deploy `tools/platform-parser` on CN-reachable host; set `VITE_PLATFORM_PARSER_URL`; platform login B usable | Before claiming 平台连接 |
+| 项 | 状态 |
+| --- | --- |
+| 阿里云轻量 · 中国香港 · Ubuntu 24.04 · 2c2G | 已购 · `47.243.250.188` |
+| `PLATFORM_PARSER_HOST=0.0.0.0` | 代码已支持 |
+| 部署手册 | `tools/platform-parser/HOSTED.md` |
+| 网页内扫码（替代本机弹窗） | **待做** |
+| Pages `VITE_PLATFORM_PARSER_URL` | 待 parser 通后再配 |
 
-- [ ] **Step 1: Product picks A or B.**
-
-- [ ] **Step 2a (if A):** Soften Settings platform copy for production; keep `VITE_PLATFORM_PARSER_URL` empty in prod.
-
-- [ ] **Step 2b (if B):** Host parser (Fly/Railway/CVM HK); TLS; wire env; E2E 小红书/抖音 connect.
-
-**Done when:** Invite copy matches actual parse capability.
+- [x] **Step 1: Product picks A or B.** → B
+- [x] **Step 2b-infra:** 租香港机 `47.243.250.188`
+- [ ] **Step 2b-install:** 按 `HOSTED.md` 装依赖 + systemd
+- [ ] **Step 2b-dns:** `parser.refind.cloud` → 该 IP
+- [ ] **Step 2b-product:** 设置页网页扫码登录
+- [ ] **Step 2b-pages:** 配置 `VITE_PLATFORM_PARSER_URL` 并重新部署
 
 ---
 

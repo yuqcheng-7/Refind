@@ -64,4 +64,9 @@ POST /convert-office
 
 `GET /health` includes `"office_convert": true` when `soffice` is available.
 
-Keep `refind-demo/.env` → `VITE_PLATFORM_PARSER_URL=http://127.0.0.1:8787` and restart this server after installing LibreOffice.
+可选环境变量：
+
+- `PLATFORM_PARSER_HOST`（默认 `127.0.0.1`；托管时设 `0.0.0.0`）
+- `PLATFORM_PARSER_PORT`（默认 `8787`）
+
+托管部署见 [`HOSTED.md`](./HOSTED.md)。
