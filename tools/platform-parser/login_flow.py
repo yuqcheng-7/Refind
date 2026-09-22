@@ -549,9 +549,7 @@ def platform_login_ready(page: Any, platform: str, cookies: list[dict[str, Any]]
       return False
     return False
 
-  if login_page_visible(page, platform):
-    return False
-
+  # XHS: login shell often keeps "扫码登录" text after phone confirms — check APIs first.
   if platform == "xhs":
     me = fetch_xhs_me(page)
     if me and me.get("guest") is not True:
@@ -560,20 +558,75 @@ def platform_login_ready(page: Any, platform: str, cookies: list[dict[str, Any]]
     if xhs_state_logged_in(page):
       mark_login_verified(captured)
       return True
+    if login_page_visible(page, platform):
+      return False
     return False
 
   if platform == "douyin":
     if not has_meaningful_cookie(cookies, ("sessionid", "sessionid_ss")):
       return False
-    return bool(captured.get("login_verified"))
+    if captured.get("login_verified"):
+      return True
+    # Actively probe — network listener may miss post-QR XHRs in headless.
+    try:
+      resp = page.request.get(
+        "https://www.douyin.com/aweme/v1/web/user/profile/self/?device_platform=webapp&aid=6383",
+        headers={
+          "Accept": "application/json, text/plain, */*",
+          "Referer": "https://www.douyin.com/",
+        },
+        timeout=15_000,
+      )
+      if resp.status == 200:
+        body = resp.json()
+        if isinstance(body, dict) and body.get("status_code") in (0, None):
+          user = body.get("user")
+          if not isinstance(user, dict) and isinstance(body.get("data"), dict):
+            user = body["data"].get("user")
+          if isinstance(user, dict) and (user.get("uid") or nickname_from_mapping(user) or account_id_from_mapping(user)):
+            if nickname_from_mapping(user) and not captured.get("account"):
+              captured["account"] = nickname_from_mapping(user)
+            mark_login_verified(captured)
+            return True
+    except Exception:  # noqa: BLE001
+      pass
+    if login_page_visible(page, platform):
+      return False
+    return False
 
   if platform == "bilibili":
     if not has_meaningful_cookie(cookies, ("SESSDATA",), min_len=16):
       return False
     if not has_meaningful_cookie(cookies, ("DedeUserID",), min_len=1):
       return False
-    return bool(captured.get("login_verified"))
+    if captured.get("login_verified"):
+      return True
+    try:
+      resp = page.request.get(
+        "https://api.bilibili.com/x/web-interface/nav",
+        headers={
+          "Accept": "application/json, text/plain, */*",
+          "Referer": "https://www.bilibili.com/",
+        },
+        timeout=15_000,
+      )
+      if resp.status == 200:
+        body = resp.json()
+        data = body.get("data") if isinstance(body, dict) else None
+        if isinstance(data, dict) and data.get("isLogin") is True and data.get("mid"):
+          nick = normalize_display_name(data.get("uname"))
+          if nick and not captured.get("account"):
+            captured["account"] = nick
+          mark_login_verified(captured)
+          return True
+    except Exception:  # noqa: BLE001
+      pass
+    if login_page_visible(page, platform):
+      return False
+    return False
 
+  if login_page_visible(page, platform):
+    return False
   return False
 
 
@@ -670,10 +723,15 @@ def weak_account_label(platform: str, label: str) -> bool:
   # once /api/v4/me has verified the session.
   if platform == "zhihu":
     return False
-  if text.startswith(("设备 ", "会话 ")):
-    return True
+  # Cookie-derived fallbacks are acceptable after API verification (handled by caller).
+  if text.startswith(("设备 ", "会话 ", "UID ", "小红书号 ", "抖音号 ")):
+    return False
   if platform == "xhs" and text in {"小红书账号", "未获取到昵称"}:
-    return True
+    return False
+  if platform == "douyin" and text in {"抖音账号", "未获取到昵称"}:
+    return False
+  if platform == "bilibili" and text in {"B 站账号", "未获取到昵称"}:
+    return False
   return False
 
 
@@ -1287,8 +1345,10 @@ def default_playwright_runner(
         ensure_login_surface(page, platform, url)
 
       emit_qr()
+      qr_shown_at = time.time() if last_qr else 0.0
 
       ready_streak = 0
+      nudged_home = False
       closed_hint = (
         "登录窗口已关闭。请重新点击「连接」并完成扫码；"
         "知乎会复用本机登录配置，成功保存后关闭窗口不会退出拾藏登录态。"
@@ -1310,14 +1370,43 @@ def default_playwright_runner(
         except Exception:  # noqa: BLE001
           pass
         if not last_qr or ready_streak == 0:
+          before = last_qr
           emit_qr()
+          if last_qr and not before:
+            qr_shown_at = time.time()
         cookies = context.cookies()
+
+        # After phone confirms QR, headless pages often stay on the login shell.
+        # Nudge once to home so me/profile APIs pick up the new session.
+        # (XHS guest also has web_session — wait until QR has been shown a few seconds.)
+        should_nudge = False
+        if HEADLESS and not nudged_home and not captured.get("login_verified"):
+          if platform == "xhs" and last_qr and qr_shown_at and (time.time() - qr_shown_at) >= 10:
+            should_nudge = True
+          elif platform == "douyin" and has_meaningful_cookie(cookies, ("sessionid", "sessionid_ss")):
+            should_nudge = True
+          elif platform == "zhihu" and has_meaningful_cookie(cookies, ("z_c0",), min_len=16):
+            should_nudge = True
+          elif (
+            platform == "bilibili"
+            and has_meaningful_cookie(cookies, ("SESSDATA",), min_len=16)
+            and has_meaningful_cookie(cookies, ("DedeUserID",), min_len=1)
+          ):
+            should_nudge = True
+        if should_nudge:
+          nudged_home = True
+          try:
+            page.goto(home, wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_timeout(1000)
+          except Exception:  # noqa: BLE001
+            pass
+
         if platform_login_ready(page, platform, cookies, captured):
           ready_streak += 1
         else:
           ready_streak = 0
 
-        if ready_streak >= 3:
+        if ready_streak >= 2:
           fresh = context.cookies()
           if not verify_authenticated_session(platform, page, fresh, captured):
             ready_streak = 0
@@ -1335,12 +1424,26 @@ def default_playwright_runner(
                 f"知乎用户 {str(me.get('url_token') or '')[:16]}".strip()
               )
             account = str(account or "").strip() or "知乎账号"
+          if not str(account or "").strip() and captured.get("login_verified"):
+            account = {
+              "xhs": "小红书账号",
+              "douyin": "抖音账号",
+              "zhihu": "知乎账号",
+              "bilibili": "B 站账号",
+            }.get(platform, "已登录账号")
           if weak_account_label(platform, account):
             page.wait_for_timeout(1500)
             better = capture_account_after_login(page, platform, context.cookies(), captured)
             if better and not weak_account_label(platform, better):
               account = better
-            elif weak_account_label(platform, account):
+            elif captured.get("login_verified"):
+              account = better or account or {
+                "xhs": "小红书账号",
+                "douyin": "抖音账号",
+                "zhihu": "知乎账号",
+                "bilibili": "B 站账号",
+              }.get(platform, "已登录账号")
+            else:
               ready_streak = 0
               page.wait_for_timeout(1200)
               continue
@@ -1350,7 +1453,7 @@ def default_playwright_runner(
             page.wait_for_timeout(1200)
             continue
           return finish(account, fresh)
-        page.wait_for_timeout(1200)
+        page.wait_for_timeout(1000)
       close_browser()
       raise TimeoutError("登录超时，请重试并完成扫码")
     except Exception:
