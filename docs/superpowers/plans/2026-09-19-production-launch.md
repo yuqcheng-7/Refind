@@ -90,15 +90,17 @@
 | 阿里云轻量 · 中国香港 · Ubuntu 24.04 · 2c2G | 已购 · `47.243.250.188` |
 | `PLATFORM_PARSER_HOST=0.0.0.0` | 代码已支持 |
 | 部署手册 | `tools/platform-parser/HOSTED.md` |
-| 网页内扫码（替代本机弹窗） | **待做** |
-| Pages `VITE_PLATFORM_PARSER_URL` | 待 parser 通后再配 |
+| 网页内扫码（替代本机弹窗） | **已实现**（`login_flow` headless + Settings 弹窗） |
+| Pages `VITE_PLATFORM_PARSER_URL` | 已配 `parser.refind.cloud` / 公网 IP 后需确认 redeploy |
 
 - [x] **Step 1: Product picks A or B.** → B
 - [x] **Step 2b-infra:** 租香港机 `47.243.250.188`
-- [ ] **Step 2b-install:** 按 `HOSTED.md` 装依赖 + systemd
-- [ ] **Step 2b-dns:** `parser.refind.cloud` → 该 IP
-- [ ] **Step 2b-product:** 设置页网页扫码登录
-- [ ] **Step 2b-pages:** 配置 `VITE_PLATFORM_PARSER_URL` 并重新部署
+- [x] **Step 2b-install:** 按 `HOSTED.md` 装依赖 + systemd
+- [x] **Step 2b-dns:** `parser.refind.cloud` → 该 IP
+- [x] **Step 2b-product:** 设置页网页扫码登录
+- [x] **Step 2b-pages:** 配置 `VITE_PLATFORM_PARSER_URL` 并重新部署
+
+**上线后机器侧还需一次：** `git pull` + systemd 增加 `PLATFORM_LOGIN_HEADLESS=1` 后 `restart`。
 
 ---
 
