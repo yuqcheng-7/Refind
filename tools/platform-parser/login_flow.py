@@ -109,6 +109,7 @@ class LoginJob:
   session_payload: str | None = None
   error: str = ""
   qr_image_base64: str = ""
+  progress: str = ""
   created_at: float = field(default_factory=time.time)
   consumed_payload: bool = False
 
@@ -643,7 +644,7 @@ def verify_authenticated_session(
 
   if platform == "xhs":
     me = fetch_xhs_me(page)
-    return bool(me and me.get("guest") is False and (me.get("user_id") or me.get("red_id")))
+    return bool(me and me.get("guest") is False and (me.get("user_id") or me.get("red_id"))) or xhs_state_logged_in(page)
 
   if platform == "douyin":
     if not has_meaningful_cookie(cookies, ("sessionid", "sessionid_ss")):
@@ -967,6 +968,7 @@ def snapshot_job(login_id: str) -> dict[str, Any] | None:
       "session_payload": payload,
       "error": job.error,
       "qr_image_base64": job.qr_image_base64 or "",
+      "progress": job.progress or "",
     }
 
 
@@ -993,6 +995,24 @@ def _wait_until_user_closes_browser(
     except Exception:  # noqa: BLE001
       break
   # Caller closes the browser/context; do not close here when using persistent profiles.
+
+
+def page_login_progress(page: Any) -> str:
+  """Best-effort DOM signal after the phone interacts with the QR."""
+  try:
+    return str(
+      page.evaluate(
+        """() => {
+          const t = document.body?.innerText || '';
+          if (/登录成功|已成功登录|登录完成/.test(t)) return 'confirmed';
+          if (/扫码成功|已扫描|请在手机上确认|确认登录|扫码后点击确认/.test(t)) return 'scanned';
+          return '';
+        }"""
+      )
+      or ""
+    )
+  except Exception:  # noqa: BLE001
+    return ""
 
 
 def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
@@ -1190,6 +1210,7 @@ def default_playwright_runner(
   timeout_sec: float,
   on_authenticated: Callable[[dict[str, Any]], None] | None = None,
   on_qr: Callable[[str], None] | None = None,
+  on_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
   try:
     from playwright.sync_api import sync_playwright
@@ -1227,6 +1248,14 @@ def default_playwright_runner(
     except Exception:  # noqa: BLE001
       pass
     browser = None
+
+  def emit_progress(msg: str) -> None:
+    if on_progress is None:
+      return
+    try:
+      on_progress(str(msg or ""))
+    except Exception:  # noqa: BLE001
+      pass
 
   def emit_qr() -> None:
     nonlocal last_qr
@@ -1361,19 +1390,31 @@ def default_playwright_runner(
         ensure_login_surface(page, platform, url)
 
       # Burst-capture QR so the web modal fills ASAP (don't wait for the slow poll loop).
-      qr_shown_at = 0.0
+      session_fingerprint = ""
+      scan_seen_at = 0.0
       for _ in range(24):
         emit_qr()
         if last_qr:
-          qr_shown_at = time.time()
           break
         try:
           page.wait_for_timeout(250)
         except Exception:  # noqa: BLE001
           break
+      try:
+        session_fingerprint = "|".join(
+          sorted(
+            f"{c.get('name')}={str(c.get('value') or '')[:24]}"
+            for c in (context.cookies() if context is not None else [])
+            if str(c.get("name") or "") in {
+              "web_session", "a1", "sessionid", "sessionid_ss", "z_c0", "SESSDATA", "DedeUserID",
+            }
+          )
+        )
+      except Exception:  # noqa: BLE001
+        session_fingerprint = ""
+      emit_progress("请用手机 App 扫描二维码")
 
       ready_streak = 0
-      nudged_home = False
       closed_hint = (
         "登录窗口已关闭。请重新点击「连接」并完成扫码；"
         "知乎会复用本机登录配置，成功保存后关闭窗口不会退出拾藏登录态。"
@@ -1395,39 +1436,48 @@ def default_playwright_runner(
         except Exception:  # noqa: BLE001
           pass
         if not last_qr or ready_streak == 0:
-          before = last_qr
           emit_qr()
-          if last_qr and not before:
-            qr_shown_at = time.time()
         cookies = context.cookies()
 
-        # After phone confirms QR, headless pages often stay on the login shell.
-        # Nudge once to home so me/profile APIs pick up the new session.
-        # (XHS guest also has web_session — wait until QR has been shown a few seconds.)
-        should_nudge = False
-        if HEADLESS and not nudged_home and not captured.get("login_verified"):
-          if platform == "xhs" and last_qr and qr_shown_at and (time.time() - qr_shown_at) >= 10:
-            should_nudge = True
-          elif platform == "douyin" and has_meaningful_cookie(cookies, ("sessionid", "sessionid_ss")):
-            should_nudge = True
-          elif platform == "zhihu" and has_meaningful_cookie(cookies, ("z_c0",), min_len=16):
-            should_nudge = True
-          elif (
-            platform == "bilibili"
-            and has_meaningful_cookie(cookies, ("SESSDATA",), min_len=16)
-            and has_meaningful_cookie(cookies, ("DedeUserID",), min_len=1)
-          ):
-            should_nudge = True
-        if should_nudge:
-          nudged_home = True
-          try:
-            page.goto(home, wait_until="domcontentloaded", timeout=45_000)
-            page.wait_for_timeout(1000)
-          except Exception:  # noqa: BLE001
-            pass
+        # NEVER navigate away from the login page while waiting for QR confirm —
+        # that kills the platform's scan-status polling and leaves the phone
+        # "logged in" while this browser never receives the session.
+
+        progress = page_login_progress(page)
+        if progress == "scanned":
+          if not scan_seen_at:
+            scan_seen_at = time.time()
+          emit_progress("已扫码，请在手机上确认登录")
+        elif progress == "confirmed":
+          if not scan_seen_at:
+            scan_seen_at = time.time()
+          emit_progress("手机已确认，正在同步登录态…")
+
+        try:
+          fp_now = "|".join(
+            sorted(
+              f"{c.get('name')}={str(c.get('value') or '')[:24]}"
+              for c in cookies
+              if str(c.get("name") or "") in {
+                "web_session", "a1", "sessionid", "sessionid_ss", "z_c0", "SESSDATA", "DedeUserID",
+              }
+            )
+          )
+        except Exception:  # noqa: BLE001
+          fp_now = session_fingerprint
+        if session_fingerprint and fp_now and fp_now != session_fingerprint:
+          emit_progress("检测到会话更新，正在校验…")
+          session_fingerprint = fp_now
+
+        if scan_seen_at and not captured.get("login_verified") and (time.time() - scan_seen_at) > 50:
+          raise TimeoutError(
+            "手机已确认登录，但网页端未拿到会话。请关闭弹窗后重试；"
+            "若反复失败，可能是平台拦截了服务器浏览器。"
+          )
 
         if platform_login_ready(page, platform, cookies, captured):
           ready_streak += 1
+          emit_progress("登录已确认，正在保存…")
         else:
           ready_streak = 0
 
@@ -1435,12 +1485,12 @@ def default_playwright_runner(
           fresh = context.cookies()
           if not verify_authenticated_session(platform, page, fresh, captured):
             ready_streak = 0
-            page.wait_for_timeout(1200)
+            page.wait_for_timeout(800)
             continue
           for _ in range(8):
             if captured.get("account") or captured.get("account_id"):
               break
-            page.wait_for_timeout(500)
+            page.wait_for_timeout(400)
           account = capture_account_after_login(page, platform, fresh, captured)
           if platform == "zhihu" and not str(account or "").strip():
             me = fetch_zhihu_me(page)
@@ -1457,7 +1507,7 @@ def default_playwright_runner(
               "bilibili": "B 站账号",
             }.get(platform, "已登录账号")
           if weak_account_label(platform, account):
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(1000)
             better = capture_account_after_login(page, platform, context.cookies(), captured)
             if better and not weak_account_label(platform, better):
               account = better
@@ -1470,15 +1520,16 @@ def default_playwright_runner(
               }.get(platform, "已登录账号")
             else:
               ready_streak = 0
-              page.wait_for_timeout(1200)
+              page.wait_for_timeout(800)
               continue
           fresh = context.cookies()
           if not verify_authenticated_session(platform, page, fresh, captured):
             ready_streak = 0
-            page.wait_for_timeout(1200)
+            page.wait_for_timeout(800)
             continue
+          emit_progress("登录成功")
           return finish(account, fresh)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(800)
       close_browser()
       raise TimeoutError("登录超时，请重试并完成扫码")
     except Exception:
@@ -1527,6 +1578,11 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
       return
     mark_job(login_id, qr_image_base64=str(data_url or ""))
 
+  def on_progress(msg: str) -> None:
+    if early_done["value"]:
+      return
+    mark_job(login_id, progress=str(msg or ""))
+
   try:
     import inspect
 
@@ -1536,6 +1592,8 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
       kwargs["on_authenticated"] = on_authenticated
     if "on_qr" in params:
       kwargs["on_qr"] = on_qr
+    if "on_progress" in params:
+      kwargs["on_progress"] = on_progress
     result = runner(platform, timeout_sec, **kwargs)
     if early_done["value"]:
       return

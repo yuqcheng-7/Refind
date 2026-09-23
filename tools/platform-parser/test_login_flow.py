@@ -135,7 +135,8 @@ class LoginFlowTests(unittest.TestCase):
   def test_zhihu_weak_account_label_allowed(self) -> None:
     self.assertFalse(login_flow.weak_account_label("zhihu", "会话 abcdefghij"))
     self.assertTrue(login_flow.weak_account_label("zhihu", ""))
-    self.assertTrue(login_flow.weak_account_label("xhs", "会话 abcdefghij"))
+    # Cookie-derived labels are accepted once the session is API-verified.
+    self.assertFalse(login_flow.weak_account_label("xhs", "会话 abcdefghij"))
 
   def test_start_login_accepts_zhihu_with_fake_runner(self) -> None:
     def fake_runner(platform: str, timeout_sec: float, on_authenticated=None):

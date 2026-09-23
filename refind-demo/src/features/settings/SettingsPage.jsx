@@ -107,6 +107,10 @@ export function SettingsPage({
           onUpdate: (snap) => {
             if (snap?.qrImageBase64) {
               setLoginQr({ platformCode, image: snap.qrImageBase64, waiting: true });
+            }
+            if (snap?.progress) {
+              setNotice(snap.progress);
+            } else if (snap?.qrImageBase64) {
               setNotice('请用手机 App 扫描下方二维码完成登录。');
             }
           },

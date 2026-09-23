@@ -108,6 +108,7 @@ export async function pollPlatformLogin(loginId, { parserBaseUrl } = {}) {
     sessionPayload: data?.session_payload || '',
     error: data?.error || '',
     qrImageBase64: data?.qr_image_base64 || '',
+    progress: data?.progress || '',
   };
 }
 
