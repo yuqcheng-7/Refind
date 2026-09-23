@@ -115,18 +115,38 @@ function NavItem({ icon: Icon, label, active, onClick, onMouseEnter, onMouseLeav
     </button>
   );
 }
-function Toast({ text, onClose, durationMs = 1600 }) {
+function Toast({ text, onClose, durationMs = 2200 }) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!text) return undefined;
-    const timer = window.setTimeout(() => onClose?.(), durationMs);
+    const timer = window.setTimeout(() => {
+      onCloseRef.current?.();
+    }, durationMs);
     return () => window.clearTimeout(timer);
   }, [text, durationMs]);
 
-  return (
-    <div className="home-notice" role="status">
+  if (!text) return null;
+
+  return createPortal(
+    <div
+      className="home-notice"
+      role="status"
+      onClick={() => onCloseRef.current?.()}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onCloseRef.current?.();
+        }
+      }}
+      tabIndex={0}
+      title="点击关闭"
+    >
       <Check size={15} />
       {text}
-    </div>
+    </div>,
+    document.body,
   );
 }
 function Citation({ label }) {
@@ -1980,7 +2000,6 @@ export function App() {
         </>
       )}
       {!showHomeChat && <HomeComposer bases={bases} availableTags={homeTagOptions} onSubmit={submitHomeQuestion} scope={homeScope} onScopeChange={setHomeScope} sendArrow="right" introBeam />}
-      {notice && <Toast text={notice} onClose={() => setNotice('')} />}
     </section>}
     {!settingsOpen && activeNav === '笔记' && <section className="workspace-canvas notes-canvas"><NotesWorkspace notes={notes} setNotes={setNotes} cards={cards} notebooks={notebooks} bases={knowledgeBases} notice={say} onNoteSynced={() => setMaterialsEpoch((value) => value + 1)} onOpenMaterial={(materialId) => window.open(getMaterialPreviewUrl(materialId), '_blank', 'noopener,noreferrer')} onDeleteCard={async (cardId) => {
       try {
@@ -1997,7 +2016,7 @@ export function App() {
       } catch {
         say('删除灵感卡片失败，请稍后重试。');
       }
-    }} />{notice && <Toast text={notice} onClose={() => setNotice('')} />}</section>}
+    }} /></section>}
     {!settingsOpen && activeNav === '知识库' && <section className="workspace-canvas knowledge-canvas">
       <div className="knowledge-layout">
         <div className="materials-column">
@@ -2245,9 +2264,10 @@ export function App() {
               ? <HomeShareBar selectedCount={kbShareSelected.length} onCopyLink={copyKbShareLink} onCancel={exitKbShare} />
               : <Composer key={selectedKnowledgeBase?.id || 'kb'} compact base={base} bases={bases} availableTags={kbTagOptions} onBase={setBase} onSubmit={submitKbQuestion} />}
         </aside>
-      </div>{notice && <Toast text={notice} onClose={() => setNotice('')} />}
+      </div>
     </section>}
     {showCreate && <div className="modal-layer"><form className="create-modal" onSubmit={createBase}><button className="modal-close" type="button" onClick={() => setShowCreate(false)}><X size={17} /></button><h2>新建知识库</h2><p>创建一个主题空间，用来归集和提问。</p><label>知识库名称<input value={newBase} autoFocus onChange={(event) => setNewBase(event.target.value)} placeholder="例如：产品与设计资料" /></label><div><button type="button" onClick={() => setShowCreate(false)}>取消</button><button type="submit">创建</button></div></form></div>}
+    {notice ? <Toast text={notice} onClose={() => setNotice('')} /> : null}
     {kbBaseMenu && createPortal(
       <div
         className="home-history-context-menu"
