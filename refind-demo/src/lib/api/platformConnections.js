@@ -1,7 +1,13 @@
 import { supabase } from '../supabaseClient.js';
 import { formatRelativeDateTime } from '../formatTime.js';
-import { assertLocalParserSession, logoutPlatformParser, fetchLocalSessionHealth } from './platformLogin.js';
 import {
+  assertLocalParserSession,
+  fetchLocalSessionHealth,
+  importPlatformCookies,
+  logoutPlatformParser,
+} from './platformLogin.js';
+import {
+  decodeDevSession,
   encodeDevSession,
   hasValidStoredSession,
   sessionPayloadHasAuthCookies,
@@ -55,7 +61,11 @@ export function isConnectionExpired(row, now = Date.now()) {
 export function isLikelyExpiredSessionError(detail = '', { usedSavedSession = false } = {}) {
   if (!usedSavedSession) return false;
   const text = String(detail || '');
-  return /登录|未登录|Cookie|会话|过期|重新连接|扫码|auth|expired|guest/i.test(text);
+  // Content/URL failures while a session was used must NOT count as expiry —
+  // otherwise we clear the shared hosted session and later pastes all fail.
+  if (/已使用本机.+?(登录)?会话，但仍未能解析/.test(text)) return false;
+  if (/仍未能解析该(链接|视频)/.test(text)) return false;
+  return /未登录|会话过期|Cookie\s*无效|没有可用会话\s*Cookie|请重新连接|扫码登录后重试|session_invalid|expired|guest-only|guest\b/i.test(text);
 }
 
 function mapConnection(row) {
@@ -148,20 +158,34 @@ async function reconcileMissingLocalSessions(rows) {
   const verified = health.verified || {};
   const details = health.details || {};
 
-  const missing = (rows || []).filter((row) => {
+  const restoredCodes = new Set();
+  const missing = [];
+  for (const row of rows || []) {
     if (row.status !== 'connected' || !supportsRealLogin(row.platform_code) || !hasValidStoredSession(row)) {
-      return false;
+      continue;
     }
     const code = row.platform_code;
-    if (presence[code] !== true) return true;
-    // Only drop when the platform explicitly rejects the cookie — not on transient network errors.
-    if (verified[code] === false && details[code] === 'session_invalid') return true;
-    return false;
-  });
+    const absent = presence[code] !== true;
+    const rejected = verified[code] === false && details[code] === 'session_invalid';
+    if (!absent && !rejected) continue;
+
+    // Prefer re-pushing this user's Cookie over wiping the shared hosted session.
+    if (absent && !rejected) {
+      try {
+        const restored = await restoreParserSessionFromStore(code);
+        if (restored) {
+          restoredCodes.add(code);
+          continue;
+        }
+      } catch {
+        // Fall through to disconnect this user only.
+      }
+    }
+    missing.push(row);
+  }
   if (!missing.length) return rows || [];
 
-  const codes = [...new Set(missing.map((row) => row.platform_code).filter(Boolean))];
-  await Promise.all(codes.map((code) => logoutPlatformParser(code)));
+  // Only disconnect this user's DB row — do not logout shared parser sessions.
   return disconnectConnectionRows(missing);
 }
 
@@ -285,11 +309,40 @@ export async function disconnectPlatform(platformCode) {
   };
 }
 
-/** Mark a platform disconnected after session auth failure / soft expiry. */
+/**
+ * Mark a platform disconnected after session auth failure / soft expiry.
+ * Do NOT logout the hosted parser here: sessions are shared on soft-launch
+ * hardware, and one user's failed paste must not wipe everyone else's Cookie.
+ */
 export async function markPlatformSessionInvalid(platformCode) {
-  const result = await disconnectPlatform(platformCode);
-  if (supportsRealLogin(platformCode)) {
-    await logoutPlatformParser(platformCode);
-  }
-  return result;
+  return disconnectPlatform(platformCode);
+}
+
+/**
+ * Push this user's saved Cookie back onto the hosted/local parser before parse.
+ * Soft-launch parser uses one shared sessions/{platform}.json — restore avoids
+ * "first paste works, later pastes fail" when the file was cleared or overwritten.
+ */
+export async function restoreParserSessionFromStore(platformCode) {
+  const code = String(platformCode || '').trim();
+  if (!supportsRealLogin(code)) return false;
+
+  const userId = await getCurrentUserId();
+  const { data, error } = await supabase
+    .from('platform_connections')
+    .select('platform_code, status, encrypted_session, account_display_name, expires_at, last_verified_at')
+    .eq('user_id', userId)
+    .eq('platform_code', code)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data || isConnectionExpired(data) || !hasValidStoredSession(data)) return false;
+
+  const decoded = decodeDevSession(data.encrypted_session);
+  const cookies = typeof decoded?.cookies === 'string' ? decoded.cookies.trim() : '';
+  if (!cookies) return false;
+
+  await importPlatformCookies(code, cookies, {
+    accountDisplayName: data.account_display_name || decoded.account_display_name || '',
+  });
+  return true;
 }

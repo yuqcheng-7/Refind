@@ -29,7 +29,13 @@ const upsertSelect = vi.fn(() => ({ single: upsertSingle }));
 const upsert = vi.fn(() => ({ select: upsertSelect }));
 
 const selectOrder = vi.fn();
-const select = vi.fn(() => ({ order: selectOrder }));
+const selectMaybeSingle = vi.fn(async () => ({ data: null, error: null }));
+const selectEq2 = vi.fn(() => ({ maybeSingle: selectMaybeSingle }));
+const selectEq1 = vi.fn(() => ({ eq: selectEq2 }));
+const select = vi.fn(() => ({
+  order: selectOrder,
+  eq: selectEq1,
+}));
 
 const from = vi.fn(() => ({
   select,
@@ -48,6 +54,7 @@ vi.mock('../supabaseClient.js', () => ({
 
 vi.mock('./platformLogin.js', () => ({
   logoutPlatformParser: vi.fn(async () => {}),
+  importPlatformCookies: vi.fn(async () => ({ accountDisplayName: '知夏', verified: true })),
   fetchLocalSessionPresence: vi.fn(async () => ({
     xhs: true,
     douyin: true,
@@ -68,6 +75,7 @@ vi.mock('./platformLogin.js', () => ({
       bilibili: true,
     },
     accounts: {},
+    details: {},
   })),
   assertLocalParserSession: vi.fn(async () => {}),
 }));
@@ -81,7 +89,7 @@ import {
   PLATFORM_SESSION_TTL_MS,
 } from './platformConnections.js';
 import { encodeDevSession } from './platformSession.js';
-import { logoutPlatformParser, fetchLocalSessionPresence } from './platformLogin.js';
+import { logoutPlatformParser, fetchLocalSessionHealth, importPlatformCookies } from './platformLogin.js';
 
 describe('platform connection expiry', () => {
   beforeEach(() => {
@@ -139,8 +147,18 @@ describe('platform connection expiry', () => {
     expect(logoutPlatformParser).toHaveBeenCalledWith('xhs');
   });
 
-  it('disconnects when local session files are missing', async () => {
-    fetchLocalSessionPresence.mockResolvedValueOnce({ xhs: false, douyin: true });
+  it('restores missing local sessions from stored cookies instead of disconnecting', async () => {
+    fetchLocalSessionHealth.mockResolvedValueOnce({
+      sessions: { xhs: false, douyin: true, zhihu: true, bilibili: true },
+      verified: { xhs: false, douyin: true, zhihu: true, bilibili: true },
+      accounts: {},
+      details: { xhs: 'no_local_session' },
+    });
+
+    const validSession = encodeDevSession({
+      cookies: `a1=${'x'.repeat(24)}; web_session=abc`,
+      platform: 'xhs',
+    });
     selectOrder.mockResolvedValue({
       data: [{
         id: 'row-xhs',
@@ -150,18 +168,34 @@ describe('platform connection expiry', () => {
         last_verified_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + PLATFORM_SESSION_TTL_MS).toISOString(),
-        encrypted_session: encodeDevSession({ cookies: 'web_session=guest-only', platform: 'xhs' }),
+        encrypted_session: validSession,
       }],
+      error: null,
+    });
+    selectMaybeSingle.mockResolvedValueOnce({
+      data: {
+        platform_code: 'xhs',
+        status: 'connected',
+        encrypted_session: validSession,
+        account_display_name: '知夏',
+        expires_at: new Date(Date.now() + PLATFORM_SESSION_TTL_MS).toISOString(),
+        last_verified_at: new Date().toISOString(),
+      },
       error: null,
     });
 
     const rows = await listPlatformConnections();
-    expect(rows.find((row) => row.code === 'xhs').connection.status).toBe('disconnected');
-    expect(update).toHaveBeenCalled();
+    expect(rows.find((row) => row.code === 'xhs').connection.status).toBe('connected');
+    expect(importPlatformCookies).toHaveBeenCalledWith(
+      'xhs',
+      expect.stringContaining('web_session=abc'),
+      expect.any(Object),
+    );
+    expect(logoutPlatformParser).not.toHaveBeenCalled();
   });
 
   it('disconnects legacy demo zhihu/bilibili rows even when parser is offline', async () => {
-    fetchLocalSessionPresence.mockResolvedValueOnce(null);
+    fetchLocalSessionHealth.mockResolvedValueOnce(null);
     selectOrder.mockResolvedValue({
       data: [
         {
@@ -215,15 +249,24 @@ describe('platform connection expiry', () => {
     expect(expiresAt).toBeGreaterThan(Date.now());
   });
 
-  it('marks session invalid and logs out parser', async () => {
+  it('marks session invalid in DB without clearing shared parser cookies', async () => {
     await markPlatformSessionInvalid('douyin');
     expect(update).toHaveBeenCalled();
-    expect(logoutPlatformParser).toHaveBeenCalledWith('douyin');
+    expect(logoutPlatformParser).not.toHaveBeenCalled();
   });
 
-  it('recognizes session auth failures', () => {
+  it('recognizes session auth failures without false positives', () => {
     expect(isLikelyExpiredSessionError('请重新连接抖音', { usedSavedSession: true })).toBe(true);
+    expect(isLikelyExpiredSessionError('本机解析器还没有可用会话 Cookie', { usedSavedSession: true })).toBe(true);
     expect(isLikelyExpiredSessionError('网络超时', { usedSavedSession: true })).toBe(false);
     expect(isLikelyExpiredSessionError('请重新连接', { usedSavedSession: false })).toBe(false);
+    expect(isLikelyExpiredSessionError(
+      '已使用本机知乎登录会话，但仍未能解析该链接。请确认链接为专栏',
+      { usedSavedSession: true },
+    )).toBe(false);
+    expect(isLikelyExpiredSessionError(
+      '知乎需要登录态才能抓取。请在设置页连接知乎完成本机扫码登录后重试',
+      { usedSavedSession: true },
+    )).toBe(true);
   });
 });

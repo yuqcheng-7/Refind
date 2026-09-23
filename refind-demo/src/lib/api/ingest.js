@@ -4,8 +4,10 @@ import {
   isLikelyExpiredSessionError,
   listPlatformConnections,
   markPlatformSessionInvalid,
+  restoreParserSessionFromStore,
 } from './platformConnections.js';
 import { fetchLocalSessionHealth, fetchLocalSessionPresence } from './platformLogin.js';
+import { supportsRealLogin } from './platformSession.js';
 
 const terminalStatuses = new Set(['ready', 'failed', 'link_only']);
 
@@ -248,6 +250,14 @@ export async function pollMaterialStatus(materialId, { intervalMs = 800, timeout
 }
 
 export async function parseAndPollMaterial(materialId, { force = false, sourceUrl = '' } = {}) {
+  const platform = sourceUrl ? inferPlatformFromUrl(sourceUrl) : '';
+  if (sourceUrl && supportsRealLogin(platform)) {
+    try {
+      await restoreParserSessionFromStore(platform);
+    } catch {
+      // Best-effort: still attempt parse with whatever session the parser has.
+    }
+  }
   const useSavedSession = sourceUrl ? await shouldUseSavedSession(sourceUrl) : false;
   const prefetchedRaw = sourceUrl
     ? await prefetchLinkContent(sourceUrl, { useSavedSession })
