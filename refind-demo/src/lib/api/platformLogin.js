@@ -170,15 +170,17 @@ export async function importPlatformCookies(platformCode, cookieHeader, {
 
 export async function waitForPlatformLogin(platformCode, {
   parserBaseUrl,
-  intervalMs = 1500,
+  intervalMs = 800,
   timeoutMs = 180_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   onUpdate,
 } = {}) {
   const { loginId, parserBaseUrl: base } = await startPlatformLogin(platformCode, { parserBaseUrl });
   const started = Date.now();
+  let sawQr = false;
   while (Date.now() - started < timeoutMs) {
     const snap = await pollPlatformLogin(loginId, { parserBaseUrl: base });
+    if (snap?.qrImageBase64) sawQr = true;
     if (typeof onUpdate === 'function') {
       try {
         onUpdate(snap);
@@ -199,7 +201,8 @@ export async function waitForPlatformLogin(platformCode, {
     if (snap.status === 'failed' || snap.status === 'expired') {
       throw new Error(snap.error || (snap.status === 'expired' ? '登录超时，请重试' : '登录失败'));
     }
-    await sleep(intervalMs);
+    // Poll faster until the QR appears, then ease off.
+    await sleep(sawQr ? intervalMs : Math.min(intervalMs, 400));
   }
   throw new Error('登录超时，请重试');
 }

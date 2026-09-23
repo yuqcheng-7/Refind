@@ -997,18 +997,21 @@ def _wait_until_user_closes_browser(
 
 def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
   """Open the visible login UI (QR / phone) when landing pages hide it."""
+  # Keep waits short — hosted users stare at an empty QR modal until we emit.
+  settle_ms = 250 if HEADLESS else 800
+  click_pause_ms = 350 if HEADLESS else 800
   try:
-    page.wait_for_timeout(800)
+    page.wait_for_timeout(settle_ms)
   except Exception:  # noqa: BLE001
     pass
 
   if platform == "xhs":
     try:
       if page.url and "login" not in page.url and "signin" not in page.url:
-        page.goto("https://www.xiaohongshu.com/login", wait_until="domcontentloaded", timeout=45_000)
+        page.goto("https://www.xiaohongshu.com/login", wait_until="domcontentloaded", timeout=30_000)
     except Exception:  # noqa: BLE001
       try:
-        page.goto(start_url, wait_until="domcontentloaded", timeout=45_000)
+        page.goto(start_url, wait_until="domcontentloaded", timeout=30_000)
       except Exception:  # noqa: BLE001
         pass
 
@@ -1018,13 +1021,13 @@ def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
     "登录",
   )
   try:
-    page.wait_for_timeout(600)
+    page.wait_for_timeout(settle_ms)
     for label in click_labels:
       loc = page.get_by_text(label, exact=False).first
       if loc.count() > 0:
         try:
-          loc.click(timeout=2500)
-          page.wait_for_timeout(800)
+          loc.click(timeout=1500)
+          page.wait_for_timeout(click_pause_ms)
           break
         except Exception:  # noqa: BLE001
           continue
@@ -1037,8 +1040,8 @@ def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
       loc = page.locator(selector).first
       if loc.count() > 0:
         try:
-          loc.click(timeout=2000)
-          page.wait_for_timeout(600)
+          loc.click(timeout=1200)
+          page.wait_for_timeout(click_pause_ms)
           break
         except Exception:  # noqa: BLE001
           continue
@@ -1060,7 +1063,7 @@ def capture_qr_image(page: Any, platform: str) -> str:
       if loc.count() == 0:
         continue
       try:
-        if not loc.is_visible(timeout=800):
+        if not loc.is_visible(timeout=300):
           continue
       except Exception:  # noqa: BLE001
         continue
@@ -1305,17 +1308,30 @@ def default_playwright_runner(
         page = context.pages[0] if context.pages else context.new_page()
         seeded = True  # profile itself carries prior cookies
       else:
+        chrome_args = []
+        if HEADLESS:
+          chrome_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-extensions",
+            "--disable-background-networking",
+            "--disable-default-apps",
+            "--mute-audio",
+          ]
         launch_kwargs = {
           "headless": HEADLESS,
-          "args": ["--disable-blink-features=AutomationControlled"] if HEADLESS else [],
+          "args": chrome_args,
         }
         browser = playwright.chromium.launch(**launch_kwargs)
         context = browser.new_context(
           locale="zh-CN",
           user_agent=session_ua,
-          viewport={"width": 1280, "height": 860},
+          viewport={"width": 1100, "height": 760},
         )
-        seeded = seed_saved_cookies(context, platform)
+        # Hosted reconnect: skip slow cookie-seed navigation; QR path is the product UX.
+        seeded = False if HEADLESS else seed_saved_cookies(context, platform)
         page = context.new_page()
 
       def _mark_window_closed() -> None:
@@ -1326,7 +1342,7 @@ def default_playwright_runner(
       # Prefer home when we already have a profile/session so a valid login
       # shows as logged-in (not a blank sign-in page that looks like "logged out").
       start_url = home if seeded else url
-      page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+      page.goto(start_url, wait_until="domcontentloaded", timeout=35_000 if HEADLESS else 60_000)
       if seeded:
         page.wait_for_timeout(1200)
         probe_browser_session(page, platform, captured)
@@ -1344,8 +1360,17 @@ def default_playwright_runner(
       else:
         ensure_login_surface(page, platform, url)
 
-      emit_qr()
-      qr_shown_at = time.time() if last_qr else 0.0
+      # Burst-capture QR so the web modal fills ASAP (don't wait for the slow poll loop).
+      qr_shown_at = 0.0
+      for _ in range(24):
+        emit_qr()
+        if last_qr:
+          qr_shown_at = time.time()
+          break
+        try:
+          page.wait_for_timeout(250)
+        except Exception:  # noqa: BLE001
+          break
 
       ready_streak = 0
       nudged_home = False
