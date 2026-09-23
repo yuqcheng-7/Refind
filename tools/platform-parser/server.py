@@ -1246,6 +1246,18 @@ class Handler(BaseHTTPRequestHandler):
       self._json(200, {"login_id": login_id})
       return
 
+    if path.startswith("/login/") and path.endswith("/sms"):
+      from login_flow import submit_login_sms
+      login_id = path[len("/login/"):-len("/sms")].strip("/")
+      code = str(payload.get("code") or payload.get("sms_code") or "").strip()
+      try:
+        submit_login_sms(login_id, code)
+      except ValueError as exc:
+        self._json(400, {"error": str(exc)})
+        return
+      self._json(200, {"ok": True, "login_id": login_id})
+      return
+
     if path == "/logout":
       from login_flow import logout_platform
       platform = (payload.get("platform") or "").strip().lower()

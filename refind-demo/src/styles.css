@@ -1749,6 +1749,10 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .settings-qr-frame{margin:16px auto 0;width:220px;height:220px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:#f4f6f8;overflow:hidden}
 .settings-qr-frame img{width:100%;height:100%;object-fit:contain;display:block}
 .settings-qr-loading{display:inline-flex;align-items:center;gap:8px;margin:0;color:#5d6b7c;font-size:13px}
+.settings-sms-form{margin:16px 0 0;display:flex;flex-direction:column;gap:10px}
+.settings-sms-form input{height:40px;padding:0 12px;border:1px solid rgba(158,168,180,.4);border-radius:10px;font-size:16px;letter-spacing:.12em;text-align:center}
+.settings-sms-form button{height:40px;border:0;border-radius:10px;background:#1f2a37;color:#fff;font-size:14px;font-weight:600;cursor:pointer}
+.settings-sms-form button:disabled{opacity:.45;cursor:not-allowed}
 .settings-panel{display:flex;flex-direction:column;align-items:stretch;padding:0;margin:0}
 .settings-card,.platform-connection-card{margin:0;padding:0;list-style:none;border:1px solid rgba(167,174,185,.26);border-radius:14px;background:rgba(255,255,255,.78);overflow:hidden}
 .platform-connection-item{padding:14px 12px;border-top:1px solid rgba(167,174,185,.18)}

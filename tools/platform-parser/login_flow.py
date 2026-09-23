@@ -23,7 +23,7 @@ from session_store import (
   save_platform_session,
 )
 
-LOGIN_TIMEOUT_SEC = 180
+LOGIN_TIMEOUT_SEC = 240
 # Platforms that reuse a disk Chromium profile across login windows.
 # Closing the window must not wipe cookies; reconnect should open still logged-in.
 PERSISTENT_BROWSER_PLATFORMS = frozenset({"zhihu"})
@@ -110,6 +110,8 @@ class LoginJob:
   error: str = ""
   qr_image_base64: str = ""
   progress: str = ""
+  needs_sms: bool = False
+  sms_code: str = ""
   created_at: float = field(default_factory=time.time)
   consumed_payload: bool = False
 
@@ -969,7 +971,33 @@ def snapshot_job(login_id: str) -> dict[str, Any] | None:
       "error": job.error,
       "qr_image_base64": job.qr_image_base64 or "",
       "progress": job.progress or "",
+      "needs_sms": bool(job.needs_sms),
     }
+
+
+def submit_login_sms(login_id: str, code: str) -> bool:
+  """Queue an SMS / OTP code for the in-flight Playwright login job."""
+  cleaned = str(code or "").strip().replace(" ", "")
+  if not cleaned or len(cleaned) < 4 or len(cleaned) > 8 or not cleaned.isdigit():
+    raise ValueError("请输入 4–8 位数字验证码")
+  with _lock:
+    job = _jobs.get(login_id)
+    if not job or job.status != "pending":
+      raise ValueError("登录任务不存在或已结束，请重新点击连接")
+    job.sms_code = cleaned
+    job.progress = "已收到验证码，正在提交…"
+    job.needs_sms = True
+    return True
+
+
+def take_pending_sms(login_id: str) -> str:
+  with _lock:
+    job = _jobs.get(login_id)
+    if not job:
+      return ""
+    code = str(job.sms_code or "").strip()
+    job.sms_code = ""
+    return code
 
 
 BrowserRunner = Callable[..., dict[str, Any]]
@@ -1004,6 +1032,7 @@ def page_login_progress(page: Any) -> str:
       page.evaluate(
         """() => {
           const t = document.body?.innerText || '';
+          if (/验证码|短信验证|安全验证|输入验证码|获取验证码|手机号验证/.test(t)) return 'sms';
           if (/登录成功|已成功登录|登录完成/.test(t)) return 'confirmed';
           if (/扫码成功|已扫描|请在手机上确认|确认登录|扫码后点击确认/.test(t)) return 'scanned';
           return '';
@@ -1013,6 +1042,62 @@ def page_login_progress(page: Any) -> str:
     )
   except Exception:  # noqa: BLE001
     return ""
+
+
+def fill_sms_and_submit(page: Any, code: str) -> bool:
+  """Type an SMS/OTP into the visible challenge form and submit."""
+  cleaned = str(code or "").strip()
+  if not cleaned:
+    return False
+  filled = False
+  for selector in (
+    'input[placeholder*="验证码"]',
+    'input[placeholder*="动态码"]',
+    'input[name*="code" i]',
+    'input[autocomplete="one-time-code"]',
+    'input[type="tel"]',
+    'input[maxlength="6"]',
+    'input[maxlength="4"]',
+    'input[maxlength="8"]',
+  ):
+    try:
+      loc = page.locator(selector).first
+      if loc.count() == 0:
+        continue
+      try:
+        if not loc.is_visible(timeout=400):
+          continue
+      except Exception:  # noqa: BLE001
+        continue
+      loc.fill(cleaned, timeout=2500)
+      filled = True
+      break
+    except Exception:  # noqa: BLE001
+      continue
+  if not filled:
+    return False
+  for selector in (
+    'button:has-text("登录")',
+    'button:has-text("确定")',
+    'button:has-text("确认")',
+    'button:has-text("验证")',
+    'button:has-text("提交")',
+    'button:has-text("下一步")',
+    '[class*="submit"]',
+  ):
+    try:
+      loc = page.locator(selector).first
+      if loc.count() == 0:
+        continue
+      loc.click(timeout=2500)
+      return True
+    except Exception:  # noqa: BLE001
+      continue
+  try:
+    page.keyboard.press("Enter")
+    return True
+  except Exception:  # noqa: BLE001
+    return filled
 
 
 def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
@@ -1211,6 +1296,8 @@ def default_playwright_runner(
   on_authenticated: Callable[[dict[str, Any]], None] | None = None,
   on_qr: Callable[[str], None] | None = None,
   on_progress: Callable[[str], None] | None = None,
+  on_needs_sms: Callable[[bool], None] | None = None,
+  poll_sms: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
   try:
     from playwright.sync_api import sync_playwright
@@ -1254,6 +1341,14 @@ def default_playwright_runner(
       return
     try:
       on_progress(str(msg or ""))
+    except Exception:  # noqa: BLE001
+      pass
+
+  def emit_needs_sms(needed: bool) -> None:
+    if on_needs_sms is None:
+      return
+    try:
+      on_needs_sms(bool(needed))
     except Exception:  # noqa: BLE001
       pass
 
@@ -1444,6 +1539,29 @@ def default_playwright_runner(
         # "logged in" while this browser never receives the session.
 
         progress = page_login_progress(page)
+        if progress == "sms":
+          emit_needs_sms(True)
+          emit_progress("平台要求短信验证码：请查看手机短信，在弹窗中输入验证码")
+          scan_seen_at = 0.0
+          code = ""
+          if poll_sms is not None:
+            try:
+              code = str(poll_sms() or "").strip()
+            except Exception:  # noqa: BLE001
+              code = ""
+          if code:
+            emit_progress("正在提交验证码…")
+            if fill_sms_and_submit(page, code):
+              emit_needs_sms(False)
+              try:
+                page.wait_for_timeout(2000)
+              except Exception:  # noqa: BLE001
+                pass
+            else:
+              emit_progress("未能自动填入验证码，请重试输入")
+          page.wait_for_timeout(800)
+          continue
+
         if progress == "scanned":
           if not scan_seen_at:
             scan_seen_at = time.time()
@@ -1469,9 +1587,10 @@ def default_playwright_runner(
           emit_progress("检测到会话更新，正在校验…")
           session_fingerprint = fp_now
 
-        if scan_seen_at and not captured.get("login_verified") and (time.time() - scan_seen_at) > 50:
+        if scan_seen_at and not captured.get("login_verified") and (time.time() - scan_seen_at) > 70:
           raise TimeoutError(
-            "手机已确认登录，但网页端未拿到会话。请关闭弹窗后重试；"
+            "手机已确认登录，但网页端未拿到会话。"
+            "若手机收到了短信验证码，请重新连接并在弹窗中输入验证码；"
             "若反复失败，可能是平台拦截了服务器浏览器。"
           )
 
@@ -1561,6 +1680,8 @@ def _persist_login_success(login_id: str, platform: str, result: dict[str, Any])
     session_payload=json.dumps(payload, ensure_ascii=False),
     error="",
     qr_image_base64="",
+    needs_sms=False,
+    progress="登录成功",
   )
 
 
@@ -1583,6 +1704,14 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
       return
     mark_job(login_id, progress=str(msg or ""))
 
+  def on_needs_sms(needed: bool) -> None:
+    if early_done["value"]:
+      return
+    mark_job(login_id, needs_sms=bool(needed))
+
+  def poll_sms() -> str:
+    return take_pending_sms(login_id)
+
   try:
     import inspect
 
@@ -1594,6 +1723,10 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
       kwargs["on_qr"] = on_qr
     if "on_progress" in params:
       kwargs["on_progress"] = on_progress
+    if "on_needs_sms" in params:
+      kwargs["on_needs_sms"] = on_needs_sms
+    if "poll_sms" in params:
+      kwargs["poll_sms"] = poll_sms
     result = runner(platform, timeout_sec, **kwargs)
     if early_done["value"]:
       return
@@ -1601,11 +1734,11 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
   except TimeoutError as exc:
     if early_done["value"]:
       return
-    mark_job(login_id, status="expired", error=str(exc))
+    mark_job(login_id, status="expired", error=str(exc), needs_sms=False)
   except LoginWindowClosed as exc:
     if early_done["value"]:
       return
-    mark_job(login_id, status="failed", error=str(exc))
+    mark_job(login_id, status="failed", error=str(exc), needs_sms=False)
   except Exception as exc:  # noqa: BLE001
     if early_done["value"]:
       return
@@ -1615,9 +1748,10 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
         login_id,
         status="failed",
         error="登录已取消或浏览器已关闭。请重新点击「连接」并完成扫码。",
+        needs_sms=False,
       )
       return
-    mark_job(login_id, status="failed", error=str(exc) or "登录失败")
+    mark_job(login_id, status="failed", error=str(exc) or "登录失败", needs_sms=False)
 
 
 def start_login(

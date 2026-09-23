@@ -7,7 +7,7 @@ import {
   disconnectPlatform,
   listPlatformConnections,
 } from '../../lib/api/platformConnections.js';
-import { logoutPlatformParser, waitForPlatformLogin } from '../../lib/api/platformLogin.js';
+import { logoutPlatformParser, submitPlatformLoginSms, waitForPlatformLogin } from '../../lib/api/platformLogin.js';
 import { isNoLoginPlatform, supportsRealLogin } from '../../lib/api/platformSession.js';
 import { updateMyDisplayName } from '../../lib/api/profiles.js';
 
@@ -63,7 +63,9 @@ export function SettingsPage({
   const [editingPassword, setEditingPassword] = useState(false);
   const [passwordForm, setPasswordForm] = useState(EMPTY_PASSWORD_FORM);
   const [savingPassword, setSavingPassword] = useState(false);
-  const [loginQr, setLoginQr] = useState(null); // { platformCode, image, waiting }
+  const [loginQr, setLoginQr] = useState(null); // { platformCode, image, waiting, needsSms, loginId }
+  const [smsCode, setSmsCode] = useState('');
+  const [smsBusy, setSmsBusy] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
@@ -101,14 +103,21 @@ export function SettingsPage({
     setError('');
     try {
       if (action === 'connect' || action === 'reconnect') {
-        setLoginQr({ platformCode, image: '', waiting: true });
+        setLoginQr({ platformCode, image: '', waiting: true, needsSms: false, loginId: '' });
+        setSmsCode('');
         setNotice('正在准备登录二维码，请用对应 App 扫码…');
         const login = await waitForPlatformLogin(platformCode, {
           onUpdate: (snap) => {
-            if (snap?.qrImageBase64) {
-              setLoginQr({ platformCode, image: snap.qrImageBase64, waiting: true });
-            }
-            if (snap?.progress) {
+            setLoginQr((prev) => ({
+              platformCode,
+              image: snap?.qrImageBase64 || prev?.image || '',
+              waiting: true,
+              needsSms: Boolean(snap?.needsSms),
+              loginId: snap?.loginId || prev?.loginId || '',
+            }));
+            if (snap?.needsSms) {
+              setNotice(snap.progress || '平台要求短信验证码，请输入手机收到的验证码');
+            } else if (snap?.progress) {
               setNotice(snap.progress);
             } else if (snap?.qrImageBase64) {
               setNotice('请用手机 App 扫描下方二维码完成登录。');
@@ -116,6 +125,7 @@ export function SettingsPage({
           },
         });
         setLoginQr(null);
+        setSmsCode('');
         await connectPlatform(platformCode, {
           sessionPayload: login.sessionPayload,
           accountDisplayName: login.accountDisplayName,
@@ -137,8 +147,24 @@ export function SettingsPage({
       setError(err?.message || '操作失败，请稍后重试');
       setNotice('');
       setLoginQr(null);
+      setSmsCode('');
     } finally {
       setBusyCode('');
+    }
+  };
+
+  const submitSms = async () => {
+    if (!loginQr?.loginId || !smsCode.trim()) return;
+    setSmsBusy(true);
+    setError('');
+    try {
+      await submitPlatformLoginSms(loginQr.loginId, smsCode.trim());
+      setNotice('验证码已提交，正在完成登录…');
+      setSmsCode('');
+    } catch (err) {
+      setError(err?.message || '提交验证码失败');
+    } finally {
+      setSmsBusy(false);
     }
   };
 
@@ -480,20 +506,45 @@ export function SettingsPage({
       {loginQr ? (
         <div className="settings-qr-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-qr-title">
           <div className="settings-qr-modal">
-            <h2 id="settings-qr-title">扫码登录</h2>
+            <h2 id="settings-qr-title">{loginQr.needsSms ? '短信验证' : '扫码登录'}</h2>
             <p className="settings-qr-hint">
-              请使用对应手机 App 扫描二维码。扫码成功后此窗口会自动关闭。
+              {loginQr.needsSms
+                ? '小红书等平台在云端登录时常要求短信验证。请把手机收到的验证码填到下方。'
+                : '请使用对应手机 App 扫描二维码。扫码成功后此窗口会自动关闭。'}
             </p>
-            <div className="settings-qr-frame">
-              {loginQr.image ? (
-                <img src={loginQr.image} alt="登录二维码" />
-              ) : (
-                <p className="settings-qr-loading">
-                  <LoaderCircle size={18} className="is-spin" />
-                  正在生成二维码…
-                </p>
-              )}
-            </div>
+            {!loginQr.needsSms ? (
+              <div className="settings-qr-frame">
+                {loginQr.image ? (
+                  <img src={loginQr.image} alt="登录二维码" />
+                ) : (
+                  <p className="settings-qr-loading">
+                    <LoaderCircle size={18} className="is-spin" />
+                    正在生成二维码…
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="settings-sms-form">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={8}
+                  placeholder="短信验证码"
+                  value={smsCode}
+                  onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void submitSms();
+                    }
+                  }}
+                />
+                <button type="button" disabled={smsBusy || smsCode.length < 4} onClick={() => void submitSms()}>
+                  {smsBusy ? '提交中…' : '提交验证码'}
+                </button>
+              </div>
+            )}
             <p className="settings-qr-foot">登录过程约需数十秒，请勿关闭本页。</p>
           </div>
         </div>

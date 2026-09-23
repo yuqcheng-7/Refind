@@ -109,7 +109,28 @@ export async function pollPlatformLogin(loginId, { parserBaseUrl } = {}) {
     error: data?.error || '',
     qrImageBase64: data?.qr_image_base64 || '',
     progress: data?.progress || '',
+    needsSms: Boolean(data?.needs_sms),
+    loginId: data?.login_id || loginId,
   };
+}
+
+export async function submitPlatformLoginSms(loginId, code, { parserBaseUrl } = {}) {
+  const base = readParserBase(parserBaseUrl);
+  let response;
+  try {
+    response = await fetch(buildParserUrl(base, `/login/${loginId}/sms`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: String(code || '').trim() }),
+    });
+  } catch {
+    throw parserUnreachableError();
+  }
+  const data = await readJson(response);
+  if (!response.ok) {
+    throw new Error(data?.error || '提交验证码失败');
+  }
+  return true;
 }
 
 export async function assertLocalParserSession(platformCode, { parserBaseUrl } = {}) {
@@ -172,15 +193,23 @@ export async function importPlatformCookies(platformCode, cookieHeader, {
 export async function waitForPlatformLogin(platformCode, {
   parserBaseUrl,
   intervalMs = 800,
-  timeoutMs = 180_000,
+  timeoutMs = 240_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   onUpdate,
 } = {}) {
   const { loginId, parserBaseUrl: base } = await startPlatformLogin(platformCode, { parserBaseUrl });
   const started = Date.now();
   let sawQr = false;
+  if (typeof onUpdate === 'function') {
+    try {
+      onUpdate({ status: 'pending', loginId, qrImageBase64: '', progress: '正在准备登录…' });
+    } catch {
+      // ignore
+    }
+  }
   while (Date.now() - started < timeoutMs) {
     const snap = await pollPlatformLogin(loginId, { parserBaseUrl: base });
+    snap.loginId = loginId;
     if (snap?.qrImageBase64) sawQr = true;
     if (typeof onUpdate === 'function') {
       try {
@@ -202,8 +231,9 @@ export async function waitForPlatformLogin(platformCode, {
     if (snap.status === 'failed' || snap.status === 'expired') {
       throw new Error(snap.error || (snap.status === 'expired' ? '登录超时，请重试' : '登录失败'));
     }
-    // Poll faster until the QR appears, then ease off.
-    await sleep(sawQr ? intervalMs : Math.min(intervalMs, 400));
+    // Poll faster until the QR appears, then ease off (stay quick while waiting for SMS).
+    const delay = snap.needsSms ? 500 : (sawQr ? intervalMs : Math.min(intervalMs, 400));
+    await sleep(delay);
   }
   throw new Error('登录超时，请重试');
 }
