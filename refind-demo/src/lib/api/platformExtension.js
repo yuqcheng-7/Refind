@@ -58,6 +58,25 @@ export async function fetchSessionFromExtension(platformCode) {
   };
 }
 
+/** Fetch page HTML via the extension (user browser network; bypasses site CORS). */
+export async function fetchPageHtmlViaExtension(url) {
+  const data = await requestExtension(
+    'REFIND_FETCH_PAGE',
+    { url },
+    22000,
+  );
+  const page = data?.page;
+  if (!page?.html) {
+    throw new Error(data?.error || '扩展未返回页面内容');
+  }
+  return {
+    url: String(page.url || url),
+    finalUrl: String(page.finalUrl || page.url || url),
+    html: String(page.html),
+    contentType: String(page.contentType || ''),
+  };
+}
+
 export function buildSessionPayloadFromExtension(session) {
   return JSON.stringify({
     cookies: session.cookies,

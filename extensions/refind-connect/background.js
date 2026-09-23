@@ -19,6 +19,8 @@ const AUTH_HINTS = {
   bilibili: ['SESSDATA', 'DedeUserID'],
 };
 
+const MAX_PAGE_BYTES = 2_000_000;
+
 function cookiesToHeader(cookies) {
   const seen = new Map();
   for (const item of cookies || []) {
@@ -65,15 +67,81 @@ async function readPlatformCookies(platform) {
   };
 }
 
+async function fetchPageHtml(url) {
+  const target = String(url || '').trim();
+  if (!/^https?:\/\//i.test(target)) {
+    throw new Error('仅支持 http/https 链接');
+  }
+  let parsed;
+  try {
+    parsed = new URL(target);
+  } catch {
+    throw new Error('链接无效');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('链接协议不受支持');
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  let response;
+  try {
+    response = await fetch(target, {
+      method: 'GET',
+      redirect: 'follow',
+      credentials: 'include',
+      signal: controller.signal,
+      headers: {
+        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+      },
+    });
+  } catch (err) {
+    if (err?.name === 'AbortError') throw new Error('页面抓取超时');
+    throw new Error(err?.message || '页面抓取失败');
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    throw new Error(`页面返回 HTTP ${response.status}`);
+  }
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (contentType && !/text\/html|application\/xhtml|text\/plain|application\/xml/i.test(contentType)) {
+    throw new Error(`不支持的内容类型：${contentType.split(';')[0]}`);
+  }
+
+  const buf = await response.arrayBuffer();
+  if (buf.byteLength > MAX_PAGE_BYTES) {
+    throw new Error('页面过大（超过 2MB）');
+  }
+  const html = new TextDecoder('utf-8').decode(buf);
+  if (!html.trim()) {
+    throw new Error('页面内容为空');
+  }
+  return {
+    url: target,
+    finalUrl: response.url || target,
+    html,
+    contentType,
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = message?.type;
   if (type === 'PING') {
-    sendResponse({ ok: true, version: '0.1.0' });
+    sendResponse({ ok: true, version: '0.2.0' });
     return false;
   }
   if (type === 'GET_PLATFORM_SESSION') {
     readPlatformCookies(message.platform)
       .then((session) => sendResponse({ ok: true, session }))
+      .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
+    return true;
+  }
+  if (type === 'FETCH_PAGE') {
+    fetchPageHtml(message.url)
+      .then((page) => sendResponse({ ok: true, page }))
       .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
     return true;
   }

@@ -66,6 +66,27 @@
           );
         },
       );
+      return;
+    }
+
+    if (type === 'REFIND_FETCH_PAGE') {
+      chrome.runtime.sendMessage(
+        { type: 'FETCH_PAGE', url: data.url },
+        (resp) => {
+          const err = chrome.runtime.lastError?.message;
+          window.postMessage(
+            {
+              source: SOURCE_EXT,
+              type: 'REFIND_PAGE',
+              requestId,
+              ok: !err && Boolean(resp?.ok),
+              page: resp?.page || null,
+              error: err || resp?.error || '',
+            },
+            '*',
+          );
+        },
+      );
     }
   });
 })();

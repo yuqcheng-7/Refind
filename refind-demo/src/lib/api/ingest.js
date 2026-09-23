@@ -7,7 +7,9 @@ import {
   restoreParserSessionFromStore,
 } from './platformConnections.js';
 import { fetchLocalSessionHealth, fetchLocalSessionPresence } from './platformLogin.js';
+import { fetchPageHtmlViaExtension, pingRefindExtension } from './platformExtension.js';
 import { supportsRealLogin } from './platformSession.js';
+import { extractLinkContent } from '../../../../supabase/functions/parse-material/extractLinkContent.js';
 
 const terminalStatuses = new Set(['ready', 'failed', 'link_only']);
 
@@ -269,6 +271,51 @@ export async function pollMaterialStatus(materialId, { intervalMs = 800, timeout
   }
 }
 
+async function prefetchViaExtension(sourceUrl) {
+  const hasExt = await pingRefindExtension();
+  if (!hasExt) return null;
+  try {
+    const page = await fetchPageHtmlViaExtension(sourceUrl);
+    const extracted = await extractLinkContent({
+      sourceUrl,
+      resolvedUrl: page.finalUrl || sourceUrl,
+      html: page.html,
+      env: {},
+      // Avoid Edge/HK network from the browser path; HTML is already local.
+      fetchFn: async () => {
+        throw new Error('skip-network');
+      },
+    });
+    if (isZhihuJunkPrefetch(extracted)) {
+      return {
+        error: true,
+        platform: 'zhihu',
+        detail: '扩展已打开页面，但仍未读到可用正文（可能是登录墙或验证页）。',
+        session_mode: 'extension',
+      };
+    }
+    if (!(extracted.content_text || extracted.caption_text || extracted.title)) {
+      return {
+        error: true,
+        platform: extracted.platform || '',
+        detail: '扩展抓取了页面，但未提取到正文',
+        session_mode: 'extension',
+      };
+    }
+    return {
+      ...extracted,
+      session_mode: 'extension',
+      used_saved_session: false,
+    };
+  } catch (err) {
+    return {
+      error: true,
+      detail: err?.message || '扩展抓取页面失败',
+      session_mode: 'extension',
+    };
+  }
+}
+
 export async function parseAndPollMaterial(materialId, { force = false, sourceUrl = '' } = {}) {
   const platform = sourceUrl ? inferPlatformFromUrl(sourceUrl) : '';
   let restored = false;
@@ -283,9 +330,25 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
   // listConnections reconcile timing (which previously flipped use_saved_session off).
   const useSavedSession = restored
     || (sourceUrl ? await shouldUseSavedSession(sourceUrl) : false);
-  const prefetchedRaw = sourceUrl
+  let prefetchedRaw = sourceUrl
     ? await prefetchLinkContent(sourceUrl, { useSavedSession })
     : null;
+
+  // Hosted parser uses a datacenter IP; many CN sites / WeChat block it.
+  // Prefer the user's browser network via 拾藏连接 for web + wechat, or when parser failed.
+  if (sourceUrl && (platform === 'wechat_mp' || platform === 'web' || prefetchedRaw?.error)) {
+    const viaExt = await prefetchViaExtension(sourceUrl);
+    if (viaExt && !viaExt.error) {
+      prefetchedRaw = viaExt;
+    } else if (prefetchedRaw?.error && viaExt?.detail) {
+      prefetchedRaw = {
+        error: true,
+        detail: `${prefetchedRaw.detail || '托管解析失败'}（浏览器抓取：${viaExt.detail}）`,
+        session_mode: viaExt.session_mode || prefetchedRaw.session_mode,
+      };
+    }
+  }
+
   const prefetched = prefetchedRaw && !prefetchedRaw.error ? prefetchedRaw : null;
   const prefetchDetail = prefetchedRaw?.error ? prefetchedRaw.detail : '';
 
