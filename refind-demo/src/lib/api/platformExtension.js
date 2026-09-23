@@ -77,6 +77,27 @@ export async function fetchPageHtmlViaExtension(url) {
   };
 }
 
+/** Fetch any URL (HTML or JSON API) via the extension with the user's cookies. */
+export async function fetchUrlViaExtension(url, { accept = '' } = {}) {
+  const data = await requestExtension(
+    'REFIND_FETCH_URL',
+    { url, accept },
+    22000,
+  );
+  const page = data?.page;
+  const text = String(page?.text || page?.html || '');
+  if (!text) {
+    throw new Error(data?.error || '扩展未返回内容');
+  }
+  return {
+    url: String(page.url || url),
+    finalUrl: String(page.finalUrl || page.url || url),
+    text,
+    html: text,
+    contentType: String(page.contentType || ''),
+  };
+}
+
 export function buildSessionPayloadFromExtension(session) {
   return JSON.stringify({
     cookies: session.cookies,

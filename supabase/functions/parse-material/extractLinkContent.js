@@ -281,6 +281,7 @@ async function tryExternalParser(sourceUrl, env = {}, fetchFn = fetch) {
     const title = cleanText(data.title || '');
     const content = cleanText(data.content_text || data.description || '');
     if (isZhihuJunkResult(platform, title, content)) return null;
+    if (isCaptchaOrVerifyShell(title, content)) return null;
     return {
       platform: data.platform || platform,
       title,
@@ -304,13 +305,21 @@ async function tryExternalParser(sourceUrl, env = {}, fetchFn = fetch) {
   }
 }
 
-/** Zhihu often returns a soft 404 / marketing shell that looks like a successful parse. */
+/** Soft 404 / marketing / captcha shells that look like a successful parse. */
 export function isZhihuJunkResult(platform, title = '', content = '') {
   if (platform !== 'zhihu') return false;
   const t = cleanText(title);
   const c = cleanText(content);
   if (/没有知识存在的荒原|安全验证|请先登录|404\s*-\s*知乎|^知乎$/.test(t)) return true;
   if (c.length > 0 && c.length < 280 && /中文互联网高质量的问答社区/.test(c)) return true;
+  return false;
+}
+
+export function isCaptchaOrVerifyShell(title = '', content = '') {
+  const t = cleanText(title);
+  const c = cleanText(content);
+  if (/验证码中间页|安全验证|人机验证|captcha/i.test(t)) return true;
+  if (/验证码/.test(t) && c.length < 80) return true;
   return false;
 }
 
@@ -478,6 +487,21 @@ export async function extractLinkContent({
       || (platform === 'bilibili' ? bilibiliEmbedUrl(workingUrl || sourceUrl, biliId) : sourceUrl);
   }
   result = mergeResult(result, ogPatch);
+
+  if (isCaptchaOrVerifyShell(result.title, result.content_text || result.caption_text)) {
+    result.title = '';
+    result.content_text = '';
+    result.caption_text = '';
+    result.summary_seed = '';
+    result.quality = 'none';
+  }
+  if (isZhihuJunkResult(platform, result.title, result.content_text || result.caption_text)) {
+    result.title = '';
+    result.content_text = '';
+    result.caption_text = '';
+    result.summary_seed = '';
+    result.quality = 'none';
+  }
 
   if (!result.content_text && result.caption_text) {
     result.content_text = result.caption_text;

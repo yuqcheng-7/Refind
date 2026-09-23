@@ -6,10 +6,16 @@ import {
   markPlatformSessionInvalid,
   restoreParserSessionFromStore,
 } from './platformConnections.js';
-import { fetchLocalSessionHealth, fetchLocalSessionPresence } from './platformLogin.js';
-import { fetchPageHtmlViaExtension, pingRefindExtension } from './platformExtension.js';
+import { fetchLocalSessionHealth, fetchLocalSessionPresence, importPlatformCookies } from './platformLogin.js';
+import {
+  fetchPageHtmlViaExtension,
+  fetchSessionFromExtension,
+  fetchUrlViaExtension,
+  pingRefindExtension,
+} from './platformExtension.js';
 import { supportsRealLogin } from './platformSession.js';
 import { extractLinkContent } from '../../../../supabase/functions/parse-material/extractLinkContent.js';
+import { prefetchZhihuViaBrowserApi } from './zhihuBrowserPrefetch.js';
 
 const terminalStatuses = new Set(['ready', 'failed', 'link_only']);
 
@@ -192,6 +198,51 @@ function isZhihuJunkPrefetch(data) {
   return false;
 }
 
+/** Captcha / verify walls often look like a successful parse (title only). */
+export function isJunkPrefetch(data) {
+  if (!data || data.error) return true;
+  if (isZhihuJunkPrefetch(data)) return true;
+  const title = String(data.title || '');
+  const content = String(data.content_text || data.caption_text || '');
+  if (/验证码中间页|安全验证|人机验证|验证码|captcha/i.test(title)) return true;
+  if (
+    data.platform === 'douyin'
+    && content.length < 40
+    && /记录美好生活|已经收获了|来抖音记录/.test(`${title} ${content}`)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function junkPrefetchError(data, { useSavedSession = false } = {}) {
+  const platform = data?.platform || '';
+  if (platform === 'zhihu') {
+    return {
+      error: true,
+      platform: 'zhihu',
+      detail: useSavedSession
+        ? '已使用本机知乎登录会话，但仍未能解析该链接。请确认链接可公开打开，或在设置页「重新连接」知乎后再试。'
+        : '知乎需要登录态才能抓取。请在设置页连接知乎后重试。',
+      session_mode: data?.session_mode || (useSavedSession ? 'saved' : 'anonymous'),
+    };
+  }
+  if (platform === 'douyin' || /验证码|安全验证|人机验证/i.test(String(data?.title || ''))) {
+    return {
+      error: true,
+      platform,
+      detail: '源站返回了验证码/安全验证页，未能读到正文。请确认已连接抖音，或稍后用本机浏览器重试。',
+      session_mode: data?.session_mode || (useSavedSession ? 'saved' : 'anonymous'),
+    };
+  }
+  return {
+    error: true,
+    platform,
+    detail: '解析结果不可用（可能是登录墙或验证页）',
+    session_mode: data?.session_mode || (useSavedSession ? 'saved' : 'anonymous'),
+  };
+}
+
 /** Browser-side parse on the user's network (CN platforms reachable). */
 export async function prefetchLinkContent(sourceUrl, { useSavedSession = false } = {}) {
   if (!sourceUrl) return null;
@@ -220,15 +271,8 @@ export async function prefetchLinkContent(sourceUrl, { useSavedSession = false }
         session_mode: data?.session_mode || (useSavedSession ? 'saved' : 'anonymous'),
       };
     }
-    if (isZhihuJunkPrefetch(data)) {
-      return {
-        error: true,
-        platform: 'zhihu',
-        detail: useSavedSession
-          ? '已使用本机知乎登录会话，但仍未能解析该链接。请确认链接可公开打开，或在设置页「重新连接」知乎后再试。'
-          : '知乎需要登录态才能抓取。请在设置页连接知乎后重试。',
-        session_mode: data.session_mode || (useSavedSession ? 'saved' : 'anonymous'),
-      };
+    if (isJunkPrefetch(data)) {
+      return junkPrefetchError(data, { useSavedSession });
     }
     if (!(data.content_text || data.caption_text || data.title)) {
       return {
@@ -271,9 +315,32 @@ export async function pollMaterialStatus(materialId, { intervalMs = 800, timeout
   }
 }
 
-async function prefetchViaExtension(sourceUrl) {
+async function prefetchViaExtension(sourceUrl, platform = '') {
   const hasExt = await pingRefindExtension();
   if (!hasExt) return null;
+
+  if (platform === 'zhihu') {
+    try {
+      const extracted = await prefetchZhihuViaBrowserApi(sourceUrl, fetchUrlViaExtension);
+      if (!extracted || isJunkPrefetch(extracted)) {
+        return {
+          error: true,
+          platform: 'zhihu',
+          detail: '扩展已用本机知乎登录态请求接口，但仍未读到正文。请在浏览器打开知乎确认已登录，或在设置页「重新连接」知乎。',
+          session_mode: 'extension',
+        };
+      }
+      return extracted;
+    } catch (err) {
+      return {
+        error: true,
+        platform: 'zhihu',
+        detail: err?.message || '扩展抓取知乎失败',
+        session_mode: 'extension',
+      };
+    }
+  }
+
   try {
     const page = await fetchPageHtmlViaExtension(sourceUrl);
     const extracted = await extractLinkContent({
@@ -286,10 +353,10 @@ async function prefetchViaExtension(sourceUrl) {
         throw new Error('skip-network');
       },
     });
-    if (isZhihuJunkPrefetch(extracted)) {
+    if (isJunkPrefetch(extracted)) {
       return {
         error: true,
-        platform: 'zhihu',
+        platform: extracted.platform || platform || '',
         detail: '扩展已打开页面，但仍未读到可用正文（可能是登录墙或验证页）。',
         session_mode: 'extension',
       };
@@ -316,6 +383,21 @@ async function prefetchViaExtension(sourceUrl) {
   }
 }
 
+/** Re-read cookies from the user's browser and push onto the hosted parser. */
+async function refreshParserSessionFromExtension(platform) {
+  if (!supportsRealLogin(platform)) return false;
+  const hasExt = await pingRefindExtension();
+  if (!hasExt) return false;
+  try {
+    const session = await fetchSessionFromExtension(platform);
+    if (!session?.cookies) return false;
+    await importPlatformCookies(platform, session.cookies);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function parseAndPollMaterial(materialId, { force = false, sourceUrl = '' } = {}) {
   const platform = sourceUrl ? inferPlatformFromUrl(sourceUrl) : '';
   let restored = false;
@@ -328,24 +410,43 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
   }
   // If we just re-pushed cookies, always ask parser to use them — don't depend on
   // listConnections reconcile timing (which previously flipped use_saved_session off).
-  const useSavedSession = restored
+  let useSavedSession = restored
     || (sourceUrl ? await shouldUseSavedSession(sourceUrl) : false);
   let prefetchedRaw = sourceUrl
     ? await prefetchLinkContent(sourceUrl, { useSavedSession })
     : null;
 
-  // Hosted parser uses a datacenter IP; many CN sites / WeChat block it.
-  // Prefer the user's browser network via 拾藏连接 for web + wechat, or when parser failed.
-  if (sourceUrl && (platform === 'wechat_mp' || platform === 'web' || prefetchedRaw?.error)) {
-    const viaExt = await prefetchViaExtension(sourceUrl);
-    if (viaExt && !viaExt.error) {
-      prefetchedRaw = viaExt;
-    } else if (prefetchedRaw?.error && viaExt?.detail) {
-      prefetchedRaw = {
-        error: true,
-        detail: `${prefetchedRaw.detail || '托管解析失败'}（浏览器抓取：${viaExt.detail}）`,
-        session_mode: viaExt.session_mode || prefetchedRaw.session_mode,
-      };
+  // Hosted parser uses a datacenter IP; CN platforms often return captcha / 403.
+  // Prefer the user's browser network via 拾藏连接 for web/wechat, or when parse failed.
+  const preferBrowser = platform === 'wechat_mp' || platform === 'web';
+  const sessionFailed = supportsRealLogin(platform) && Boolean(prefetchedRaw?.error);
+
+  if (sourceUrl && (preferBrowser || sessionFailed || prefetchedRaw?.error)) {
+    // Fresh cookies from the live browser often fix stale DB sessions on the parser.
+    if (sessionFailed) {
+      const refreshed = await refreshParserSessionFromExtension(platform);
+      if (refreshed) {
+        useSavedSession = true;
+        const retried = await prefetchLinkContent(sourceUrl, { useSavedSession: true });
+        if (retried && !retried.error) {
+          prefetchedRaw = retried;
+        }
+      }
+    }
+
+    if (preferBrowser || !prefetchedRaw || prefetchedRaw.error) {
+      const viaExt = await prefetchViaExtension(sourceUrl, platform);
+      if (viaExt && !viaExt.error) {
+        prefetchedRaw = viaExt;
+      } else if (prefetchedRaw?.error && viaExt?.detail) {
+        prefetchedRaw = {
+          error: true,
+          detail: `${prefetchedRaw.detail || '托管解析失败'}（浏览器抓取：${viaExt.detail}）`,
+          session_mode: viaExt.session_mode || prefetchedRaw.session_mode,
+        };
+      } else if ((!prefetchedRaw || prefetchedRaw.error) && viaExt?.error) {
+        prefetchedRaw = viaExt;
+      }
     }
   }
 
@@ -359,9 +460,9 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
       usedSavedSession: prefetchedRaw.session_mode === 'saved' || useSavedSession,
     })
   ) {
-    const platform = inferPlatformFromUrl(sourceUrl);
+    const platformCode = inferPlatformFromUrl(sourceUrl);
     try {
-      await markPlatformSessionInvalid(platform);
+      await markPlatformSessionInvalid(platformCode);
     } catch {
       // Best-effort UI/DB sync; parsing error still surfaces below.
     }

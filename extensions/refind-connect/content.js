@@ -87,6 +87,27 @@
           );
         },
       );
+      return;
+    }
+
+    if (type === 'REFIND_FETCH_URL') {
+      chrome.runtime.sendMessage(
+        { type: 'FETCH_URL', url: data.url, accept: data.accept || '' },
+        (resp) => {
+          const err = chrome.runtime.lastError?.message;
+          window.postMessage(
+            {
+              source: SOURCE_EXT,
+              type: 'REFIND_URL',
+              requestId,
+              ok: !err && Boolean(resp?.ok),
+              page: resp?.page || null,
+              error: err || resp?.error || '',
+            },
+            '*',
+          );
+        },
+      );
     }
   });
 })();

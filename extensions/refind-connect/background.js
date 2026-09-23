@@ -67,7 +67,7 @@ async function readPlatformCookies(platform) {
   };
 }
 
-async function fetchPageHtml(url) {
+async function fetchUrl(url, { accept = '' } = {}) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) {
     throw new Error('仅支持 http/https 链接');
@@ -82,6 +82,8 @@ async function fetchPageHtml(url) {
     throw new Error('链接协议不受支持');
   }
 
+  const acceptHeader = String(accept || '').trim()
+    || 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8';
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   let response;
@@ -92,7 +94,7 @@ async function fetchPageHtml(url) {
       credentials: 'include',
       signal: controller.signal,
       headers: {
-        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        Accept: acceptHeader,
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
       },
     });
@@ -107,7 +109,12 @@ async function fetchPageHtml(url) {
     throw new Error(`页面返回 HTTP ${response.status}`);
   }
   const contentType = String(response.headers.get('content-type') || '').toLowerCase();
-  if (contentType && !/text\/html|application\/xhtml|text\/plain|application\/xml/i.test(contentType)) {
+  const wantsJson = /application\/json/i.test(acceptHeader);
+  if (
+    contentType
+    && !wantsJson
+    && !/text\/html|application\/xhtml|text\/plain|application\/xml|application\/json/i.test(contentType)
+  ) {
     throw new Error(`不支持的内容类型：${contentType.split(';')[0]}`);
   }
 
@@ -115,22 +122,27 @@ async function fetchPageHtml(url) {
   if (buf.byteLength > MAX_PAGE_BYTES) {
     throw new Error('页面过大（超过 2MB）');
   }
-  const html = new TextDecoder('utf-8').decode(buf);
-  if (!html.trim()) {
+  const text = new TextDecoder('utf-8').decode(buf);
+  if (!text.trim()) {
     throw new Error('页面内容为空');
   }
   return {
     url: target,
     finalUrl: response.url || target,
-    html,
+    html: text,
+    text,
     contentType,
   };
+}
+
+async function fetchPageHtml(url) {
+  return fetchUrl(url);
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = message?.type;
   if (type === 'PING') {
-    sendResponse({ ok: true, version: '0.2.0' });
+    sendResponse({ ok: true, version: '0.2.1' });
     return false;
   }
   if (type === 'GET_PLATFORM_SESSION') {
@@ -141,6 +153,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (type === 'FETCH_PAGE') {
     fetchPageHtml(message.url)
+      .then((page) => sendResponse({ ok: true, page }))
+      .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
+    return true;
+  }
+  if (type === 'FETCH_URL') {
+    fetchUrl(message.url, { accept: message.accept || '' })
       .then((page) => sendResponse({ ok: true, page }))
       .catch((err) => sendResponse({ ok: false, error: err?.message || String(err) }));
     return true;

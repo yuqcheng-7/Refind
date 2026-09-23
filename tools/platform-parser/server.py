@@ -453,6 +453,8 @@ def extract_douyin_id(url: str) -> str:
 
 def _looks_like_douyin_placeholder(title: str, desc: str) -> bool:
   blob = f"{title} {desc}"
+  if re.search(r"验证码中间页|安全验证|人机验证|验证码", blob):
+    return True
   return ("记录美好生活" in blob) and ("已经收获了" in blob or "来抖音" in blob)
 
 
@@ -575,6 +577,9 @@ def parse_douyin(url: str) -> dict | None:
   if title or desc:
     if _looks_like_douyin_placeholder(title, desc) and not author:
       # Generic login-wall / dead-link OG tags — treat as failure so caller can surface cookie hint.
+      return None
+    # Captcha intermediate pages sometimes include a fake author — still reject.
+    if re.search(r"验证码中间页|安全验证|人机验证", f"{title} {desc}"):
       return None
     body = desc or title
     return result(
