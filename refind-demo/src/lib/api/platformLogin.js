@@ -219,7 +219,16 @@ export async function waitForPlatformLogin(platformCode, {
       }
     }
     if (snap.status === 'success') {
-      if (!snap.sessionPayload) throw new Error('登录成功但未返回会话，请重试');
+      if (!snap.sessionPayload) {
+        // Race: another poll may have read first; retry once.
+        await sleep(400);
+        const again = await pollPlatformLogin(loginId, { parserBaseUrl: base });
+        again.loginId = loginId;
+        if (again.status === 'success' && again.sessionPayload) {
+          return again;
+        }
+        throw new Error('登录成功但未返回会话，请重试');
+      }
       const sessions = await fetchLocalSessionPresence({ parserBaseUrl: base });
       if (sessions && !sessions[platformCode]) {
         throw new Error(

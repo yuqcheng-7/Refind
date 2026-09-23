@@ -109,6 +109,9 @@ export function SettingsPage({
         const login = await waitForPlatformLogin(platformCode, {
           onUpdate: (snap) => {
             setLoginQr((prev) => {
+              if (snap?.status === 'success') {
+                return prev; // keep modal until waitForPlatformLogin returns and clears it
+              }
               const needsSms = Boolean(prev?.needsSms || snap?.needsSms);
               if (needsSms) {
                 setNotice(snap?.progress || '平台要求短信验证码，请输入手机收到的验证码');
@@ -119,7 +122,7 @@ export function SettingsPage({
               }
               return {
                 platformCode,
-                image: snap?.qrImageBase64 || prev?.image || '',
+                image: needsSms ? '' : (snap?.qrImageBase64 || prev?.image || ''),
                 waiting: true,
                 needsSms,
                 loginId: snap?.loginId || prev?.loginId || '',

@@ -959,7 +959,8 @@ def snapshot_job(login_id: str) -> dict[str, Any] | None:
     if not job:
       return None
     payload = None
-    if job.status == "success" and job.session_payload and not job.consumed_payload:
+    if job.status == "success" and job.session_payload:
+      # Return payload on every poll — clients may hit this twice (React Strict / race).
       payload = job.session_payload
       job.consumed_payload = True
     return {
@@ -969,7 +970,8 @@ def snapshot_job(login_id: str) -> dict[str, Any] | None:
       "account_display_name": job.account_display_name,
       "session_payload": payload,
       "error": job.error,
-      "qr_image_base64": job.qr_image_base64 or "",
+      # Hide QR once SMS challenge started so the UI cannot flip back.
+      "qr_image_base64": "" if job.needs_sms else (job.qr_image_base64 or ""),
       "progress": job.progress or "",
       "needs_sms": bool(job.needs_sms),
     }
@@ -1530,6 +1532,7 @@ def default_playwright_runner(
 
       ready_streak = 0
       sms_mode = False
+      sms_submitted = False
       closed_hint = (
         "登录窗口已关闭。请重新点击「连接」并完成扫码；"
         "知乎会复用本机登录配置，成功保存后关闭窗口不会退出拾藏登录态。"
@@ -1577,26 +1580,39 @@ def default_playwright_runner(
             emit_needs_sms(True)
             emit_progress("正在提交验证码…")
             if fill_sms_and_submit(page, code):
+              sms_submitted = True
               emit_progress("验证码已提交，正在完成登录…")
               try:
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(2000)
               except Exception:  # noqa: BLE001
                 pass
+              # After OTP, leave the challenge shell so session cookies apply.
+              try:
+                page.goto(home, wait_until="domcontentloaded", timeout=35_000)
+                page.wait_for_timeout(1500)
+              except Exception:  # noqa: BLE001
+                try:
+                  page.reload(wait_until="domcontentloaded", timeout=30_000)
+                  page.wait_for_timeout(1200)
+                except Exception:  # noqa: BLE001
+                  pass
             else:
               emit_progress("未能自动填入验证码，请重新输入后提交")
-          elif sms_mode:
+          else:
             emit_needs_sms(True)
+            if sms_submitted:
+              emit_progress("验证码已提交，正在完成登录…")
+
           page.wait_for_timeout(800)
-          # Still check login readiness after SMS submit without leaving SMS UI.
           cookies = context.cookies()
           if platform_login_ready(page, platform, cookies, captured):
             ready_streak += 1
             emit_progress("登录已确认，正在保存…")
-          else:
+          elif not sms_submitted:
             ready_streak = 0
-          if ready_streak < 2:
+          needed = 1 if sms_submitted else 2
+          if ready_streak < needed:
             continue
-          # fall through to success handling below when ready_streak >= 2
         elif progress == "scanned":
           if not scan_seen_at:
             scan_seen_at = time.time()
@@ -1606,7 +1622,7 @@ def default_playwright_runner(
             scan_seen_at = time.time()
           emit_progress("手机已确认，正在同步登录态…")
 
-        if not sms_mode or ready_streak >= 2:
+        if not sms_mode or ready_streak >= (1 if sms_submitted else 2):
           try:
             fp_now = "|".join(
               sorted(
@@ -1642,12 +1658,28 @@ def default_playwright_runner(
             else:
               ready_streak = 0
 
-        if ready_streak >= 2:
+        needed = 1 if sms_submitted else 2
+        if ready_streak >= needed:
           fresh = context.cookies()
           if not verify_authenticated_session(platform, page, fresh, captured):
-            ready_streak = 0
-            page.wait_for_timeout(800)
-            continue
+            # After SMS, give the session a moment and retry instead of hard reset.
+            if sms_submitted:
+              emit_progress("正在确认登录态…")
+              try:
+                page.wait_for_timeout(1500)
+                if not captured.get("login_verified"):
+                  platform_login_ready(page, platform, context.cookies(), captured)
+                fresh = context.cookies()
+                if not verify_authenticated_session(platform, page, fresh, captured):
+                  page.wait_for_timeout(800)
+                  continue
+              except Exception:  # noqa: BLE001
+                page.wait_for_timeout(800)
+                continue
+            else:
+              ready_streak = 0
+              page.wait_for_timeout(800)
+              continue
           for _ in range(8):
             if captured.get("account") or captured.get("account_id"):
               break
@@ -1672,7 +1704,7 @@ def default_playwright_runner(
             better = capture_account_after_login(page, platform, context.cookies(), captured)
             if better and not weak_account_label(platform, better):
               account = better
-            elif captured.get("login_verified"):
+            elif captured.get("login_verified") or sms_submitted:
               account = better or account or {
                 "xhs": "小红书账号",
                 "douyin": "抖音账号",
@@ -1685,10 +1717,14 @@ def default_playwright_runner(
               continue
           fresh = context.cookies()
           if not verify_authenticated_session(platform, page, fresh, captured):
-            ready_streak = 0
-            page.wait_for_timeout(800)
-            continue
+            if sms_submitted and captured.get("login_verified"):
+              pass  # accept soft verify after OTP
+            else:
+              ready_streak = 0
+              page.wait_for_timeout(800)
+              continue
           emit_progress("登录成功")
+          emit_needs_sms(False)
           return finish(account, fresh)
         page.wait_for_timeout(800)
       close_browser()
