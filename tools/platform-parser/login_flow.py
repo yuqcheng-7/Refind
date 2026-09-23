@@ -1070,55 +1070,129 @@ def fill_sms_and_submit(page: Any, code: str) -> bool:
   cleaned = str(code or "").strip()
   if not cleaned:
     return False
-  filled = False
-  for selector in (
-    'input[placeholder*="验证码"]',
-    'input[placeholder*="动态码"]',
-    'input[name*="code" i]',
-    'input[autocomplete="one-time-code"]',
-    'input[type="tel"]',
-    'input[maxlength="6"]',
-    'input[maxlength="4"]',
-    'input[maxlength="8"]',
-  ):
-    try:
-      loc = page.locator(selector).first
-      if loc.count() == 0:
-        continue
+
+  def try_fill_in(scope: Any) -> bool:
+    filled_local = False
+    for selector in (
+      'input[placeholder*="验证码"]',
+      'input[placeholder*="动态码"]',
+      'input[placeholder*="短信"]',
+      'input[name*="code" i]',
+      'input[autocomplete="one-time-code"]',
+      'input[type="tel"]',
+      'input[maxlength="6"]',
+      'input[maxlength="4"]',
+      'input[maxlength="8"]',
+    ):
       try:
-        if not loc.is_visible(timeout=400):
+        loc = scope.locator(selector).first
+        if loc.count() == 0:
           continue
+        try:
+          if not loc.is_visible(timeout=400):
+            continue
+        except Exception:  # noqa: BLE001
+          continue
+        loc.click(timeout=1500)
+        loc.fill("")
+        loc.fill(cleaned, timeout=2500)
+        filled_local = True
+        break
       except Exception:  # noqa: BLE001
         continue
-      loc.fill(cleaned, timeout=2500)
-      filled = True
-      break
-    except Exception:  # noqa: BLE001
-      continue
-  if not filled:
-    return False
-  for selector in (
-    'button:has-text("登录")',
-    'button:has-text("确定")',
-    'button:has-text("确认")',
-    'button:has-text("验证")',
-    'button:has-text("提交")',
-    'button:has-text("下一步")',
-    '[class*="submit"]',
-  ):
-    try:
-      loc = page.locator(selector).first
-      if loc.count() == 0:
+    if not filled_local:
+      return False
+    for selector in (
+      'button:has-text("登录")',
+      'button:has-text("确定")',
+      'button:has-text("确认")',
+      'button:has-text("验证")',
+      'button:has-text("提交")',
+      'button:has-text("下一步")',
+      'button:has-text("完成")',
+      '[class*="submit"]',
+      '[type="submit"]',
+    ):
+      try:
+        loc = scope.locator(selector).first
+        if loc.count() == 0:
+          continue
+        loc.click(timeout=2500)
+        return True
+      except Exception:  # noqa: BLE001
         continue
-      loc.click(timeout=2500)
+    try:
+      scope.locator('input').first.press("Enter")
       return True
     except Exception:  # noqa: BLE001
-      continue
+      return filled_local
+
+  # Prefer the main page, then any iframe (XHS challenges are often framed).
+  scopes: list[Any] = [page]
   try:
-    page.keyboard.press("Enter")
-    return True
+    scopes.extend(list(page.frames or []))
   except Exception:  # noqa: BLE001
-    return filled
+    pass
+  for scope in scopes:
+    try:
+      if try_fill_in(scope):
+        return True
+    except Exception:  # noqa: BLE001
+      continue
+  return False
+
+
+def cookie_fingerprint(cookies: list[dict[str, Any]]) -> str:
+  keys = {
+    "web_session", "a1", "sessionid", "sessionid_ss", "z_c0", "SESSDATA", "DedeUserID",
+  }
+  return "|".join(
+    sorted(
+      f"{c.get('name')}={str(c.get('value') or '')[:32]}"
+      for c in cookies
+      if str(c.get("name") or "") in keys
+    )
+  )
+
+
+def soft_ready_after_sms(
+  platform: str,
+  page: Any,
+  cookies: list[dict[str, Any]],
+  captured: dict[str, Any],
+  *,
+  fingerprint_before: str,
+) -> bool:
+  """Accept login after OTP when APIs are flaky but cookies clearly rotated."""
+  if platform_login_ready(page, platform, cookies, captured):
+    return True
+  fp_now = cookie_fingerprint(cookies)
+  if not fingerprint_before or not fp_now or fp_now == fingerprint_before:
+    return False
+  if platform == "xhs":
+    if not has_meaningful_cookie(cookies, ("web_session",), min_len=12):
+      return False
+    if not has_meaningful_cookie(cookies, ("a1",), min_len=8):
+      return False
+    me = fetch_xhs_me(page)
+    if me and me.get("guest") is True:
+      return False
+    mark_login_verified(captured)
+    if me:
+      nick = nickname_from_mapping(me)
+      if nick and not captured.get("account"):
+        captured["account"] = nick
+    return True
+  if platform == "douyin" and has_meaningful_cookie(cookies, ("sessionid", "sessionid_ss")):
+    mark_login_verified(captured)
+    return True
+  if platform == "zhihu" and has_meaningful_cookie(cookies, ("z_c0",), min_len=16):
+    if probe_browser_session(page, platform, captured):
+      return True
+  if platform == "bilibili" and has_meaningful_cookie(cookies, ("SESSDATA",), min_len=16):
+    mark_login_verified(captured)
+    return True
+  return False
 
 
 def ensure_login_surface(page: Any, platform: str, start_url: str) -> None:
@@ -1533,6 +1607,8 @@ def default_playwright_runner(
       ready_streak = 0
       sms_mode = False
       sms_submitted = False
+      sms_submitted_at = 0.0
+      fingerprint_before_sms = ""
       closed_hint = (
         "登录窗口已关闭。请重新点击「连接」并完成扫码；"
         "知乎会复用本机登录配置，成功保存后关闭窗口不会退出拾藏登录态。"
@@ -1558,15 +1634,11 @@ def default_playwright_runner(
           emit_qr()
         cookies = context.cookies()
 
-        # NEVER navigate away from the login page while waiting for QR confirm —
-        # that kills the platform's scan-status polling and leaves the phone
-        # "logged in" while this browser never receives the session.
-
         progress = page_login_progress(page)
-        # Latch SMS mode: login pages flicker between states; don't bounce the UI.
         if (progress == "sms" and last_qr) or sms_mode:
           if not sms_mode:
             sms_mode = True
+            fingerprint_before_sms = cookie_fingerprint(cookies)
             emit_needs_sms(True)
             emit_progress("平台要求短信验证码：请查看手机短信，在弹窗中输入验证码")
           scan_seen_at = 0.0
@@ -1579,23 +1651,28 @@ def default_playwright_runner(
           if code:
             emit_needs_sms(True)
             emit_progress("正在提交验证码…")
+            fingerprint_before_sms = cookie_fingerprint(cookies) or fingerprint_before_sms
             if fill_sms_and_submit(page, code):
               sms_submitted = True
+              sms_submitted_at = time.time()
               emit_progress("验证码已提交，正在完成登录…")
+              # Stay on the challenge page first so the site can apply cookies.
               try:
+                page.wait_for_timeout(3000)
+              except Exception:  # noqa: BLE001
+                pass
+              # Then open explore/home (not profile/me — that often bounces guests).
+              settle_url = {
+                "xhs": "https://www.xiaohongshu.com/explore",
+                "douyin": "https://www.douyin.com/",
+                "zhihu": "https://www.zhihu.com/",
+                "bilibili": "https://www.bilibili.com/",
+              }.get(platform) or home
+              try:
+                page.goto(settle_url, wait_until="domcontentloaded", timeout=35_000)
                 page.wait_for_timeout(2000)
               except Exception:  # noqa: BLE001
                 pass
-              # After OTP, leave the challenge shell so session cookies apply.
-              try:
-                page.goto(home, wait_until="domcontentloaded", timeout=35_000)
-                page.wait_for_timeout(1500)
-              except Exception:  # noqa: BLE001
-                try:
-                  page.reload(wait_until="domcontentloaded", timeout=30_000)
-                  page.wait_for_timeout(1200)
-                except Exception:  # noqa: BLE001
-                  pass
             else:
               emit_progress("未能自动填入验证码，请重新输入后提交")
           else:
@@ -1603,9 +1680,22 @@ def default_playwright_runner(
             if sms_submitted:
               emit_progress("验证码已提交，正在完成登录…")
 
+          if sms_submitted and sms_submitted_at and (time.time() - sms_submitted_at) > 90:
+            raise TimeoutError(
+              "验证码已提交，但 90 秒内未能确认登录。"
+              "请关闭后重试；若反复失败，小红书可能拦截了云服务器登录。"
+            )
+
           page.wait_for_timeout(800)
           cookies = context.cookies()
-          if platform_login_ready(page, platform, cookies, captured):
+          ready_now = soft_ready_after_sms(
+            platform,
+            page,
+            cookies,
+            captured,
+            fingerprint_before=fingerprint_before_sms,
+          ) if sms_submitted else platform_login_ready(page, platform, cookies, captured)
+          if ready_now:
             ready_streak += 1
             emit_progress("登录已确认，正在保存…")
           elif not sms_submitted:
@@ -1624,15 +1714,7 @@ def default_playwright_runner(
 
         if not sms_mode or ready_streak >= (1 if sms_submitted else 2):
           try:
-            fp_now = "|".join(
-              sorted(
-                f"{c.get('name')}={str(c.get('value') or '')[:24]}"
-                for c in cookies
-                if str(c.get("name") or "") in {
-                  "web_session", "a1", "sessionid", "sessionid_ss", "z_c0", "SESSDATA", "DedeUserID",
-                }
-              )
-            )
+            fp_now = cookie_fingerprint(cookies)
           except Exception:  # noqa: BLE001
             fp_now = session_fingerprint
           if session_fingerprint and fp_now and fp_now != session_fingerprint:
@@ -1661,25 +1743,31 @@ def default_playwright_runner(
         needed = 1 if sms_submitted else 2
         if ready_streak >= needed:
           fresh = context.cookies()
-          if not verify_authenticated_session(platform, page, fresh, captured):
-            # After SMS, give the session a moment and retry instead of hard reset.
-            if sms_submitted:
-              emit_progress("正在确认登录态…")
-              try:
-                page.wait_for_timeout(1500)
-                if not captured.get("login_verified"):
-                  platform_login_ready(page, platform, context.cookies(), captured)
-                fresh = context.cookies()
-                if not verify_authenticated_session(platform, page, fresh, captured):
-                  page.wait_for_timeout(800)
-                  continue
-              except Exception:  # noqa: BLE001
-                page.wait_for_timeout(800)
-                continue
+          verified = verify_authenticated_session(platform, page, fresh, captured)
+          if not verified and sms_submitted:
+            emit_progress("正在确认登录态…")
+            try:
+              page.wait_for_timeout(1200)
+            except Exception:  # noqa: BLE001
+              pass
+            fresh = context.cookies()
+            if soft_ready_after_sms(
+              platform,
+              page,
+              fresh,
+              captured,
+              fingerprint_before=fingerprint_before_sms,
+            ):
+              verified = True
             else:
-              ready_streak = 0
+              verified = verify_authenticated_session(platform, page, fresh, captured)
+          if not verified:
+            if sms_submitted:
               page.wait_for_timeout(800)
               continue
+            ready_streak = 0
+            page.wait_for_timeout(800)
+            continue
           for _ in range(8):
             if captured.get("account") or captured.get("account_id"):
               break
@@ -1692,37 +1780,29 @@ def default_playwright_runner(
                 f"知乎用户 {str(me.get('url_token') or '')[:16]}".strip()
               )
             account = str(account or "").strip() or "知乎账号"
-          if not str(account or "").strip() and captured.get("login_verified"):
+          if not str(account or "").strip():
             account = {
               "xhs": "小红书账号",
               "douyin": "抖音账号",
               "zhihu": "知乎账号",
               "bilibili": "B 站账号",
             }.get(platform, "已登录账号")
+          if weak_account_label(platform, account) and not (captured.get("login_verified") or sms_submitted):
+            ready_streak = 0
+            page.wait_for_timeout(800)
+            continue
           if weak_account_label(platform, account):
-            page.wait_for_timeout(1000)
             better = capture_account_after_login(page, platform, context.cookies(), captured)
             if better and not weak_account_label(platform, better):
               account = better
-            elif captured.get("login_verified") or sms_submitted:
+            else:
               account = better or account or {
                 "xhs": "小红书账号",
                 "douyin": "抖音账号",
                 "zhihu": "知乎账号",
                 "bilibili": "B 站账号",
               }.get(platform, "已登录账号")
-            else:
-              ready_streak = 0
-              page.wait_for_timeout(800)
-              continue
           fresh = context.cookies()
-          if not verify_authenticated_session(platform, page, fresh, captured):
-            if sms_submitted and captured.get("login_verified"):
-              pass  # accept soft verify after OTP
-            else:
-              ready_streak = 0
-              page.wait_for_timeout(800)
-              continue
           emit_progress("登录成功")
           emit_needs_sms(False)
           return finish(account, fresh)
