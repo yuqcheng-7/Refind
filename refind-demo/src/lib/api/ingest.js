@@ -16,6 +16,7 @@ import {
 import { supportsRealLogin } from './platformSession.js';
 import { extractLinkContent } from '../../../../supabase/functions/parse-material/extractLinkContent.js';
 import { prefetchZhihuViaBrowserApi } from './zhihuBrowserPrefetch.js';
+import { normalizeSourceUrl } from './normalizeSourceUrl.js';
 
 const terminalStatuses = new Set(['ready', 'failed', 'link_only']);
 
@@ -407,9 +408,10 @@ async function refreshParserSessionFromExtension(platform) {
 }
 
 export async function parseAndPollMaterial(materialId, { force = false, sourceUrl = '' } = {}) {
-  const platform = sourceUrl ? inferPlatformFromUrl(sourceUrl) : '';
+  const sourceUrlNormalized = sourceUrl ? normalizeSourceUrl(sourceUrl) : '';
+  const platform = sourceUrlNormalized ? inferPlatformFromUrl(sourceUrlNormalized) : '';
   let restored = false;
-  if (sourceUrl && supportsRealLogin(platform)) {
+  if (sourceUrlNormalized && supportsRealLogin(platform)) {
     try {
       restored = await restoreParserSessionFromStore(platform);
     } catch {
@@ -419,9 +421,9 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
   // If we just re-pushed cookies, always ask parser to use them — don't depend on
   // listConnections reconcile timing (which previously flipped use_saved_session off).
   let useSavedSession = restored
-    || (sourceUrl ? await shouldUseSavedSession(sourceUrl) : false);
-  let prefetchedRaw = sourceUrl
-    ? await prefetchLinkContent(sourceUrl, { useSavedSession })
+    || (sourceUrlNormalized ? await shouldUseSavedSession(sourceUrlNormalized) : false);
+  let prefetchedRaw = sourceUrlNormalized
+    ? await prefetchLinkContent(sourceUrlNormalized, { useSavedSession })
     : null;
 
   // Hosted parser uses a datacenter IP; CN platforms often return captcha / 403.
@@ -429,13 +431,13 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
   const preferBrowser = platform === 'wechat_mp' || platform === 'web';
   const sessionFailed = supportsRealLogin(platform) && Boolean(prefetchedRaw?.error);
 
-  if (sourceUrl && (preferBrowser || sessionFailed || prefetchedRaw?.error)) {
+  if (sourceUrlNormalized && (preferBrowser || sessionFailed || prefetchedRaw?.error)) {
     // Fresh cookies from the live browser often fix stale DB sessions on the parser.
     if (sessionFailed) {
       const refreshed = await refreshParserSessionFromExtension(platform);
       if (refreshed) {
         useSavedSession = true;
-        const retried = await prefetchLinkContent(sourceUrl, { useSavedSession: true });
+        const retried = await prefetchLinkContent(sourceUrlNormalized, { useSavedSession: true });
         if (retried && !retried.error) {
           prefetchedRaw = retried;
         }
@@ -443,7 +445,7 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
     }
 
     if (preferBrowser || !prefetchedRaw || prefetchedRaw.error) {
-      const viaExt = await prefetchViaExtension(sourceUrl, platform);
+      const viaExt = await prefetchViaExtension(sourceUrlNormalized, platform);
       if (viaExt && !viaExt.error) {
         prefetchedRaw = viaExt;
       } else if (prefetchedRaw?.error && viaExt?.detail) {
@@ -468,7 +470,7 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
       usedSavedSession: prefetchedRaw.session_mode === 'saved' || useSavedSession,
     })
   ) {
-    const platformCode = inferPlatformFromUrl(sourceUrl);
+    const platformCode = inferPlatformFromUrl(sourceUrlNormalized);
     try {
       await markPlatformSessionInvalid(platformCode);
     } catch {
@@ -480,7 +482,17 @@ export async function parseAndPollMaterial(materialId, { force = false, sourceUr
   try {
     const row = await pollMaterialStatus(materialId);
     if (row.status === 'failed') {
-      const detail = row.last_parse_error || data?.error || invokeError?.message || prefetchDetail || '解析失败';
+      const detail = prefetchDetail || row.last_parse_error || data?.error || invokeError?.message || '解析失败';
+      if (prefetchDetail && row.last_parse_error !== prefetchDetail) {
+        try {
+          await supabase
+            .from('materials')
+            .update({ last_parse_error: detail })
+            .eq('id', materialId);
+        } catch {
+          // ignore
+        }
+      }
       const err = new Error(detail);
       err.materialId = materialId;
       err.status = row.status;

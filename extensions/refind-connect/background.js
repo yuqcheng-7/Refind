@@ -19,9 +19,9 @@ const AUTH_HINTS = {
   bilibili: ['SESSDATA', 'DedeUserID'],
 };
 
-const MAX_PAGE_BYTES = 2_000_000;
-const TAB_TIMEOUT_MS = 28_000;
-const TAB_SETTLE_MS = 1_600;
+const MAX_PAGE_BYTES = 6_000_000;
+const TAB_TIMEOUT_MS = 32_000;
+const TAB_SETTLE_MS = 2_200;
 
 function cookiesToHeader(cookies) {
   const seen = new Map();
@@ -100,9 +100,60 @@ function assertHttpUrl(url) {
 }
 
 /**
+ * Prefer article/root content nodes and strip heavy assets so WeChat/Douyin
+ * pages (often 3–8MB with scripts) stay under the message size limit.
+ */
+function scrapePageDom() {
+  const title = document.title || '';
+  const finalUrl = location.href;
+  const escape = (value) => String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const pickers = [
+    '#js_content',
+    '.RichText',
+    '.Post-RichText',
+    'article',
+    '[class*="article-content"]',
+    '#RENDER_DATA',
+    'script#RENDER_DATA',
+    'script#__UNIVERSAL_DATA_FOR_REHYDRATION__',
+  ];
+
+  const parts = [];
+  for (const sel of pickers) {
+    const nodes = document.querySelectorAll(sel);
+    nodes.forEach((node) => {
+      if (node.tagName === 'SCRIPT') {
+        parts.push(`<script id="${escape(node.id)}">${node.textContent || ''}</script>`);
+      } else {
+        parts.push(node.outerHTML);
+      }
+    });
+  }
+
+  let bodyHtml = parts.join('\n');
+  if (!bodyHtml || bodyHtml.length < 80) {
+    const clone = document.documentElement.cloneNode(true);
+    clone.querySelectorAll('script:not(#RENDER_DATA):not(#__UNIVERSAL_DATA_FOR_REHYDRATION__), style, svg, iframe, noscript, link[rel="stylesheet"]').forEach((el) => el.remove());
+    bodyHtml = clone.outerHTML;
+  }
+
+  // Soft-cap: keep heading/meta + body slice if still huge.
+  const max = 5_500_000;
+  if (bodyHtml.length > max) {
+    bodyHtml = bodyHtml.slice(0, max);
+  }
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${escape(title)}</title></head><body>${bodyHtml}</body></html>`;
+  return { html, title, finalUrl };
+}
+
+/**
  * Open a background tab, wait for load + SPA settle, scrape rendered HTML.
- * Uses the user's real browser cookies/JS — far more reliable than extension fetch
- * for WeChat / Douyin / Zhihu.
  */
 async function fetchViaTab(url) {
   const target = assertHttpUrl(url);
@@ -113,15 +164,26 @@ async function fetchViaTab(url) {
   }
 
   try {
+    try {
+      await chrome.tabs.update(tabId, { autoDiscardable: false });
+    } catch {
+      // older chrome
+    }
+
     await new Promise((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error('页面加载超时'));
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(new Error('页面加载超时'));
+        }
       }, TAB_TIMEOUT_MS);
 
       function onUpdated(id, info) {
         if (id !== tabId) return;
-        if (info.status === 'complete') {
+        if (info.status === 'complete' && !settled) {
+          settled = true;
           cleanup();
           resolve();
         }
@@ -133,9 +195,9 @@ async function fetchViaTab(url) {
       }
 
       chrome.tabs.onUpdated.addListener(onUpdated);
-      // Already complete (cached / instant).
       chrome.tabs.get(tabId).then((row) => {
-        if (row?.status === 'complete') {
+        if (!settled && row?.status === 'complete') {
+          settled = true;
           cleanup();
           resolve();
         }
@@ -146,11 +208,7 @@ async function fetchViaTab(url) {
 
     const injected = await chrome.scripting.executeScript({
       target: { tabId },
-      func: () => ({
-        html: document.documentElement.outerHTML,
-        title: document.title || '',
-        finalUrl: location.href,
-      }),
+      func: scrapePageDom,
     });
     const result = injected?.[0]?.result;
     const html = String(result?.html || '');
@@ -158,7 +216,7 @@ async function fetchViaTab(url) {
       throw new Error('页面内容为空');
     }
     if (html.length > MAX_PAGE_BYTES) {
-      throw new Error('页面过大（超过 2MB）');
+      throw new Error('页面过大（超过限制）');
     }
     return {
       url: target,
@@ -223,7 +281,7 @@ async function fetchUrl(url, { accept = '' } = {}) {
 
   const buf = await response.arrayBuffer();
   if (buf.byteLength > MAX_PAGE_BYTES) {
-    throw new Error('页面过大（超过 2MB）');
+    throw new Error('页面过大（超过限制）');
   }
   const text = new TextDecoder('utf-8').decode(buf);
   if (!text.trim()) {
@@ -240,7 +298,6 @@ async function fetchUrl(url, { accept = '' } = {}) {
 }
 
 async function fetchPageHtml(url) {
-  // Prefer real browser tab (cookies + JS). Fall back to credentialed fetch.
   try {
     return await fetchViaTab(url);
   } catch (tabErr) {
@@ -255,7 +312,7 @@ async function fetchPageHtml(url) {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = message?.type;
   if (type === 'PING') {
-    sendResponse({ ok: true, version: '0.2.2' });
+    sendResponse({ ok: true, version: '0.2.3' });
     return false;
   }
   if (type === 'GET_PLATFORM_SESSION') {
