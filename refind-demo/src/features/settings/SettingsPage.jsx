@@ -108,20 +108,23 @@ export function SettingsPage({
         setNotice('正在准备登录二维码，请用对应 App 扫码…');
         const login = await waitForPlatformLogin(platformCode, {
           onUpdate: (snap) => {
-            setLoginQr((prev) => ({
-              platformCode,
-              image: snap?.qrImageBase64 || prev?.image || '',
-              waiting: true,
-              needsSms: Boolean(snap?.needsSms),
-              loginId: snap?.loginId || prev?.loginId || '',
-            }));
-            if (snap?.needsSms) {
-              setNotice(snap.progress || '平台要求短信验证码，请输入手机收到的验证码');
-            } else if (snap?.progress) {
-              setNotice(snap.progress);
-            } else if (snap?.qrImageBase64) {
-              setNotice('请用手机 App 扫描下方二维码完成登录。');
-            }
+            setLoginQr((prev) => {
+              const needsSms = Boolean(prev?.needsSms || snap?.needsSms);
+              if (needsSms) {
+                setNotice(snap?.progress || '平台要求短信验证码，请输入手机收到的验证码');
+              } else if (snap?.progress) {
+                setNotice(snap.progress);
+              } else if (snap?.qrImageBase64) {
+                setNotice('请用手机 App 扫描下方二维码完成登录。');
+              }
+              return {
+                platformCode,
+                image: snap?.qrImageBase64 || prev?.image || '',
+                waiting: true,
+                needsSms,
+                loginId: snap?.loginId || prev?.loginId || '',
+              };
+            });
           },
         });
         setLoginQr(null);
@@ -161,6 +164,7 @@ export function SettingsPage({
       await submitPlatformLoginSms(loginQr.loginId, smsCode.trim());
       setNotice('验证码已提交，正在完成登录…');
       setSmsCode('');
+      setLoginQr((prev) => (prev ? { ...prev, needsSms: true } : prev));
     } catch (err) {
       setError(err?.message || '提交验证码失败');
     } finally {
@@ -532,6 +536,7 @@ export function SettingsPage({
                   maxLength={8}
                   placeholder="短信验证码"
                   value={smsCode}
+                  disabled={smsBusy}
                   onChange={(e) => setSmsCode(e.target.value.replace(/\D/g, '').slice(0, 8))}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -543,6 +548,7 @@ export function SettingsPage({
                 <button type="button" disabled={smsBusy || smsCode.length < 4} onClick={() => void submitSms()}>
                   {smsBusy ? '提交中…' : '提交验证码'}
                 </button>
+                <p className="settings-sms-note">提交后请稍候，不要关闭；成功后会自动关闭。</p>
               </div>
             )}
             <p className="settings-qr-foot">登录过程约需数十秒，请勿关闭本页。</p>

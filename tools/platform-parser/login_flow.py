@@ -1529,6 +1529,7 @@ def default_playwright_runner(
       emit_progress("请用手机 App 扫描二维码")
 
       ready_streak = 0
+      sms_mode = False
       closed_hint = (
         "登录窗口已关闭。请重新点击「连接」并完成扫码；"
         "知乎会复用本机登录配置，成功保存后关闭窗口不会退出拾藏登录态。"
@@ -1549,7 +1550,8 @@ def default_playwright_runner(
           raise
         except Exception:  # noqa: BLE001
           pass
-        if not last_qr or ready_streak == 0:
+        # Once in SMS challenge, stop refreshing QR (avoids UI flipping back to QR).
+        if not sms_mode and (not last_qr or ready_streak == 0):
           emit_qr()
         cookies = context.cookies()
 
@@ -1558,10 +1560,12 @@ def default_playwright_runner(
         # "logged in" while this browser never receives the session.
 
         progress = page_login_progress(page)
-        # Never ask for SMS before a QR was shown — login pages contain "验证码登录" tabs.
-        if progress == "sms" and last_qr:
-          emit_needs_sms(True)
-          emit_progress("平台要求短信验证码：请查看手机短信，在弹窗中输入验证码")
+        # Latch SMS mode: login pages flicker between states; don't bounce the UI.
+        if (progress == "sms" and last_qr) or sms_mode:
+          if not sms_mode:
+            sms_mode = True
+            emit_needs_sms(True)
+            emit_progress("平台要求短信验证码：请查看手机短信，在弹窗中输入验证码")
           scan_seen_at = 0.0
           code = ""
           if poll_sms is not None:
@@ -1570,22 +1574,30 @@ def default_playwright_runner(
             except Exception:  # noqa: BLE001
               code = ""
           if code:
+            emit_needs_sms(True)
             emit_progress("正在提交验证码…")
             if fill_sms_and_submit(page, code):
-              emit_needs_sms(False)
+              emit_progress("验证码已提交，正在完成登录…")
               try:
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(2500)
               except Exception:  # noqa: BLE001
                 pass
             else:
-              emit_progress("未能自动填入验证码，请重试输入")
+              emit_progress("未能自动填入验证码，请重新输入后提交")
+          elif sms_mode:
+            emit_needs_sms(True)
           page.wait_for_timeout(800)
-          continue
-
-        if progress != "sms" and last_qr:
-          emit_needs_sms(False)
-
-        if progress == "scanned":
+          # Still check login readiness after SMS submit without leaving SMS UI.
+          cookies = context.cookies()
+          if platform_login_ready(page, platform, cookies, captured):
+            ready_streak += 1
+            emit_progress("登录已确认，正在保存…")
+          else:
+            ready_streak = 0
+          if ready_streak < 2:
+            continue
+          # fall through to success handling below when ready_streak >= 2
+        elif progress == "scanned":
           if not scan_seen_at:
             scan_seen_at = time.time()
           emit_progress("已扫码，请在手机上确认登录")
@@ -1594,34 +1606,41 @@ def default_playwright_runner(
             scan_seen_at = time.time()
           emit_progress("手机已确认，正在同步登录态…")
 
-        try:
-          fp_now = "|".join(
-            sorted(
-              f"{c.get('name')}={str(c.get('value') or '')[:24]}"
-              for c in cookies
-              if str(c.get("name") or "") in {
-                "web_session", "a1", "sessionid", "sessionid_ss", "z_c0", "SESSDATA", "DedeUserID",
-              }
+        if not sms_mode or ready_streak >= 2:
+          try:
+            fp_now = "|".join(
+              sorted(
+                f"{c.get('name')}={str(c.get('value') or '')[:24]}"
+                for c in cookies
+                if str(c.get("name") or "") in {
+                  "web_session", "a1", "sessionid", "sessionid_ss", "z_c0", "SESSDATA", "DedeUserID",
+                }
+              )
             )
-          )
-        except Exception:  # noqa: BLE001
-          fp_now = session_fingerprint
-        if session_fingerprint and fp_now and fp_now != session_fingerprint:
-          emit_progress("检测到会话更新，正在校验…")
-          session_fingerprint = fp_now
+          except Exception:  # noqa: BLE001
+            fp_now = session_fingerprint
+          if session_fingerprint and fp_now and fp_now != session_fingerprint:
+            emit_progress("检测到会话更新，正在校验…")
+            session_fingerprint = fp_now
 
-        if scan_seen_at and not captured.get("login_verified") and (time.time() - scan_seen_at) > 70:
-          raise TimeoutError(
-            "手机已确认登录，但网页端未拿到会话。"
-            "若手机收到了短信验证码，请重新连接并在弹窗中输入验证码；"
-            "若反复失败，可能是平台拦截了服务器浏览器。"
-          )
+          if (
+            not sms_mode
+            and scan_seen_at
+            and not captured.get("login_verified")
+            and (time.time() - scan_seen_at) > 70
+          ):
+            raise TimeoutError(
+              "手机已确认登录，但网页端未拿到会话。"
+              "若手机收到了短信验证码，请重新连接并在弹窗中输入验证码；"
+              "若反复失败，可能是平台拦截了服务器浏览器。"
+            )
 
-        if platform_login_ready(page, platform, cookies, captured):
-          ready_streak += 1
-          emit_progress("登录已确认，正在保存…")
-        else:
-          ready_streak = 0
+          if not sms_mode:
+            if platform_login_ready(page, platform, cookies, captured):
+              ready_streak += 1
+              emit_progress("登录已确认，正在保存…")
+            else:
+              ready_streak = 0
 
         if ready_streak >= 2:
           fresh = context.cookies()
