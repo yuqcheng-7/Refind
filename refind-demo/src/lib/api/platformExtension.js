@@ -63,7 +63,7 @@ export async function fetchPageHtmlViaExtension(url) {
   const data = await requestExtension(
     'REFIND_FETCH_PAGE',
     { url },
-    22000,
+    35000,
   );
   const page = data?.page;
   if (!page?.html) {
@@ -74,6 +74,8 @@ export async function fetchPageHtmlViaExtension(url) {
     finalUrl: String(page.finalUrl || page.url || url),
     html: String(page.html),
     contentType: String(page.contentType || ''),
+    title: String(page.title || ''),
+    via: String(page.via || ''),
   };
 }
 

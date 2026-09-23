@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "拾藏连接",
   "description": "在你自己的浏览器里登录平台、抓取网页正文，交给拾藏解析（避开机房 IP 风控）。",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtyP08fE3Oc9E2IACM7vl0l4xcrcY6mYSPhe3blj0SMK18kU0QaF4Ryv677hy8vJnQ325pkd4fs8ozl2PGE2RC+h9mMZCvGCrC70GY6ncidiTsN7VlrPXSJf7L7zTJgtrQ2LXD3A219kS8boOSWqS6cnrjI1Fpl/XNbX46DNzgPtrWBPhhv/GxCozrKm0Wys58r0JZ2pB3YY1AGFqH6Z/X5LOZKo7/xUbd8LgnTyFTsjojwWVIUk6tcWHPzQXh2/IsbrdELMeVhWGmY/Ec4wK3GY19pEeFmkdNYElmUPAI9xcpLANthzAwIuTRwIkeh6G2RuSEZMJpajnji07fyHTjQIDAQAB",
   "action": {
     "default_title": "拾藏连接",
@@ -11,7 +11,7 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["cookies", "tabs"],
+  "permissions": ["cookies", "tabs", "scripting"],
   "host_permissions": [
     "http://*/*",
     "https://*/*"

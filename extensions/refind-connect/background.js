@@ -20,6 +20,8 @@ const AUTH_HINTS = {
 };
 
 const MAX_PAGE_BYTES = 2_000_000;
+const TAB_TIMEOUT_MS = 28_000;
+const TAB_SETTLE_MS = 1_600;
 
 function cookiesToHeader(cookies) {
   const seen = new Map();
@@ -31,6 +33,10 @@ function cookiesToHeader(cookies) {
   return Array.from(seen.entries())
     .map(([name, value]) => `${name}=${value}`)
     .join('; ');
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function readPlatformCookies(platform) {
@@ -67,7 +73,16 @@ async function readPlatformCookies(platform) {
   };
 }
 
-async function fetchUrl(url, { accept = '' } = {}) {
+async function cookieHeaderForUrl(url) {
+  try {
+    const rows = await chrome.cookies.getAll({ url });
+    return cookiesToHeader(rows);
+  } catch {
+    return '';
+  }
+}
+
+function assertHttpUrl(url) {
   const target = String(url || '').trim();
   if (!/^https?:\/\//i.test(target)) {
     throw new Error('仅支持 http/https 链接');
@@ -81,9 +96,100 @@ async function fetchUrl(url, { accept = '' } = {}) {
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('链接协议不受支持');
   }
+  return target;
+}
 
+/**
+ * Open a background tab, wait for load + SPA settle, scrape rendered HTML.
+ * Uses the user's real browser cookies/JS — far more reliable than extension fetch
+ * for WeChat / Douyin / Zhihu.
+ */
+async function fetchViaTab(url) {
+  const target = assertHttpUrl(url);
+  const tab = await chrome.tabs.create({ url: target, active: false });
+  const tabId = tab.id;
+  if (!tabId) {
+    throw new Error('无法打开后台标签页');
+  }
+
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('页面加载超时'));
+      }, TAB_TIMEOUT_MS);
+
+      function onUpdated(id, info) {
+        if (id !== tabId) return;
+        if (info.status === 'complete') {
+          cleanup();
+          resolve();
+        }
+      }
+
+      function cleanup() {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+      }
+
+      chrome.tabs.onUpdated.addListener(onUpdated);
+      // Already complete (cached / instant).
+      chrome.tabs.get(tabId).then((row) => {
+        if (row?.status === 'complete') {
+          cleanup();
+          resolve();
+        }
+      }).catch(() => {});
+    });
+
+    await sleep(TAB_SETTLE_MS);
+
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        html: document.documentElement.outerHTML,
+        title: document.title || '',
+        finalUrl: location.href,
+      }),
+    });
+    const result = injected?.[0]?.result;
+    const html = String(result?.html || '');
+    if (!html.trim()) {
+      throw new Error('页面内容为空');
+    }
+    if (html.length > MAX_PAGE_BYTES) {
+      throw new Error('页面过大（超过 2MB）');
+    }
+    return {
+      url: target,
+      finalUrl: String(result?.finalUrl || target),
+      html,
+      text: html,
+      contentType: 'text/html',
+      title: String(result?.title || ''),
+      via: 'tab',
+    };
+  } finally {
+    try {
+      await chrome.tabs.remove(tabId);
+    } catch {
+      // tab may already be closed
+    }
+  }
+}
+
+/** Direct fetch with explicit Cookie header (for Zhihu JSON APIs). */
+async function fetchUrl(url, { accept = '' } = {}) {
+  const target = assertHttpUrl(url);
   const acceptHeader = String(accept || '').trim()
     || 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8';
+  const cookie = await cookieHeaderForUrl(target);
+  const headers = {
+    Accept: acceptHeader,
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+  };
+  if (cookie) headers.Cookie = cookie;
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   let response;
@@ -93,10 +199,7 @@ async function fetchUrl(url, { accept = '' } = {}) {
       redirect: 'follow',
       credentials: 'include',
       signal: controller.signal,
-      headers: {
-        Accept: acceptHeader,
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-      },
+      headers,
     });
   } catch (err) {
     if (err?.name === 'AbortError') throw new Error('页面抓取超时');
@@ -132,17 +235,27 @@ async function fetchUrl(url, { accept = '' } = {}) {
     html: text,
     text,
     contentType,
+    via: 'fetch',
   };
 }
 
 async function fetchPageHtml(url) {
-  return fetchUrl(url);
+  // Prefer real browser tab (cookies + JS). Fall back to credentialed fetch.
+  try {
+    return await fetchViaTab(url);
+  } catch (tabErr) {
+    try {
+      return await fetchUrl(url);
+    } catch {
+      throw tabErr;
+    }
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = message?.type;
   if (type === 'PING') {
-    sendResponse({ ok: true, version: '0.2.1' });
+    sendResponse({ ok: true, version: '0.2.2' });
     return false;
   }
   if (type === 'GET_PLATFORM_SESSION') {

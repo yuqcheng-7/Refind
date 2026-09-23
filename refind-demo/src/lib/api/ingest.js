@@ -317,30 +317,16 @@ export async function pollMaterialStatus(materialId, { intervalMs = 800, timeout
 
 async function prefetchViaExtension(sourceUrl, platform = '') {
   const hasExt = await pingRefindExtension();
-  if (!hasExt) return null;
-
-  if (platform === 'zhihu') {
-    try {
-      const extracted = await prefetchZhihuViaBrowserApi(sourceUrl, fetchUrlViaExtension);
-      if (!extracted || isJunkPrefetch(extracted)) {
-        return {
-          error: true,
-          platform: 'zhihu',
-          detail: '扩展已用本机知乎登录态请求接口，但仍未读到正文。请在浏览器打开知乎确认已登录，或在设置页「重新连接」知乎。',
-          session_mode: 'extension',
-        };
-      }
-      return extracted;
-    } catch (err) {
-      return {
-        error: true,
-        platform: 'zhihu',
-        detail: err?.message || '扩展抓取知乎失败',
-        session_mode: 'extension',
-      };
-    }
+  if (!hasExt) {
+    return {
+      error: true,
+      platform,
+      detail: '未检测到拾藏连接扩展。请安装/重新加载扩展（需 0.2.2+）并硬刷新本页后再试。',
+      session_mode: 'extension',
+    };
   }
 
+  let htmlResult = null;
   try {
     const page = await fetchPageHtmlViaExtension(sourceUrl);
     const extracted = await extractLinkContent({
@@ -353,34 +339,56 @@ async function prefetchViaExtension(sourceUrl, platform = '') {
         throw new Error('skip-network');
       },
     });
-    if (isJunkPrefetch(extracted)) {
-      return {
+    if (!isJunkPrefetch(extracted) && (extracted.content_text || extracted.caption_text || extracted.title)) {
+      htmlResult = {
+        ...extracted,
+        session_mode: 'extension',
+        used_saved_session: false,
+      };
+    } else {
+      htmlResult = {
         error: true,
         platform: extracted.platform || platform || '',
-        detail: '扩展已打开页面，但仍未读到可用正文（可能是登录墙或验证页）。',
+        detail: '扩展已在本机打开页面，但仍未读到可用正文（可能是登录墙或验证页）。',
         session_mode: 'extension',
       };
     }
-    if (!(extracted.content_text || extracted.caption_text || extracted.title)) {
-      return {
-        error: true,
-        platform: extracted.platform || '',
-        detail: '扩展抓取了页面，但未提取到正文',
-        session_mode: 'extension',
-      };
-    }
-    return {
-      ...extracted,
-      session_mode: 'extension',
-      used_saved_session: false,
-    };
   } catch (err) {
-    return {
+    htmlResult = {
       error: true,
       detail: err?.message || '扩展抓取页面失败',
       session_mode: 'extension',
     };
   }
+
+  if (htmlResult && !htmlResult.error) return htmlResult;
+
+  // Zhihu SPA often needs first-party JSON APIs when HTML shell is empty.
+  if (platform === 'zhihu') {
+    try {
+      const extracted = await prefetchZhihuViaBrowserApi(sourceUrl, fetchUrlViaExtension);
+      if (extracted && !isJunkPrefetch(extracted)) return extracted;
+      return {
+        error: true,
+        platform: 'zhihu',
+        detail: htmlResult?.detail
+          ? `${htmlResult.detail}；知乎接口也未返回正文。请确认本机浏览器已登录知乎。`
+          : '扩展已用本机知乎登录态请求，但仍未读到正文。请在浏览器打开知乎确认已登录。',
+        session_mode: 'extension',
+      };
+    } catch (err) {
+      return {
+        error: true,
+        platform: 'zhihu',
+        detail: htmlResult?.detail
+          ? `${htmlResult.detail}（知乎接口：${err?.message || '失败'}）`
+          : (err?.message || '扩展抓取知乎失败'),
+        session_mode: 'extension',
+      };
+    }
+  }
+
+  return htmlResult;
 }
 
 /** Re-read cookies from the user's browser and push onto the hosted parser. */

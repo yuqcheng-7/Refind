@@ -114,6 +114,7 @@ export function extractReadableBody(html) {
   const targeted = pickLargestMatch(html, [
     'id=["\']js_content["\'][^>]*>([\\s\\S]*?)</div>',
     'class=["\'][^"\']*RichText[^"\']*["\'][^>]*>([\\s\\S]*?)</div>',
+    'class=["\'][^"\']*Post-RichText[^"\']*["\'][^>]*>([\\s\\S]*?)</div>',
     'class=["\'][^"\']*article-content[^"\']*["\'][^>]*>([\\s\\S]*?)</div>',
     '<article\\b[^>]*>([\\s\\S]*?)</article>',
     '<main\\b[^>]*>([\\s\\S]*?)</main>',
@@ -123,6 +124,69 @@ export function extractReadableBody(html) {
   const bodyMatch = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
   const bodyText = htmlToParagraphText(bodyMatch?.[1] || html);
   return bodyText;
+}
+
+/** Pull title/desc/author/cover from Douyin SSR JSON blobs when present. */
+export function extractDouyinEmbedded(html = '') {
+  const out = { title: '', desc: '', author: '', cover: '' };
+  if (!html) return out;
+  const candidates = [];
+  const patterns = [
+    /<script[^>]+id="RENDER_DATA"[^>]*>([^<]+)<\/script>/i,
+    /window\._ROUTER_DATA\s*=\s*(\{.+?\})\s*;?\s*<\/script>/is,
+    /id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>\s*(\{.+?\})\s*<\/script>/is,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(html);
+    if (!match?.[1]) continue;
+    try {
+      const text = decodeURIComponent(match[1].trim());
+      candidates.push(JSON.parse(text));
+    } catch {
+      try {
+        candidates.push(JSON.parse(match[1].trim()));
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function walk(node, depth = 0) {
+    if (depth > 8 || !node) return;
+    if (Array.isArray(node)) {
+      for (const item of node.slice(0, 40)) walk(item, depth + 1);
+      return;
+    }
+    if (typeof node !== 'object') return;
+    const desc = node.desc || node.description || node.share_title || '';
+    const title = node.share_title || node.title || '';
+    let author = '';
+    const authorObj = node.author || node.authorInfo || {};
+    if (authorObj && typeof authorObj === 'object') {
+      author = authorObj.nickname || authorObj.nickName || '';
+    }
+    let cover = node.origin_cover || node.originCover || node.cover || node.dynamic_cover || node.dynamicCover || '';
+    if (cover && typeof cover === 'object') {
+      const urlList = cover.url_list || cover.urlList || [];
+      cover = Array.isArray(urlList) && urlList[0] ? urlList[0] : (cover.url || '');
+    }
+    if (desc && String(desc).length > out.desc.length) out.desc = cleanText(String(desc));
+    if (title && String(title).length > out.title.length) out.title = cleanText(String(title));
+    if (author && !out.author) out.author = cleanText(String(author));
+    if (cover && !out.cover) out.cover = cleanText(String(cover));
+    for (const value of Object.values(node)) {
+      if (value && typeof value === 'object') walk(value, depth + 1);
+    }
+  }
+
+  for (const item of candidates) walk(item);
+  return out;
+}
+
+export function isWechatErrorShell(html = '', title = '') {
+  const t = cleanText(title);
+  const blob = `${t} ${String(html || '').slice(0, 4000)}`;
+  return /参数错误|此内容因违规无法查看|内容已删除|环境异常|已停止访问该网页/.test(blob);
 }
 
 export function extractBilibiliId(sourceUrl) {
@@ -466,7 +530,34 @@ export async function extractLinkContent({
 
   result = mergeResult(result, await tryExternalParser(workingUrl || sourceUrl, env, fetchFn));
 
+  if (platform === 'douyin' && html) {
+    const embedded = extractDouyinEmbedded(html);
+    if (embedded.title || embedded.desc) {
+      result = mergeResult(result, {
+        title: embedded.title,
+        author_name: embedded.author,
+        caption_text: embedded.desc,
+        content_text: embedded.desc || embedded.title,
+        summary_seed: embedded.desc || embedded.title,
+        cover_image_url: absolutizeUrl(embedded.cover, workingUrl || sourceUrl),
+        quality: qualityFromText(embedded.desc || embedded.title, embedded.title),
+        playback_mode: 'external_url',
+        playback_url: workingUrl || sourceUrl,
+      });
+    }
+  }
+
   const og = extractOpenGraph(html, workingUrl || sourceUrl);
+  if (platform === 'wechat_mp' && isWechatErrorShell(html, og.title)) {
+    return {
+      ...result,
+      title: '',
+      content_text: '',
+      caption_text: '',
+      summary_seed: '',
+      quality: 'none',
+    };
+  }
   const body = extractReadableBody(html);
   const mediaFromHtml = extractMediaUrlsFromHtml(html, workingUrl || sourceUrl);
   const ogPatch = {
