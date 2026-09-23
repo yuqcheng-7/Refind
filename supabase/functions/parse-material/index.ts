@@ -206,6 +206,18 @@ function buildSummary(seed: string, text: string, title = '') {
   return value.length > 140 ? `${value.slice(0, 140)}…` : value;
 }
 
+function errorMessage(error: unknown, fallback = '解析失败') {
+  if (error instanceof Error && error.message) return error.message;
+  if (error && typeof error === 'object') {
+    const maybe = error as { message?: unknown; error?: unknown; details?: unknown };
+    if (typeof maybe.message === 'string' && maybe.message.trim()) return maybe.message;
+    if (typeof maybe.error === 'string' && maybe.error.trim()) return maybe.error;
+    if (typeof maybe.details === 'string' && maybe.details.trim()) return maybe.details;
+  }
+  if (typeof error === 'string' && error.trim()) return error;
+  return fallback;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return response({ error: 'Method not allowed' }, 405);
@@ -287,8 +299,11 @@ Deno.serve(async (req) => {
           canonical_url: local.canonical_url || material.source_url,
         };
         pendingMediaUrls = mediaUrlsFromPrefetched(prefetched);
-        // Prefetch often returns text without cover / media_urls; fill from OG / APIs.
-        if (!linkFields.cover_image_url || !pendingMediaUrls.length) {
+        // Prefetch already has usable body: do NOT re-fetch the source page here.
+        // CN login-walled sites (Zhihu etc.) often blow up Edge SSRF/HTML limits and
+        // previously aborted the whole parse with an opaque "解析失败".
+        const prefetchedReady = Boolean(text && text.length >= 40);
+        if (!prefetchedReady && (!linkFields.cover_image_url || !pendingMediaUrls.length)) {
           try {
             let html = '';
             let resolvedUrl = material.source_url;
@@ -321,7 +336,37 @@ Deno.serve(async (req) => {
               pendingMediaUrls = mediaUrlsFromList(extracted.media_urls);
             }
           } catch (coverError) {
-            console.error('cover supplement failed', coverError);
+            console.error('cover supplement failed', errorMessage(coverError));
+          }
+        }
+        // When prefetched is ready, still allow parser-only cover fill (no page fetch).
+        if (prefetchedReady && !linkFields.cover_image_url) {
+          try {
+            const extracted = await extractLinkContent({
+              sourceUrl: material.source_url,
+              resolvedUrl: material.source_url,
+              html: '',
+              env: {
+                PLATFORM_PARSER_URL: Deno.env.get('PLATFORM_PARSER_URL') || '',
+              },
+              fetchFn: async (input: RequestInfo | URL, init?: RequestInit) => {
+                const href = String(input);
+                // Only allow the hosted parser; block accidental source-site fetches.
+                const parserBase = String(Deno.env.get('PLATFORM_PARSER_URL') || '');
+                if (parserBase && href.startsWith(parserBase)) {
+                  return fetch(input, init);
+                }
+                throw new Error('skip-source-fetch');
+              },
+            });
+            if (extracted.cover_image_url) {
+              linkFields.cover_image_url = extracted.cover_image_url;
+            }
+            if (!pendingMediaUrls.length) {
+              pendingMediaUrls = mediaUrlsFromList(extracted.media_urls);
+            }
+          } catch (coverError) {
+            console.error('parser cover fill failed', errorMessage(coverError));
           }
         }
         if (pendingMediaUrls.length) {
@@ -332,30 +377,39 @@ Deno.serve(async (req) => {
       } else {
         let html = '';
         let resolvedUrl = material.source_url;
-        try {
-          const { response: fetched, finalUrl } = await fetchSafeUrl(material.source_url);
-          resolvedUrl = finalUrl || material.source_url;
-          if (fetched.ok) {
-            const contentType = fetched.headers.get('content-type');
-            try {
-              assertAllowedUrlContentType(contentType);
-              html = await readLimitedText(fetched);
-            } catch {
-              // Still try platform APIs / OG-less metadata path.
+        const platformHint = String(material.platform_code || '');
+        const skipHtmlFetch = ['zhihu', 'douyin', 'xhs', 'bilibili'].includes(platformHint);
+        if (!skipHtmlFetch) {
+          try {
+            const { response: fetched, finalUrl } = await fetchSafeUrl(material.source_url);
+            resolvedUrl = finalUrl || material.source_url;
+            if (fetched.ok) {
+              const contentType = fetched.headers.get('content-type');
+              try {
+                assertAllowedUrlContentType(contentType);
+                html = await readLimitedText(fetched);
+              } catch {
+                // Still try platform APIs / OG-less metadata path.
+              }
             }
+          } catch {
+            // Platform APIs may still succeed without HTML (e.g. Bilibili).
           }
-        } catch {
-          // Platform APIs may still succeed without HTML (e.g. Bilibili).
         }
 
-        const extracted = await extractLinkContent({
-          sourceUrl: material.source_url,
-          resolvedUrl,
-          html,
-          env: {
-            PLATFORM_PARSER_URL: Deno.env.get('PLATFORM_PARSER_URL') || '',
-          },
-        });
+        let extracted;
+        try {
+          extracted = await extractLinkContent({
+            sourceUrl: material.source_url,
+            resolvedUrl,
+            html,
+            env: {
+              PLATFORM_PARSER_URL: Deno.env.get('PLATFORM_PARSER_URL') || '',
+            },
+          });
+        } catch (extractError) {
+          throw new Error(`链接解析失败：${errorMessage(extractError)}`);
+        }
         text = extracted.content_text || '';
         title = title || extracted.title || material.source_url;
         linkFields = {
@@ -597,19 +651,33 @@ Deno.serve(async (req) => {
       && linkFields.cover_image_url
       && material.source_url
     ) {
-      const persistedCover = await persistRemoteCoverImage({
-        admin,
-        userId: material.user_id,
-        materialId: material.id,
-        coverUrl: linkFields.cover_image_url as string,
-        referer: material.source_url,
-      });
-      if (persistedCover) {
-        readyPatch.cover_storage_object_key = persistedCover;
+      try {
+        const persistedCover = await persistRemoteCoverImage({
+          admin,
+          userId: material.user_id,
+          materialId: material.id,
+          coverUrl: linkFields.cover_image_url as string,
+          referer: material.source_url,
+        });
+        if (persistedCover) {
+          readyPatch.cover_storage_object_key = persistedCover;
+        }
+      } catch (coverPersistError) {
+        console.error('cover persist failed', errorMessage(coverPersistError));
       }
     }
     const { error: updateError } = await admin.from('materials').update(readyPatch).eq('id', material.id);
-    if (updateError) throw updateError;
+    if (updateError) {
+      const msg = errorMessage(updateError);
+      // Soft-launch / retries often leave deleted rows that still occupy canonical_url.
+      if (/materials_unique_canonical_url|canonical_url/i.test(msg) && readyPatch.canonical_url) {
+        const { canonical_url: _drop, ...withoutCanonical } = readyPatch;
+        const { error: retryError } = await admin.from('materials').update(withoutCanonical).eq('id', material.id);
+        if (retryError) throw retryError;
+      } else {
+        throw updateError;
+      }
+    }
 
     const embedPromise = invokeEmbedMaterial({
       supabaseUrl: Deno.env.get('SUPABASE_URL') || '',
@@ -751,7 +819,8 @@ Deno.serve(async (req) => {
     }
     return response({ ok: true, status: 'ready', quality: linkFields.quality || 'full' });
   } catch (error) {
-    const message = error instanceof Error ? error.message : '解析失败';
+    const message = errorMessage(error);
+    console.error('parse-material failed', message, error);
     if (wasReady) {
       const { error: restoreError } = await admin.from('materials').update({
         status: 'ready',
