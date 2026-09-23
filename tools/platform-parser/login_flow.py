@@ -1032,7 +1032,26 @@ def page_login_progress(page: Any) -> str:
       page.evaluate(
         """() => {
           const t = document.body?.innerText || '';
-          if (/验证码|短信验证|安全验证|输入验证码|获取验证码|手机号验证/.test(t)) return 'sms';
+          // Do NOT match bare "验证码" — login pages always have "验证码登录" as a tab.
+          if (/请输入验证码|短信验证码|完成安全验证|安全验证码|输入短信验证码|校验验证码|手机验证码/.test(t)) {
+            return 'sms';
+          }
+          const inputs = Array.from(document.querySelectorAll('input'));
+          const otpVisible = inputs.some((el) => {
+            if (!el || el.offsetParent === null) return false;
+            const meta = `${el.placeholder || ''} ${el.name || ''} ${el.getAttribute('aria-label') || ''} ${el.autocomplete || ''}`;
+            if (/one-time-code|短信验证码|请输入验证码/i.test(meta)) return true;
+            if ((el.maxLength === 4 || el.maxLength === 6 || el.maxLength === 8) && /验证码|code|sms|otp/i.test(meta)) return true;
+            return false;
+          });
+          const qrVisible = !!document.querySelector(
+            'canvas, img[src*="qr" i], [class*="qrcode" i] img, [class*="Qrcode" i] img'
+          );
+          // OTP field without a QR usually means post-scan challenge.
+          if (otpVisible && !qrVisible && /短信|安全验证|验证码/.test(t) && !/验证码登录/.test(t.replace(/请输入验证码|短信验证码/g, ''))) {
+            return 'sms';
+          }
+          if (otpVisible && !qrVisible && /请输入|提交验证|安全验证/.test(t)) return 'sms';
           if (/登录成功|已成功登录|登录完成/.test(t)) return 'confirmed';
           if (/扫码成功|已扫描|请在手机上确认|确认登录|扫码后点击确认/.test(t)) return 'scanned';
           return '';
@@ -1539,7 +1558,8 @@ def default_playwright_runner(
         # "logged in" while this browser never receives the session.
 
         progress = page_login_progress(page)
-        if progress == "sms":
+        # Never ask for SMS before a QR was shown — login pages contain "验证码登录" tabs.
+        if progress == "sms" and last_qr:
           emit_needs_sms(True)
           emit_progress("平台要求短信验证码：请查看手机短信，在弹窗中输入验证码")
           scan_seen_at = 0.0
@@ -1561,6 +1581,9 @@ def default_playwright_runner(
               emit_progress("未能自动填入验证码，请重试输入")
           page.wait_for_timeout(800)
           continue
+
+        if progress != "sms" and last_qr:
+          emit_needs_sms(False)
 
         if progress == "scanned":
           if not scan_seen_at:
