@@ -258,6 +258,10 @@ export async function fetchBilibiliMeta(sourceUrl, fetchFn = fetch) {
 async function tryExternalParser(sourceUrl, env = {}, fetchFn = fetch) {
   const base = cleanText(env.PLATFORM_PARSER_URL || '');
   if (!base) return null;
+  const platform = detectPlatform(sourceUrl);
+  // Hosted soft-launch: shared parser sessions. Prefer them for login-walled platforms
+  // so Edge fallback is not stuck on anonymous 403 when browser prefetch missed.
+  const useSavedSession = ['xhs', 'douyin', 'zhihu', 'bilibili'].includes(platform);
   try {
     const response = await fetchFn(new URL('/parse', base).href, {
       method: 'POST',
@@ -265,19 +269,25 @@ async function tryExternalParser(sourceUrl, env = {}, fetchFn = fetch) {
         'Content-Type': 'application/json',
         'User-Agent': BROWSER_UA,
       },
-      body: JSON.stringify({ url: sourceUrl }),
+      body: JSON.stringify({
+        url: sourceUrl,
+        use_saved_session: useSavedSession,
+      }),
       signal: AbortSignal.timeout(20_000),
     });
     if (!response.ok) return null;
     const data = await response.json();
-    if (!data || typeof data !== 'object') return null;
+    if (!data || typeof data !== 'object' || data.error) return null;
+    const title = cleanText(data.title || '');
+    const content = cleanText(data.content_text || data.description || '');
+    if (isZhihuJunkResult(platform, title, content)) return null;
     return {
-      platform: data.platform || detectPlatform(sourceUrl),
-      title: cleanText(data.title || ''),
+      platform: data.platform || platform,
+      title,
       author_name: cleanText(data.author_name || data.author || ''),
       caption_text: cleanText(data.caption_text || data.description || ''),
       subtitle_text: cleanText(data.subtitle_text || data.subtitles || ''),
-      content_text: cleanText(data.content_text || data.description || ''),
+      content_text: content,
       summary_seed: cleanText(data.summary || data.description || data.content_text || ''),
       cover_image_url: absolutizeUrl(
         data.cover_image_url || data.cover || data.thumbnail || data.image || '',
@@ -292,6 +302,16 @@ async function tryExternalParser(sourceUrl, env = {}, fetchFn = fetch) {
   } catch {
     return null;
   }
+}
+
+/** Zhihu often returns a soft 404 / marketing shell that looks like a successful parse. */
+export function isZhihuJunkResult(platform, title = '', content = '') {
+  if (platform !== 'zhihu') return false;
+  const t = cleanText(title);
+  const c = cleanText(content);
+  if (/没有知识存在的荒原|安全验证|请先登录|404\s*-\s*知乎|^知乎$/.test(t)) return true;
+  if (c.length > 0 && c.length < 280 && /中文互联网高质量的问答社区/.test(c)) return true;
+  return false;
 }
 
 function preferLonger(current, next) {

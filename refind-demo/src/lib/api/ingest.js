@@ -173,11 +173,21 @@ export async function shouldUseSavedSession(
   if (!connected) return false;
   const health = await fetchHealth();
   if (health?.verified && Object.prototype.hasOwnProperty.call(health.verified, platform)) {
+    // soft_ok_cookie_shape still counts as verified:true on parser; only skip when false.
     return health.verified[platform] === true;
   }
   const presence = await fetchPresence();
   if (presence && !presence[platform]) return false;
   return true;
+}
+
+function isZhihuJunkPrefetch(data) {
+  if (!data || data.platform !== 'zhihu') return false;
+  const title = String(data.title || '');
+  const content = String(data.content_text || data.caption_text || '');
+  if (/没有知识存在的荒原|安全验证|请先登录|404\s*-\s*知乎|^知乎$/.test(title)) return true;
+  if (content.length > 0 && content.length < 280 && /中文互联网高质量的问答社区/.test(content)) return true;
+  return false;
 }
 
 /** Browser-side parse on the user's network (CN platforms reachable). */
@@ -206,6 +216,16 @@ export async function prefetchLinkContent(sourceUrl, { useSavedSession = false }
         platform: data?.platform || '',
         detail: data?.detail || '本地解析未返回内容',
         session_mode: data?.session_mode || (useSavedSession ? 'saved' : 'anonymous'),
+      };
+    }
+    if (isZhihuJunkPrefetch(data)) {
+      return {
+        error: true,
+        platform: 'zhihu',
+        detail: useSavedSession
+          ? '已使用本机知乎登录会话，但仍未能解析该链接。请确认链接可公开打开，或在设置页「重新连接」知乎后再试。'
+          : '知乎需要登录态才能抓取。请在设置页连接知乎后重试。',
+        session_mode: data.session_mode || (useSavedSession ? 'saved' : 'anonymous'),
       };
     }
     if (!(data.content_text || data.caption_text || data.title)) {
@@ -251,14 +271,18 @@ export async function pollMaterialStatus(materialId, { intervalMs = 800, timeout
 
 export async function parseAndPollMaterial(materialId, { force = false, sourceUrl = '' } = {}) {
   const platform = sourceUrl ? inferPlatformFromUrl(sourceUrl) : '';
+  let restored = false;
   if (sourceUrl && supportsRealLogin(platform)) {
     try {
-      await restoreParserSessionFromStore(platform);
+      restored = await restoreParserSessionFromStore(platform);
     } catch {
       // Best-effort: still attempt parse with whatever session the parser has.
     }
   }
-  const useSavedSession = sourceUrl ? await shouldUseSavedSession(sourceUrl) : false;
+  // If we just re-pushed cookies, always ask parser to use them — don't depend on
+  // listConnections reconcile timing (which previously flipped use_saved_session off).
+  const useSavedSession = restored
+    || (sourceUrl ? await shouldUseSavedSession(sourceUrl) : false);
   const prefetchedRaw = sourceUrl
     ? await prefetchLinkContent(sourceUrl, { useSavedSession })
     : null;

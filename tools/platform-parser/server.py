@@ -742,6 +742,10 @@ def _zhihu_result_from_html_fields(
     return None
   if title in {"知乎", "安全验证", "请先登录", "404 - 知乎"} and len(text_body) < 20:
     return None
+  if "没有知识存在的荒原" in (title or ""):
+    return None
+  if text_body and len(text_body) < 280 and "中文互联网高质量的问答社区" in text_body:
+    return None
   return result(
     platform="zhihu",
     title=title or "知乎内容",
@@ -919,7 +923,11 @@ def parse_zhihu(url: str) -> dict | None:
 
   if not title and not body:
     return None
-  if title in {"知乎", "安全验证", "请先登录", "404 - 知乎"} and len(body) < 20:
+  if (title in {"知乎", "安全验证", "请先登录", "404 - 知乎"} and len(body) < 20:
+    return None
+  if "没有知识存在的荒原" in (title or ""):
+    return None
+  if body and len(body) < 280 and "中文互联网高质量的问答社区" in body:
     return None
 
   return result(
