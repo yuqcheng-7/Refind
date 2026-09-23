@@ -44,9 +44,9 @@ class LoginFlowTests(unittest.TestCase):
       self.assertEqual(snap["status"], "success")
       self.assertEqual(snap["account_display_name"], "测试号")
       self.assertIn("web_session=ok", snap["session_payload"])
-      # payload only once
+      # Keep returning payload so concurrent polls cannot miss it.
       again = login_flow.snapshot_job(login_id)
-      self.assertIsNone(again["session_payload"])
+      self.assertIn("web_session=ok", again["session_payload"])
       save.assert_called_once()
 
   def test_guess_account_name_from_cookies(self) -> None:
