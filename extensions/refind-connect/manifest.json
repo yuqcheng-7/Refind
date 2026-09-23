@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "拾藏连接",
+  "description": "在你自己的浏览器里登录小红书/抖音等，把登录态安全交给拾藏网站。",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtyP08fE3Oc9E2IACM7vl0l4xcrcY6mYSPhe3blj0SMK18kU0QaF4Ryv677hy8vJnQ325pkd4fs8ozl2PGE2RC+h9mMZCvGCrC70GY6ncidiTsN7VlrPXSJf7L7zTJgtrQ2LXD3A219kS8boOSWqS6cnrjI1Fpl/XNbX46DNzgPtrWBPhhv/GxCozrKm0Wys58r0JZ2pB3YY1AGFqH6Z/X5LOZKo7/xUbd8LgnTyFTsjojwWVIUk6tcWHPzQXh2/IsbrdELMeVhWGmY/Ec4wK3GY19pEeFmkdNYElmUPAI9xcpLANthzAwIuTRwIkeh6G2RuSEZMJpajnji07fyHTjQIDAQAB",
+  "action": {
+    "default_title": "拾藏连接",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["cookies", "tabs"],
+  "host_permissions": [
+    "*://*.xiaohongshu.com/*",
+    "*://*.douyin.com/*",
+    "*://*.zhihu.com/*",
+    "*://*.bilibili.com/*",
+    "*://*.refind.cloud/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.refind.cloud/*",
+        "https://*.pages.dev/*",
+        "http://127.0.0.1/*",
+        "http://localhost/*",
+        "http://127.0.0.1:5173/*",
+        "http://localhost:5173/*",
+        "http://127.0.0.1:4173/*",
+        "http://localhost:4173/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

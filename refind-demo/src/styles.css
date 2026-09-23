@@ -1755,6 +1755,9 @@ main.app-shell:has(.notes-workspace--inspiration){grid-template-columns:minmax(0
 .settings-sms-form button.is-secondary{background:transparent;color:#4d6b8a;border:1px solid rgba(158,168,180,.4);font-weight:550}
 .settings-sms-form button:disabled{opacity:.45;cursor:not-allowed}
 .settings-sms-note{margin:0;color:#7a8694;font-size:12px;line-height:1.45}
+.settings-ext-modal{text-align:left}
+.settings-ext-steps{margin:12px 0 0;padding-left:18px;color:#3a4654;font-size:13px;line-height:1.55}
+.settings-ext-steps code{font-size:12px;background:rgba(20,30,42,.06);padding:1px 5px;border-radius:4px}
 .settings-panel{display:flex;flex-direction:column;align-items:stretch;padding:0;margin:0}
 .settings-card,.platform-connection-card{margin:0;padding:0;list-style:none;border:1px solid rgba(167,174,185,.26);border-radius:14px;background:rgba(255,255,255,.78);overflow:hidden}
 .platform-connection-item{padding:14px 12px;border-top:1px solid rgba(167,174,185,.18)}

@@ -57,6 +57,18 @@ vi.mock('../../lib/api/platformConnections.js', () => ({
 vi.mock('../../lib/api/platformLogin.js', () => ({
   waitForPlatformLogin: (...args) => waitForPlatformLogin(...args),
   logoutPlatformParser: (...args) => logoutPlatformParser(...args),
+  importPlatformCookies: async () => ({ accountDisplayName: '', verified: true }),
+  resendPlatformLoginSms: async () => true,
+  submitPlatformLoginSms: async () => true,
+}));
+
+vi.mock('../../lib/api/platformExtension.js', () => ({
+  pingRefindExtension: async () => false,
+  fetchSessionFromExtension: async () => {
+    throw new Error('no extension in test');
+  },
+  openPlatformInExtension: async () => {},
+  buildSessionPayloadFromExtension: () => '{}',
 }));
 
 vi.mock('../../lib/api/profiles.js', () => ({
@@ -99,8 +111,11 @@ describe('SettingsPage', () => {
     expect(screen.queryByRole('button', { name: '粘贴 Cookie' })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getAllByRole('button', { name: '连接' })[0]);
-    expect(await screen.findByText(/已连接。解析该平台链接时会优先使用本机会话/)).toBeVisible();
-    expect(waitForPlatformLogin).toHaveBeenCalledWith('xhs');
+    expect(await screen.findByText(/已连接/)).toBeVisible();
+    expect(waitForPlatformLogin).toHaveBeenCalledWith(
+      'xhs',
+      expect.objectContaining({ onUpdate: expect.any(Function) }),
+    );
     expect(connectPlatform).toHaveBeenCalledWith(
       'xhs',
       expect.objectContaining({

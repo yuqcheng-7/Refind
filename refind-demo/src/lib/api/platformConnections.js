@@ -232,7 +232,7 @@ export async function connectPlatform(platformCode, { accountDisplayName, sessio
   }
   if (!sessionPayloadHasAuthCookies(platformCode, parsed)) {
     throw new Error(
-      '登录会话无效（可能提前关闭了登录窗口）。请重新连接，扫码后等待窗口自动关闭。',
+      '登录会话无效。请确认本机浏览器已登录该平台，并已安装「拾藏连接」扩展后重试。',
     );
   }
   await assertLocalParserSession(platformCode);

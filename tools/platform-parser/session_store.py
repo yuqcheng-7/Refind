@@ -224,6 +224,12 @@ def import_platform_cookies(
     raise ValueError("Cookie 不能为空")
   if code == "zhihu" and "z_c0=" not in header:
     raise ValueError("知乎 Cookie 需包含 z_c0")
+  if code == "xhs" and "web_session=" not in header:
+    raise ValueError("小红书 Cookie 需包含 web_session")
+  if code == "douyin" and "sessionid=" not in header and "sessionid_ss=" not in header:
+    raise ValueError("抖音 Cookie 需包含 sessionid")
+  if code == "bilibili" and "SESSDATA=" not in header:
+    raise ValueError("B 站 Cookie 需包含 SESSDATA")
 
   items: list[dict[str, Any]] = []
   domain = COOKIE_DOMAINS.get(code) or f".{code}.com"

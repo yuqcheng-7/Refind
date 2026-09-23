@@ -7,7 +7,12 @@ import {
   disconnectPlatform,
   listPlatformConnections,
 } from '../../lib/api/platformConnections.js';
-import { logoutPlatformParser, resendPlatformLoginSms, submitPlatformLoginSms, waitForPlatformLogin } from '../../lib/api/platformLogin.js';
+import { logoutPlatformParser, importPlatformCookies, resendPlatformLoginSms, submitPlatformLoginSms, waitForPlatformLogin } from '../../lib/api/platformLogin.js';
+import {
+  fetchSessionFromExtension,
+  openPlatformInExtension,
+  pingRefindExtension,
+} from '../../lib/api/platformExtension.js';
 import { isNoLoginPlatform, supportsRealLogin } from '../../lib/api/platformSession.js';
 import { updateMyDisplayName } from '../../lib/api/profiles.js';
 
@@ -21,6 +26,12 @@ const EMPTY_PASSWORD_FORM = {
   newPassword: '',
   confirmPassword: '',
 };
+
+function isHostedParser() {
+  const url = String(import.meta.env.VITE_PLATFORM_PARSER_URL || '').trim();
+  if (!url) return false;
+  return !/127\.0\.0\.1|localhost/.test(url);
+}
 
 function statusClass(status) {
   return status === 'connected' ? 'is-connected' : 'is-disconnected';
@@ -67,7 +78,8 @@ export function SettingsPage({
   const [smsCode, setSmsCode] = useState('');
   const [smsBusy, setSmsBusy] = useState(false);
   const [smsResendBusy, setSmsResendBusy] = useState(false);
-  const [smsResendCooldown, setSmsResendWait] = useState(0);
+  const [smsResendWait, setSmsResendWait] = useState(0);
+  const [extGuide, setExtGuide] = useState(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -94,6 +106,26 @@ export function SettingsPage({
     if (!editingName) setNameDraft(displayName);
   }, [displayName, editingName]);
 
+  const connectWithExtension = async (platformCode) => {
+    setNotice('正在通过浏览器扩展读取登录态…');
+    const session = await fetchSessionFromExtension(platformCode);
+    const imported = await importPlatformCookies(platformCode, session.cookies, {
+      accountDisplayName: '',
+    });
+    const payloadObj = {
+      cookies: session.cookies,
+      cookie_items: session.cookieItems || [],
+      ua: session.ua || navigator.userAgent || '',
+      captured_at: new Date().toISOString(),
+      account_display_name: imported.accountDisplayName || '',
+    };
+    await connectPlatform(platformCode, {
+      sessionPayload: JSON.stringify(payloadObj),
+      accountDisplayName: imported.accountDisplayName || '',
+    });
+    return imported.accountDisplayName || '';
+  };
+
   const runAction = async (platformCode, action) => {
     if (!supportsRealLogin(platformCode) && (action === 'connect' || action === 'reconnect')) {
       setError('该平台真实登录即将支持');
@@ -103,8 +135,34 @@ export function SettingsPage({
     setBusyCode(platformCode);
     setNotice('');
     setError('');
+    setExtGuide(null);
     try {
       if (action === 'connect' || action === 'reconnect') {
+        const hasExt = await pingRefindExtension();
+        if (hasExt) {
+          try {
+            const name = await connectWithExtension(platformCode);
+            setNotice(name ? `已连接（${name}）。` : '已连接。解析该平台链接时会优先使用已保存会话。');
+            await refresh();
+            return;
+          } catch (extErr) {
+            const msg = extErr?.message || '';
+            if (/未检测到登录态|未检测到登录/.test(msg)) {
+              setExtGuide({ platformCode, reason: 'login' });
+              setNotice('请先在本机浏览器登录该平台，再回来点连接。');
+              return;
+            }
+            // Fall through only for local QR; hosted must use extension.
+            if (isHostedParser()) {
+              throw extErr;
+            }
+          }
+        } else if (isHostedParser()) {
+          setExtGuide({ platformCode, reason: 'install' });
+          setNotice('线上环境请用「拾藏连接」浏览器扩展完成登录（云端扫码会被平台风控拦截）。');
+          return;
+        }
+
         setLoginQr({ platformCode, image: '', waiting: true, needsSms: false, loginId: '' });
         setSmsCode('');
         setSmsResendWait(0);
@@ -113,7 +171,7 @@ export function SettingsPage({
           onUpdate: (snap) => {
             setLoginQr((prev) => {
               if (snap?.status === 'success') {
-                return prev; // keep modal until waitForPlatformLogin returns and clears it
+                return prev;
               }
               const needsSms = Boolean(prev?.needsSms || snap?.needsSms);
               if (needsSms) {
@@ -298,7 +356,7 @@ export function SettingsPage({
       {tab === 'platforms' ? (
         <div className="settings-panel">
           <p className="settings-hint">
-            连接账号后，导入对应平台链接时解析更稳定。小红书、抖音、B 站、知乎可扫码登录；微信公众号公开文章无需登录。请将链接粘贴到知识库导入。
+            连接账号后，导入对应平台链接时解析更稳定。推荐用 Chrome 扩展「拾藏连接」在本机登录后一键同步；微信公众号公开文章无需登录。
           </p>
 
           {loading ? (
@@ -587,6 +645,80 @@ export function SettingsPage({
               </div>
             )}
             <p className="settings-qr-foot">登录过程约需数十秒，请勿关闭本页。</p>
+          </div>
+        </div>
+      ) : null}
+
+      {extGuide ? (
+        <div className="settings-qr-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-ext-title">
+          <div className="settings-qr-modal settings-ext-modal">
+            <h2 id="settings-ext-title">
+              {extGuide.reason === 'login' ? '请先登录平台' : '安装拾藏连接扩展'}
+            </h2>
+            {extGuide.reason === 'login' ? (
+              <>
+                <p className="settings-qr-hint">
+                  扩展已就绪，但还没读到该平台的登录 Cookie。请先在本机 Chrome 打开并登录平台，再回到这里点「我已登录，重试」。
+                </p>
+                <div className="settings-sms-form">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void openPlatformInExtension(extGuide.platformCode).catch(() => {
+                        const homes = {
+                          xhs: 'https://www.xiaohongshu.com/',
+                          douyin: 'https://www.douyin.com/',
+                          zhihu: 'https://www.zhihu.com/',
+                          bilibili: 'https://www.bilibili.com/',
+                        };
+                        window.open(homes[extGuide.platformCode] || 'https://www.xiaohongshu.com/', '_blank');
+                      });
+                    }}
+                  >
+                    打开平台登录页
+                  </button>
+                  <button
+                    type="button"
+                    className="is-secondary"
+                    onClick={() => {
+                      setExtGuide(null);
+                      void runAction(extGuide.platformCode, 'connect');
+                    }}
+                  >
+                    我已登录，重试
+                  </button>
+                  <button type="button" className="is-secondary" onClick={() => setExtGuide(null)}>
+                    关闭
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="settings-qr-hint">
+                  云端扫码会被小红书等平台风控。今天请用 Chrome 扩展在你自己的浏览器里登录后一键同步。
+                </p>
+                <ol className="settings-ext-steps">
+                  <li>打开 <code>chrome://extensions</code>，开启「开发者模式」</li>
+                  <li>「加载已解压的扩展程序」→ 选择仓库里的 <code>extensions/refind-connect</code></li>
+                  <li>硬刷新本页，再用本机 Chrome 登录小红书等平台</li>
+                  <li>回到设置点击「连接」</li>
+                </ol>
+                <div className="settings-sms-form">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExtGuide(null);
+                      void runAction(extGuide.platformCode, 'connect');
+                    }}
+                  >
+                    我已安装，重试连接
+                  </button>
+                  <button type="button" className="is-secondary" onClick={() => setExtGuide(null)}>
+                    关闭
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       ) : null}
