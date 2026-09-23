@@ -133,6 +133,25 @@ export async function submitPlatformLoginSms(loginId, code, { parserBaseUrl } = 
   return true;
 }
 
+export async function resendPlatformLoginSms(loginId, { parserBaseUrl } = {}) {
+  const base = readParserBase(parserBaseUrl);
+  let response;
+  try {
+    response = await fetch(buildParserUrl(base, `/login/${loginId}/sms/resend`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+  } catch {
+    throw parserUnreachableError();
+  }
+  const data = await readJson(response);
+  if (!response.ok) {
+    throw new Error(data?.error || '重新发送失败');
+  }
+  return true;
+}
+
 export async function assertLocalParserSession(platformCode, { parserBaseUrl } = {}) {
   const presence = await fetchLocalSessionPresence({ parserBaseUrl });
   if (presence === null) {

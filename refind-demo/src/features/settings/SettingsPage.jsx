@@ -7,7 +7,7 @@ import {
   disconnectPlatform,
   listPlatformConnections,
 } from '../../lib/api/platformConnections.js';
-import { logoutPlatformParser, submitPlatformLoginSms, waitForPlatformLogin } from '../../lib/api/platformLogin.js';
+import { logoutPlatformParser, resendPlatformLoginSms, submitPlatformLoginSms, waitForPlatformLogin } from '../../lib/api/platformLogin.js';
 import { isNoLoginPlatform, supportsRealLogin } from '../../lib/api/platformSession.js';
 import { updateMyDisplayName } from '../../lib/api/profiles.js';
 
@@ -66,6 +66,8 @@ export function SettingsPage({
   const [loginQr, setLoginQr] = useState(null); // { platformCode, image, waiting, needsSms, loginId }
   const [smsCode, setSmsCode] = useState('');
   const [smsBusy, setSmsBusy] = useState(false);
+  const [smsResendBusy, setSmsResendBusy] = useState(false);
+  const [smsResendCooldown, setSmsResendWait] = useState(0);
 
   const refresh = async () => {
     setLoading(true);
@@ -105,6 +107,7 @@ export function SettingsPage({
       if (action === 'connect' || action === 'reconnect') {
         setLoginQr({ platformCode, image: '', waiting: true, needsSms: false, loginId: '' });
         setSmsCode('');
+        setSmsResendWait(0);
         setNotice('正在准备登录二维码，请用对应 App 扫码…');
         const login = await waitForPlatformLogin(platformCode, {
           onUpdate: (snap) => {
@@ -172,6 +175,27 @@ export function SettingsPage({
       setError(err?.message || '提交验证码失败');
     } finally {
       setSmsBusy(false);
+    }
+  };
+
+  const resendSms = async () => {
+    if (!loginQr?.loginId || smsResendBusy || smsResendWait > 0) return;
+    setSmsResendBusy(true);
+    setError('');
+    try {
+      await resendPlatformLoginSms(loginQr.loginId);
+      setNotice('已请求重新发送，请查收手机短信');
+      setSmsResendWait(60);
+      const started = Date.now();
+      const timer = window.setInterval(() => {
+        const left = Math.max(0, 60 - Math.floor((Date.now() - started) / 1000));
+        setSmsResendWait(left);
+        if (left <= 0) window.clearInterval(timer);
+      }, 500);
+    } catch (err) {
+      setError(err?.message || '重新发送失败');
+    } finally {
+      setSmsResendBusy(false);
     }
   };
 
@@ -551,7 +575,15 @@ export function SettingsPage({
                 <button type="button" disabled={smsBusy || smsCode.length < 4} onClick={() => void submitSms()}>
                   {smsBusy ? '提交中…' : '提交验证码'}
                 </button>
-                <p className="settings-sms-note">提交后请稍候，不要关闭；成功后会自动关闭。</p>
+                <button
+                  type="button"
+                  className="is-secondary"
+                  disabled={smsBusy || smsResendBusy || smsResendWait > 0}
+                  onClick={() => void resendSms()}
+                >
+                  {smsResendWait > 0 ? `重新发送（${smsResendWait}s）` : (smsResendBusy ? '发送中…' : '重新发送验证码')}
+                </button>
+                <p className="settings-sms-note">没收到短信可点重新发送；提交后请稍候，成功后会自动关闭。</p>
               </div>
             )}
             <p className="settings-qr-foot">登录过程约需数十秒，请勿关闭本页。</p>

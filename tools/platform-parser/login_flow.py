@@ -112,6 +112,7 @@ class LoginJob:
   progress: str = ""
   needs_sms: bool = False
   sms_code: str = ""
+  sms_resend_requested: bool = False
   created_at: float = field(default_factory=time.time)
   consumed_payload: bool = False
 
@@ -1002,6 +1003,92 @@ def take_pending_sms(login_id: str) -> str:
     return code
 
 
+def request_login_sms_resend(login_id: str) -> bool:
+  """Ask the in-flight Playwright job to click「获取/重新发送验证码」."""
+  with _lock:
+    job = _jobs.get(login_id)
+    if not job or job.status != "pending":
+      raise ValueError("登录任务不存在或已结束，请重新点击连接")
+    if not job.needs_sms:
+      raise ValueError("当前不在短信验证步骤")
+    job.sms_resend_requested = True
+    job.progress = "正在重新发送验证码…"
+    return True
+
+
+def take_sms_resend_request(login_id: str) -> bool:
+  with _lock:
+    job = _jobs.get(login_id)
+    if not job or not job.sms_resend_requested:
+      return False
+    job.sms_resend_requested = False
+    return True
+
+
+def click_resend_sms(page: Any) -> bool:
+  """Click the platform's resend / get-code control on the challenge UI."""
+  labels = (
+    "重新发送",
+    "重新获取",
+    "获取验证码",
+    "发送验证码",
+    "获取动态码",
+    "重发",
+  )
+  scopes: list[Any] = [page]
+  try:
+    scopes.extend(list(page.frames or []))
+  except Exception:  # noqa: BLE001
+    pass
+  for scope in scopes:
+    for label in labels:
+      try:
+        loc = scope.get_by_text(label, exact=False).first
+        if loc.count() == 0:
+          continue
+        try:
+          if not loc.is_visible(timeout=400):
+            continue
+        except Exception:  # noqa: BLE001
+          continue
+        # Skip disabled countdown buttons when possible.
+        try:
+          disabled = loc.evaluate(
+            """(el) => {
+              const node = el.closest('button,a,[role=button]') || el;
+              return Boolean(
+                node.disabled
+                || node.getAttribute('aria-disabled') === 'true'
+                || /disabled|is-disabled|grey|gray/.test(node.className || '')
+              );
+            }"""
+          )
+          if disabled:
+            continue
+        except Exception:  # noqa: BLE001
+          pass
+        loc.click(timeout=2500)
+        return True
+      except Exception:  # noqa: BLE001
+        continue
+    for selector in (
+      'button:has-text("获取验证码")',
+      'button:has-text("重新发送")',
+      'a:has-text("获取验证码")',
+      'a:has-text("重新发送")',
+      '[class*="send"]:has-text("验证码")',
+    ):
+      try:
+        loc = scope.locator(selector).first
+        if loc.count() == 0:
+          continue
+        loc.click(timeout=2500)
+        return True
+      except Exception:  # noqa: BLE001
+        continue
+  return False
+
+
 BrowserRunner = Callable[..., dict[str, Any]]
 
 
@@ -1393,6 +1480,7 @@ def default_playwright_runner(
   on_progress: Callable[[str], None] | None = None,
   on_needs_sms: Callable[[bool], None] | None = None,
   poll_sms: Callable[[], str] | None = None,
+  poll_sms_resend: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
   try:
     from playwright.sync_api import sync_playwright
@@ -1648,6 +1736,21 @@ def default_playwright_runner(
               code = str(poll_sms() or "").strip()
             except Exception:  # noqa: BLE001
               code = ""
+          # Resend OTP on the live challenge page when the user asks.
+          if poll_sms_resend is not None:
+            try:
+              if poll_sms_resend():
+                emit_progress("正在重新发送验证码…")
+                if click_resend_sms(page):
+                  emit_progress("已点击重新发送，请查收手机短信")
+                  try:
+                    page.wait_for_timeout(1200)
+                  except Exception:  # noqa: BLE001
+                    pass
+                else:
+                  emit_progress("未找到「重新发送」按钮，请稍后再试或重新扫码")
+            except Exception:  # noqa: BLE001
+              pass
           if code:
             emit_needs_sms(True)
             emit_progress("正在提交验证码…")
@@ -1870,6 +1973,9 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
   def poll_sms() -> str:
     return take_pending_sms(login_id)
 
+  def poll_sms_resend() -> bool:
+    return take_sms_resend_request(login_id)
+
   try:
     import inspect
 
@@ -1885,6 +1991,8 @@ def _run_job(login_id: str, platform: str, runner: BrowserRunner, timeout_sec: f
       kwargs["on_needs_sms"] = on_needs_sms
     if "poll_sms" in params:
       kwargs["poll_sms"] = poll_sms
+    if "poll_sms_resend" in params:
+      kwargs["poll_sms_resend"] = poll_sms_resend
     result = runner(platform, timeout_sec, **kwargs)
     if early_done["value"]:
       return
