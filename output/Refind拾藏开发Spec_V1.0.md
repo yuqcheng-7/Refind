@@ -59,7 +59,7 @@ Web 客户端
 │     ├── 主流平台适配器（MediaCrawler）
 │     └── 通用网页匿名抽取（Crawl4AI / Readability 类；必要时 Playwright 匿名渲染）
 ├── 平台会话管理：加密保存、失效检测、受控浏览器连接（仅五个主流平台）
-├── AI 编排：DeepSeek Chat + text-embedding-v4
+├── AI 编排：DeepSeek V4 Flash（百炼）+ text-embedding-v4
 └── 异步任务：链接与文件解析、AI 结构化、索引更新、脑图生成
 ```
 
@@ -657,7 +657,7 @@ Web 客户端
 ```text
 保存/编辑资料 → 文本切片 → Embedding 向量化 → pgvector 索引
 用户提问（RAG）→ 解析 #标签 → 标签过滤
-  → 检索前 LLM 语义改写（qwen-turbo；失败则规则 fallback）→ 1～2 条完整 query
+  → 检索前 LLM 语义改写（qwen3.6-flash；失败则规则 fallback）→ 1～2 条完整 query
   → 并行：问题向量召回 + 关键词/标题召回（各 ~20）
   → 同 chunk 最高 similarity 去重 → RRF 融合（≤40）→ 按 material_id 多样性（≤3）
   → 百炼 qwen3-rerank（floor 0.4；失败则 light rerank）
@@ -881,7 +881,8 @@ disconnected → connecting → connected → expired → reconnecting → conne
 
 > **已落地（2026-09-15）：** `parse-material` 在正文可用且即将标 `ready` 时同步调用 DeepSeek enrichment（摘要 + 约 3 标签）；失败不阻断入库，摘要回退正文截断；`materials.tags_user_edited` 为真时重新解析不覆盖标签关系，摘要每次重写。本切片不做历史资料批量回填。
 
-- 生成模型：DeepSeek Chat；
+- 生成模型：百炼 `deepseek-v4-flash`（快速=非思考，深度=思考；百炼失败回退官方 `deepseek-flash`）；
+- 图片识别：百炼 `qwen3.5-ocr` → `qwen3.6-flash` → `qwen-vl-ocr`；
 - 输入：已解析的标题、内容主体、来源平台与可用元数据；
 - 输出：简明摘要和资料标签；
 - 用户对摘要和标签的编辑优先于 AI 结果；手改标签置 `tags_user_edited=true`；
@@ -891,7 +892,7 @@ disconnected → connecting → connected → expired → reconnecting → conne
 ## 8.3 向量检索
 
 - 向量模型：阿里云百炼 `text-embedding-v4`；
-- 检索改写：阿里云百炼 `qwen-turbo`（超时 800ms abort；失败回退规则 `rewriteRetrievalQueries`）；
+- 检索改写：阿里云百炼 `qwen3.6-flash`（非思考，超时 1200ms abort；失败回退规则 `rewriteRetrievalQueries`）；
 - 重排序：阿里云百炼 `qwen3-rerank`（失败回退本地 light rerank）；
 - 向量库：Supabase Postgres + pgvector；
 - 召回：向量 RPC `match_material_chunks` + 关键词 RPC `match_material_chunks_keyword`，最高 similarity 去重后 RRF，再 diversify / rerank；
@@ -1210,7 +1211,7 @@ disconnected → connecting → connected → expired → reconnecting → conne
 
 | 步骤 | 实现 |
 | --- | --- |
-| 检索改写 | `resolveRetrievalQueries`：LLM（`qwen-turbo`，≤800ms abort）→ 逐条校验 → 规则 fallback |
+| 检索改写 | `resolveRetrievalQueries`：LLM（`qwen3.6-flash`，≤1200ms abort）→ 逐条校验 → 规则 fallback |
 | 召回 | 每条 rewrite query 向量路；关键词 terms 并集 1 路（各 ~20） |
 | 去重 | 同 `chunk_id` 保留最高 similarity（禁止先到者） |
 | 融合 | RRF `k=60`，候选 ≤40 |

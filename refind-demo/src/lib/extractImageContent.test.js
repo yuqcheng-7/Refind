@@ -40,7 +40,7 @@ describe('extractImageContent', () => {
       fileName: 'board.jpg',
       mimeType: 'image/jpeg',
       dashscopeKey: 'sk-test',
-      visionModel: 'qwen-vl-plus',
+      visionModel: 'qwen3.5-ocr',
       fetchImpl,
     });
 

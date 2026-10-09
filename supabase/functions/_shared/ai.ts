@@ -80,9 +80,16 @@ export async function rerankDocuments(
     .sort((a: RerankHit, b: RerankHit) => b.relevance_score - a.relevance_score);
 }
 
-/** Map logical DeepSeek modes to Bailian OpenAI-compatible model ids (more reliable from CN/Edge). */
-function bailianChatModel(model: 'deepseek-chat' | 'deepseek-reasoner') {
-  return model === 'deepseek-reasoner' ? 'deepseek-r1' : 'deepseek-v3.2';
+/**
+ * Bailian-hosted DeepSeek used for both logical modes; reasoner only toggles thinking.
+ * deepseek-v3 / v3.2 / r1 on Bailian were retired on 2026-10-10.
+ */
+const BAILIAN_DEEPSEEK_MODEL = 'deepseek-v4-flash';
+/** Official api.deepseek.com retired deepseek-chat / deepseek-reasoner on 2026-07-24. */
+const DIRECT_DEEPSEEK_MODEL = 'deepseek-flash';
+
+function bailianChatModel() {
+  return Deno.env.get('BAILIAN_DEEPSEEK_MODEL') || BAILIAN_DEEPSEEK_MODEL;
 }
 
 async function chatCompletions(
@@ -142,12 +149,12 @@ export async function rewriteQueriesWithLlm(
   const timeoutMs = Number(
     opts.timeoutMs
       ?? Deno.env.get('RAG_REWRITE_TIMEOUT_MS')
-      ?? 800,
+      ?? 1200,
   );
   const model = String(
     opts.model
       || Deno.env.get('RAG_REWRITE_MODEL')
-      || 'qwen-turbo',
+      || 'qwen3.6-flash',
   );
 
   const userPayload = {
@@ -166,6 +173,8 @@ export async function rewriteQueriesWithLlm(
       model,
       temperature: 0,
       max_tokens: 256,
+      // Qwen3.6 hybrids think by default, which blows the sub-second rewrite budget.
+      enable_thinking: false,
       messages: [
         { role: 'system', content: REWRITE_SYSTEM },
         { role: 'user', content: JSON.stringify(userPayload) },
@@ -200,7 +209,7 @@ export async function bailianTextChat(
   if (!key) throw new Error('DASHSCOPE_API_KEY missing');
   const model = opts.model
     || Deno.env.get('GENERATE_NOTE_MODEL')
-    || 'deepseek-v3';
+    || BAILIAN_DEEPSEEK_MODEL;
   const body: Record<string, unknown> = {
     model,
     messages,
@@ -230,7 +239,7 @@ export async function deepseekChat(
     model: 'deepseek-chat' | 'deepseek-reasoner';
     temperature?: number;
     max_tokens?: number;
-    /** Override Bailian model id (e.g. deepseek-v3 for faster non-thinking notes). */
+    /** Override Bailian model id. */
     bailianModel?: string;
     /** Hybrid models only; false skips chain-of-thought for lower latency. */
     enable_thinking?: boolean;
@@ -246,12 +255,12 @@ export async function deepseekChat(
   if (Number.isFinite(opts.max_tokens) && Number(opts.max_tokens) > 0) {
     body.max_tokens = Math.floor(Number(opts.max_tokens));
   }
-  if (typeof opts.enable_thinking === 'boolean') {
-    body.enable_thinking = opts.enable_thinking;
-  }
+  const thinking = typeof opts.enable_thinking === 'boolean'
+    ? opts.enable_thinking
+    : opts.model === 'deepseek-reasoner';
 
   const bailianModel = String(opts.bailianModel || '').trim()
-    || bailianChatModel(opts.model);
+    || bailianChatModel();
 
   // Prefer Bailian-hosted DeepSeek: official api.deepseek.com often hangs from some networks.
   if (dashscopeKey) {
@@ -262,6 +271,7 @@ export async function deepseekChat(
         {
           ...body,
           model: bailianModel,
+          enable_thinking: thinking,
         },
         'bailian chat',
       );
@@ -276,7 +286,8 @@ export async function deepseekChat(
     deepseekKey,
     {
       ...body,
-      model: opts.model,
+      model: Deno.env.get('DEEPSEEK_DIRECT_MODEL') || DIRECT_DEEPSEEK_MODEL,
+      thinking: { type: thinking ? 'enabled' : 'disabled' },
     },
     'deepseek',
   );

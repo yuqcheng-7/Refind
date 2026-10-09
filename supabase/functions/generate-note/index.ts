@@ -121,7 +121,7 @@ Deno.serve(async (req) => {
       lang: body.lang,
     });
     const aiRaw = await bailianTextChat(buildGenerateMessages(promptPayload), {
-      model: Deno.env.get('GENERATE_NOTE_MODEL') || 'deepseek-v3',
+      model: Deno.env.get('GENERATE_NOTE_MODEL') || 'deepseek-v4-flash',
       temperature: 0.45,
       max_tokens: 8192,
       enable_thinking: false,

@@ -76,6 +76,7 @@ async function callQwenVision({
       body: JSON.stringify({
         model,
         temperature: 0.1,
+        ...(String(model).includes('ocr') ? {} : { enable_thinking: false }),
         messages: [
           {
             role: 'user',
@@ -152,12 +153,13 @@ export async function extractImageContent({
   ].join('');
 
   // Prefer OCR-capable VL; fall back across known DashScope model ids.
+  // qwen-vl-ocr-latest / qwen-vl-plus were retired on 2026-10-10.
   const models = [
     visionModel,
     readEnv('IMAGE_VISION_MODEL'),
-    'qwen-vl-ocr-latest',
+    'qwen3.5-ocr',
+    'qwen3.6-flash',
     'qwen-vl-ocr',
-    'qwen-vl-plus',
   ].map((item) => String(item || '').trim()).filter(Boolean)
     .filter((item, index, all) => all.indexOf(item) === index);
 
