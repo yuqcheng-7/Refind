@@ -928,7 +928,7 @@ def parse_zhihu(url: str) -> dict | None:
 
   if not title and not body:
     return None
-  if (title in {"知乎", "安全验证", "请先登录", "404 - 知乎"} and len(body) < 20:
+  if title in {"知乎", "安全验证", "请先登录", "404 - 知乎"} and len(body) < 20:
     return None
   if "没有知识存在的荒原" in (title or ""):
     return None

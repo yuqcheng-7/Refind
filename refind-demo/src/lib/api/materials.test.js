@@ -25,16 +25,22 @@ describe('deleteMaterial', () => {
       eq: vi.fn().mockReturnThis(),
       single: vi.fn().mockResolvedValue({ data: { storage_object_key: 'user/file.txt' }, error: null }),
     };
+    const unlink = {
+      delete: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    };
     const update = {
       update: vi.fn().mockReturnThis(),
       eq: vi.fn().mockResolvedValue({ error: null }),
     };
     const remove = vi.fn().mockResolvedValue({ error: null });
-    from.mockReturnValueOnce(lookup).mockReturnValueOnce(update);
+    from.mockReturnValueOnce(lookup).mockReturnValueOnce(unlink).mockReturnValueOnce(update);
     storageFrom.mockReturnValue({ remove });
 
     await deleteMaterial('material-1');
 
+    expect(from).toHaveBeenNthCalledWith(2, 'note_knowledge_base_materials');
+    expect(unlink.eq).toHaveBeenCalledWith('material_id', 'material-1');
     expect(remove).toHaveBeenCalledWith(['user/file.txt']);
     expect(update.update).toHaveBeenCalledWith({ status: 'deleted' });
     expect(update.eq).toHaveBeenCalledWith('id', 'material-1');

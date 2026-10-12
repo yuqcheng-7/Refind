@@ -254,6 +254,8 @@ describe('HomeComposer', () => {
     await userEvent.click(screen.getByRole('option', { name: '默认知识库' }));
     expect(screen.getByRole('button', { name: '选择模型' })).toHaveTextContent('DS深度');
     expect(screen.getByRole('button', { name: '不联网' })).toHaveAttribute('aria-pressed', 'false');
+    // user-event treats useDismissable's pointerdown preventDefault as blocking focus; Chrome does not.
+    await userEvent.keyboard('{Escape}');
 
     await userEvent.type(screen.getByPlaceholderText(homePlaceholder), '基于资料回答');
     await userEvent.click(screen.getByRole('button', { name: '发送提问' }));
