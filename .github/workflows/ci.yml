@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: refind-demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: refind-demo/package-lock.json
+      - run: npm ci
+      - run: npx vitest run
+      - run: npm run test:sites
+      - run: npm run build:web
+
+  edge-functions:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supabase/functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test */*.test.js
+
+  platform-parser:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/platform-parser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Ubuntu 24.04 host that runs refind-parser.
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tools/platform-parser/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile *.py medicrawler/*.py
+      - run: python -m unittest discover -p 'test_*.py'
