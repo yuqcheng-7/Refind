@@ -37,7 +37,7 @@ describe('MaterialIngest', () => {
   });
 
   it('adds multiple selected files as current-base parsing cards', async () => {
-    render(<MaterialIngest base="增长与运营案例" onMaterialReady={vi.fn()} transitionMs={10} />);
+    render(<MaterialIngest base="增长与运营案例" onMaterialReady={vi.fn()} transitionMs={60_000} />);
 
     await userEvent.click(screen.getByRole('button', { name: '添加资料' }));
     await userEvent.click(screen.getByRole('menuitem', { name: '上传文件' }));
