@@ -37,6 +37,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: refind-demo/package-lock.json
+      # Some Edge tests import helpers (e.g. jszip) from refind-demo/node_modules.
+      - run: npm ci
+        working-directory: refind-demo
       - run: node --test */*.test.js
 
   platform-parser:
